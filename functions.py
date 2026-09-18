@@ -4,13 +4,102 @@ import MetaTrader5 as mt5, time, datetime, pandas as pd
 import json
 import glob
 import os
+import csv
 import numpy as np
+from itertools import product
 
 #акк создан 18 сентября 23г.
 # Логин:
 # 2000062901
 # Пароль трейдера:
-# 5jK5ab21j84IVN1E
+
+# functions.py — добавить к остальным функциям
+
+# ⬅ НОВОЕ: пишем активные стратегии для дэшборда
+def write_active_state(active, active_strategies, balance, max_risk_pct, journal_dir):
+    """Сохраняет текущее состояние активных стратегий для Streamlit-дэшборда."""
+    import json
+    state = {
+        'updated': datetime.now().isoformat(),
+        'balance': balance,
+        'quota': balance * max_risk_pct,
+        'total_strategies': len(active),
+        'strategies': []
+    }
+    for r in active:
+        key = strategy_key(r)
+        strat = active_strategies.get(key, {})
+        has_position = strat.get('position') is not None
+        state['strategies'].append({
+            'symbol': r['symbol'],
+            'type': r.get('type', 'stoch'),
+            'k_period': r.get('k_period', '-'),
+            'sl_points': r.get('sl_points', '-'),
+            'tp_points': r.get('tp_points', '-'),
+            'parabolic_step': r.get('parabolic_step', '-'),
+            'parabolic_max': r.get('parabolic_max', '-'),
+            'score': r['score'],
+            'lot': r['lot'],
+            'profit': r.get('profit', 0),
+            'profit_factor': r.get('profit_factor', 0),
+            'win_rate': r.get('win_rate', 0),
+            'n_trades': r.get('n_trades', 0),
+            'has_position': has_position,
+        })
+    path = os.path.join(journal_dir, 'active_state.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def distribute_lots(ranked_results, symbol_data, balance,
+                    max_risk_pct=0.05, min_lot=0.01, min_score=0.8):
+    """⬅ добавлен параметр min_score"""
+    quota = balance * max_risk_pct
+
+    candidates = []
+    for r in ranked_results:
+        if r['score'] < min_score:          # ⬅ НОВОЕ: порог
+            continue
+        if r['score'] <= 0:
+            continue
+        info = symbol_data[r['symbol']]['info']
+        sl_money = (r['sl_points'] * info.point
+                    * info.trade_tick_value / info.trade_tick_size)
+        if sl_money <= 0:
+            continue
+        candidates.append({**r, 'sl_money': sl_money})
+
+    if not candidates:
+        return []
+
+    # Дальше всё как было — жадный отбор, распределение лотов
+    active = []
+    for c in candidates:
+        trial = active + [c]
+        denom = sum(x['sl_money'] * x['score'] for x in trial)
+        if denom == 0:
+            continue
+        lot = quota * c['score'] / denom
+        if lot < min_lot:
+            break
+        active.append(c)
+
+    denom = sum(x['sl_money'] * x['score'] for x in active)
+    for x in active:
+        x['lot'] = round(quota * x['score'] / denom, 2)
+        if x['lot'] < min_lot:
+            x['lot'] = min_lot
+
+    return active
+
+
+
+def _short_name(r):
+    pair = get_non_usd(r['symbol'])
+    stype = r.get('type', 'stoch')
+    if stype == 'parabolic':
+        return f"{pair}/SAR s{r['k_period']}"
+    return f"{pair}/Stoch K{r['k_period']}"
 
 
 def deduplicate_results(results):
@@ -465,3 +554,495 @@ def calc_close_delta (value,symbol):
 #send_telegram('тест',True)
 
 
+# ═══ КЛЮЧИ СТРАТЕГИЙ ═══
+def strategy_key(symbol, param, stype='stoch', extra=None):
+    if stype == 'parabolic' and extra is not None:
+        return f"{symbol}_{stype}_S{param}_M{extra}"
+    return f"{symbol}_{stype}_K{param}"
+
+
+def make_magic(symbol, stype, param, extra=None):
+    """Детерминированный magic-номер на основе параметров стратегии."""
+    raw = f"{symbol}_{stype}_{param}_{extra}"
+    h = 0
+    for ch in raw:
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return 770000 + (h % 100000)
+
+
+def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data):
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None
+    if direction == 'long':
+        order_type, price = mt5.ORDER_TYPE_BUY, tick.ask
+    else:
+        order_type, price = mt5.ORDER_TYPE_SELL, tick.bid
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": lot,
+        "type": order_type, "price": price, "sl": sl, "tp": tp,
+        "deviation": 20, "comment": comment, "magic": magic,
+        "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK
+    }
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        request["type_filling"] = mt5.ORDER_FILLING_IOC
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"  → Ордер не прошёл: {result.retcode}, {result.comment}")
+            return None
+    print(f"  → {direction.upper()} {symbol}: ticket={result.order}, "
+          f"price={price:.{symbol_data[symbol]['info'].digits}f}, lot={lot:.2f}, comment={comment}")
+    return result.order
+
+
+def close_order(symbol, ticket, direction, magic, symbol_data):
+    pos_info = mt5.positions_get(ticket=ticket)
+    if not pos_info:
+        return None
+    pos = pos_info[0]
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None
+    if direction == 'long':
+        close_type, price = mt5.ORDER_TYPE_SELL, tick.bid
+    else:
+        close_type, price = mt5.ORDER_TYPE_BUY, tick.ask
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": pos.volume,
+        "position": ticket, "type": close_type, "price": price,
+        "deviation": 20, "comment": "close", "magic": magic,
+        "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK
+    }
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        request["type_filling"] = mt5.ORDER_FILLING_IOC
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"  → Закрытие не прошло: {result.retcode}, {result.comment}")
+            return None
+    print(f"  → Закрыт {symbol} ticket={ticket}, price={price:.{symbol_data[symbol]['info'].digits}f}")
+    return price
+
+
+def get_deal_exit_price(ticket):
+    deals = mt5.history_deals_get(datetime.datetime.now() - datetime.timedelta(hours=48), datetime.datetime.now())
+    if deals:
+        for d in sorted(deals, key=lambda x: x.time, reverse=True):
+            if d.position_id == ticket and d.entry == mt5.DEAL_ENTRY_OUT:
+                return d.price
+    return None
+
+
+def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn):
+    """Общая логика записи закрытия сделки в журнал. Возвращает profit."""
+    info = symbol_data[s['symbol']]['info']
+    tick_val = info.trade_tick_value
+    tick_size = info.trade_tick_size
+    diff = (exit_price - s['position']['entry_price']) if s['position']['direction'] == 'long' \
+        else (s['position']['entry_price'] - exit_price)
+    profit = (diff / tick_size) * tick_val * s['position']['lot']
+    record_trade_fn({
+        'symbol': s['symbol'], 'k_period': s['k_period'],
+        'sl_points': s['sl_points'], 'tp_points': s['tp_points'],
+        'entry_time': s['position']['entry_time'], 'exit_time': now,
+        'direction': s['position']['direction'],
+        'entry_price': s['position']['entry_price'],
+        'exit_price': exit_price, 'lot': s['position']['lot'],
+        'profit': profit, 'exit_reason': reason, 'ticket': s['position']['ticket']
+    }, None, None)
+    print(f"  → [{key}] Закрыт ({reason}): profit={profit:.2f}")
+    s['position'] = None
+    return profit
+
+
+def write_ranking(top_strats, all_results, JOURNAL_DIR, BACKTEST_DAYS, TOP_N, LOT_PER_STRATEGY):
+    # --- CSV ---
+    csv_file = os.path.join(JOURNAL_DIR, "rankings.csv")
+    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['rank', 'symbol', 'type', 'k_period', 'parabolic_max',
+                         'sl_points', 'tp_points',
+                         'profit', 'pf', 'mdd', 'win_rate', 'sharpe',
+                         'recovery', 'score', 'top'])
+        for i, r in enumerate(all_results):
+            is_active = any(
+                s['symbol'] == r['symbol'] and s['k_period'] == r['k_period']
+                and s['sl_points'] == r['sl_points'] and s['tp_points'] == r['tp_points']
+                and s.get('type', 'stoch') == r.get('type', 'stoch')
+                and s.get('parabolic_max') == r.get('parabolic_max')
+                for s in top_strats
+            )
+            pair = r['symbol'].replace('rfd', '')
+            stype = r.get('type', 'stoch')
+            pmax = r.get('parabolic_max')
+            pmax_str = f"{pmax:.2f}" if pmax is not None else ""
+            writer.writerow([i+1, pair, stype, r['k_period'], pmax_str,
+                             r['sl_points'], r['tp_points'],
+                             round(r['profit'], 2), round(r['profit_factor'], 2),
+                             round(r['max_drawdown'], 2), round(r['win_rate'], 1),
+                             round(r['sharpe'], 2), round(r['recovery'], 1),
+                             round(r['score'], 3), "TOP" if is_active else ""])
+
+    # --- TXT ---
+    txt_file = os.path.join(JOURNAL_DIR, "ranking.txt")
+    lines = [
+        "=" * 120,
+        f"  RANKING | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"  Окно бэктеста: {BACKTEST_DAYS} дней | Всего комбинаций: {len(all_results)}",
+        "=" * 120,
+        (f"  {'#':<4} {'Symbol':<12} {'Type':<8} {'K/Step':>6} {'Max':>5} {'SL':>5} {'TP':>5} "
+         f"{'Profit':>10} {'PF':>6} {'MDD':>8} {'WinR':>6} {'Sharpe':>7} {'Recov':>6} "
+         f"{'Score':>7} {'Top':>6}"),
+        "-" * 120
+    ]
+
+    for i, r in enumerate(all_results):
+        is_active_txt = "▶ TOP" if any(
+            s['symbol'] == r['symbol'] and s['k_period'] == r['k_period']
+            and s['sl_points'] == r['sl_points'] and s['tp_points'] == r['tp_points']
+            and s.get('type', 'stoch') == r.get('type', 'stoch')
+            and s.get('parabolic_max') == r.get('parabolic_max')
+            for s in top_strats
+        ) else ""
+        stype = r.get('type', 'stoch')
+        k_or_step = r['k_period']
+        pmax = r.get('parabolic_max')
+        pmax_str = f"{pmax:.2f}" if pmax is not None else ""
+        lines.append(
+            f"  {i+1:<4} {r['symbol']:<12} {stype:<8} {k_or_step:>6} {pmax_str:>5} "
+            f"{r['sl_points']:>5} {r['tp_points']:>5} "
+            f"{r['profit']:>+9.1f} {r['profit_factor']:>5.2f} {r['max_drawdown']:>+7.1f} "
+            f"{r['win_rate']:>5.1f}% {r['sharpe']:>6.2f} {r['recovery']:>5.1f} "
+            f"{r['score']:>6.3f} {is_active_txt:>6}"
+        )
+
+    lines += [
+        "-" * 120,
+        f"  Топ-{TOP_N} активны на демо, лот={LOT_PER_STRATEGY} на каждую",
+        "=" * 120
+    ]
+
+    with open(txt_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+
+
+def sync_active_strategies(top_results, now, symbol_data, active_strategies, close_order_fn, get_deal_exit_price_fn,
+                           record_trade_fn, strategy_key_fn, make_magic_fn, MAGIC_BASE, TOP_N):
+    """Открывает позиции для новых топ-N, закрывает те, что выпали из топа."""
+    # Текущие ключи топа
+    top_keys = set()
+    for r in top_results:
+        stype = r.get('type', 'stoch')
+        param = r['k_period']
+        extra = r.get('parabolic_max')
+        top_keys.add(strategy_key_fn(r['symbol'], param, stype, extra))
+
+    # Закрываем те, что выпали из топа
+    to_close = [key for key in active_strategies if key not in top_keys]
+
+    for key in to_close:
+        s = active_strategies[key]
+        if s['position'] is not None:
+            exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
+                                        s['position']['direction'], s['magic'], symbol_data)
+            if exit_price is not None:
+                tick_val = symbol_data[s['symbol']]['info'].trade_tick_value
+                tick_size = symbol_data[s['symbol']]['info'].trade_tick_size
+                diff = (exit_price - s['position']['entry_price']) if s['position']['direction'] == 'long' \
+                    else (s['position']['entry_price'] - exit_price)
+                profit = (diff / tick_size) * tick_val * s['position']['lot']
+                record_trade_fn({
+                    'symbol': s['symbol'], 'k_period': s['k_period'],
+                    'sl_points': s['sl_points'], 'tp_points': s['tp_points'],
+                    'entry_time': s['position']['entry_time'], 'exit_time': now,
+                    'direction': s['position']['direction'],
+                    'entry_price': s['position']['entry_price'],
+                    'exit_price': exit_price, 'lot': s['position']['lot'],
+                    'profit': profit, 'exit_reason': 'rerank', 'ticket': s['position']['ticket']
+                }, None, None)
+                print(f"  → [{key}] Закрыт (вышел из топа): profit={profit:.2f}")
+            s['position'] = None
+        del active_strategies[key]
+
+    # Добавляем новые из топа
+    for r in top_results:
+        stype = r.get('type', 'stoch')
+        param = r['k_period']
+        extra = r.get('parabolic_max')
+        key = strategy_key_fn(r['symbol'], param, stype, extra)
+        if key not in active_strategies:
+            active_strategies[key] = {
+                'symbol': r['symbol'],
+                'k_period': param,
+                'parabolic_max': r.get('parabolic_max', 0.2),
+                'sl_points': r['sl_points'],
+                'tp_points': r['tp_points'],
+                'type': stype,
+                'magic': make_magic_fn(r['symbol'], stype, param, extra),
+                'position': None,
+            }
+            print(f"  → [{key}] Добавлен в топ-{TOP_N}")
+
+    # Проверяем реальные позиции (могли закрыться по SL/TP у брокера)
+    for key, s in active_strategies.items():
+        if s['position'] is not None:
+            pos_check = mt5.positions_get(ticket=s['position']['ticket'])
+            if not pos_check:
+                exit_price = get_deal_exit_price_fn(s['position']['ticket'])
+                if exit_price is None:
+                    tick = mt5.symbol_info_tick(s['symbol'])
+                    exit_price = tick.bid if s['position']['direction'] == 'long' else tick.ask
+                tick_val = symbol_data[s['symbol']]['info'].trade_tick_value
+                tick_size = symbol_data[s['symbol']]['info'].trade_tick_size
+                diff = (exit_price - s['position']['entry_price']) if s['position']['direction'] == 'long' \
+                    else (s['position']['entry_price'] - exit_price)
+                profit = (diff / tick_size) * tick_val * s['position']['lot']
+                record_trade_fn({
+                    'symbol': s['symbol'], 'k_period': s['k_period'],
+                    'sl_points': s['sl_points'], 'tp_points': s['tp_points'],
+                    'entry_time': s['position']['entry_time'], 'exit_time': now,
+                    'direction': s['position']['direction'],
+                    'entry_price': s['position']['entry_price'],
+                    'exit_price': exit_price, 'lot': s['position']['lot'],
+                    'profit': profit, 'exit_reason': 'SL/TP', 'ticket': s['position']['ticket']
+                }, None, None)
+                print(f"  → [{key}] Закрыт брокером (SL/TP): profit={profit:.2f}")
+                s['position'] = None
+
+
+def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn, check_exit_stoch_fn,
+                         check_entry_stoch_fn, calc_parabolic_fn, check_exit_parabolic_fn,
+                         check_entry_parabolic_fn, send_order_fn, close_order_fn, get_deal_exit_price_fn,
+                         _record_close_fn, LOT_PER_STRATEGY, record_trade_fn):
+    """Проверяет сигналы для активных стратегий на закрытом баре."""
+    for key, s in active_strategies.items():
+        if s['symbol'] not in symbol_data:
+            continue
+        sd = symbol_data[s['symbol']]
+        df = sd['df_h1']
+
+        stype = s.get('type', 'stoch')
+        info = sd['info']
+        digits = info.digits
+
+        if stype == 'stoch':
+            df = calc_stochastic_fn(df, s['k_period'])
+            if len(df) < 2:
+                continue
+
+            prev_k = df['k'].iloc[-2]
+            last_k = df['k'].iloc[-1]
+
+            # ── Если есть позиция — проверяем выход ──
+            if s['position'] is not None:
+                pos_check = mt5.positions_get(ticket=s['position']['ticket'])
+                if not pos_check:
+                    exit_price = get_deal_exit_price_fn(s['position']['ticket'])
+                    if exit_price is None:
+                        tick = mt5.symbol_info_tick(s['symbol'])
+                        exit_price = tick.bid if s['position']['direction'] == 'long' else tick.ask
+                    _record_close_fn(key, s, now, exit_price, 'SL/TP', symbol_data, record_trade_fn)
+                    continue
+
+                if check_exit_stoch_fn(prev_k, last_k, s['position']['direction']):
+                    exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
+                                                s['position']['direction'], s['magic'], symbol_data)
+                    if exit_price is not None:
+                        _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn)
+
+            # ── Если нет позиции — проверяем вход ──
+            if s['position'] is None:
+                entry_dir = check_entry_stoch_fn(prev_k, last_k)
+                if entry_dir:
+                    tick = mt5.symbol_info_tick(s['symbol'])
+                    if tick is None:
+                        continue
+                    sl_dist = s['sl_points'] * info.point
+                    tp_dist = s['tp_points'] * info.point
+                    if entry_dir == 'long':
+                        entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                    else:
+                        entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+
+                    comment = f"{s['symbol']}, K={s['k_period']}"
+                    ticket = send_order_fn(s['symbol'], entry_dir, LOT_PER_STRATEGY,
+                                           sl, tp, s['magic'], comment, symbol_data)
+                    if ticket is not None:
+                        s['position'] = {
+                            'direction': entry_dir,
+                            'entry_price': entry,
+                            'entry_time': now,
+                            'ticket': ticket,
+                            'lot': LOT_PER_STRATEGY,
+                        }
+                        print(f"  → [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}")
+
+        elif stype == 'parabolic':
+            df = calc_parabolic_fn(df, s['k_period'], s.get('parabolic_max', 0.2))
+            if len(df) < 2:
+                continue
+
+            prev_sar = df['sar'].iloc[-2]
+            current_sar = df['sar'].iloc[-1]
+            prev_close = df['close'].iloc[-2]
+            current_close = df['close'].iloc[-1]
+
+            # ── Если есть позиция — проверяем выход ──
+            if s['position'] is not None:
+                pos_check = mt5.positions_get(ticket=s['position']['ticket'])
+                if not pos_check:
+                    exit_price = get_deal_exit_price_fn(s['position']['ticket'])
+                    if exit_price is None:
+                        tick = mt5.symbol_info_tick(s['symbol'])
+                        exit_price = tick.bid if s['position']['direction'] == 'long' else tick.ask
+                    _record_close_fn(key, s, now, exit_price, 'SL/TP', symbol_data, record_trade_fn)
+                    continue
+
+                if check_exit_parabolic_fn(prev_sar, current_sar, prev_close, current_close,
+                                           s['position']['direction']):
+                    exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
+                                                s['position']['direction'], s['magic'], symbol_data)
+                    if exit_price is not None:
+                        _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn)
+
+            # ── Если нет позиции — проверяем вход ──
+            if s['position'] is None:
+                entry_dir = check_entry_parabolic_fn(prev_sar, current_sar, prev_close, current_close)
+                if entry_dir:
+                    tick = mt5.symbol_info_tick(s['symbol'])
+                    if tick is None:
+                        continue
+                    sl_dist = s['sl_points'] * info.point
+                    tp_dist = s['tp_points'] * info.point
+                    if entry_dir == 'long':
+                        entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                    else:
+                        entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+
+                    comment = f"{s['symbol']}, Step={s['k_period']}, Max={s.get('parabolic_max', 0.2)}"
+                    ticket = send_order_fn(s['symbol'], entry_dir, LOT_PER_STRATEGY,
+                                           sl, tp, s['magic'], comment, symbol_data)
+                    if ticket is not None:
+                        s['position'] = {
+                            'direction': entry_dir,
+                            'entry_price': entry,
+                            'entry_time': now,
+                            'ticket': ticket,
+                            'lot': LOT_PER_STRATEGY,
+                        }
+                        print(f"  → [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}")
+
+
+def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
+                      PARABOLIC_STEPS, PARABOLIC_MAXS, BACKTEST_DAYS, TOP_N,
+                      backtest_stoch, backtest_parabolic, calc_metrics, composite_score, deduplicate_results):
+    """Перебирает все комбинации стохастика и параболика. Возвращает (top, all)."""
+    all_results = []
+    total_symbols = len(SYMBOLS)
+    global_start = time.time()
+
+    # Предрасчёт размеров
+    stoch_per_symbol = len(K_PERIODS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    parab_per_symbol = len(PARABOLIC_STEPS) * len(PARABOLIC_MAXS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    combos_per_symbol = stoch_per_symbol + parab_per_symbol
+    total_combos = combos_per_symbol * total_symbols
+
+    print(f"  Всего комбинаций: ~{total_combos} ({stoch_per_symbol} stoch + {parab_per_symbol} parab на символ)")
+
+    sym_idx = 0
+    for symbol in SYMBOLS:
+        if symbol not in symbol_data:
+            continue
+        sd = symbol_data[symbol]
+        info = sd['info']
+        df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
+        if len(df_window) < 30:
+            continue
+
+        sym_idx += 1
+        sym_start = time.time()
+        combos_done = 0
+        print(f"\n  [{sym_idx}/{total_symbols}] {symbol} — {len(df_window)} баров H1")
+
+        # ── Стохастик ──
+        stoch_mark = max(1, stoch_per_symbol // 5)
+        for i, (k, sl, tp) in enumerate(product(K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST), start=1):
+            profit, n_trades, trade_profits = backtest_stoch(
+                df_window, k, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            all_results.append({
+                'symbol': symbol, 'type': 'stoch', 'k_period': k,
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+            if i % stoch_mark == 0 or i == stoch_per_symbol:
+                pct = 100 * combos_done / combos_per_symbol
+                print(f"    Stoch {i}/{stoch_per_symbol}  |  общий прогресс {pct:.0f}%")
+
+        # ── Параболик ──
+        parab_mark = max(1, parab_per_symbol // 5)
+        for i, (step, max_val, sl, tp) in enumerate(
+            product(PARABOLIC_STEPS, PARABOLIC_MAXS, SL_POINTS_LIST, TP_POINTS_LIST),
+            start=1
+        ):
+            profit, n_trades, trade_profits = backtest_parabolic(
+                df_window, step, max_val, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            all_results.append({
+                'symbol': symbol, 'type': 'parabolic', 'k_period': step,
+                'parabolic_max': max_val,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+            if i % parab_mark == 0 or i == parab_per_symbol:
+                pct = 100 * combos_done / combos_per_symbol
+                print(f"    Parab  {i}/{parab_per_symbol}  |  общий прогресс {pct:.0f}%")
+
+        sym_elapsed = time.time() - sym_start
+        total_elapsed = time.time() - global_start
+        print(f"    {symbol} готов: {combos_done} комб. за {sym_elapsed:.1f}с"
+              f"  |  всего {len(all_results)} комб. за {total_elapsed:.1f}с")
+
+    # ── Дедупликация и сортировка ──
+    print(f"\n  Дедупликация {len(all_results)} результатов...")
+    all_results = deduplicate_results(all_results)
+    all_results.sort(key=lambda x: x['score'], reverse=True)
+
+    # Лучшая стратегия для каждого символа
+    seen_symbols = set()
+    top_results = []
+    for r in all_results:
+        if r['symbol'] not in seen_symbols:
+            top_results.append(r)
+            seen_symbols.add(r['symbol'])
+        if len(top_results) >= TOP_N:
+            break
+
+    total_elapsed = time.time() - global_start
+    print(f"  Бэктест завершён: {len(all_results)} комб. за {total_elapsed:.1f}с")
+
+    return top_results, all_results
