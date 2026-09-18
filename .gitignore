@@ -1,6 +1,9 @@
-.venv/
 __pycache__/
 *.pyc
+.env
+*.log
+journals/
+.DS_Store
 .idea/
-*.xlsx
-статус.txt
+.vscode/
+venv/
