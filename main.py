@@ -496,7 +496,6 @@ for symbol in SYMBOLS:
 
 all_results = deduplicate_results(all_results)
 all_results.sort(key=lambda x: x['score'], reverse=True)
-all_results.sort(key=lambda x: x['score'], reverse=True)
 
 # Берём лучшую стратегию для каждого символа
 seen_symbols = set()
@@ -547,17 +546,25 @@ try:
                 if len(df_window) < 30:
                     continue
                 for k, sl, tp in product(K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST):
-                    profit, n_trades = backtest(
+                    profit, n_trades, trade_profits = backtest(
                         df_window, k, sl, tp,
                         info.point, info.trade_tick_value, info.trade_tick_size,
                         spread_points=info.spread
                     )
+                    metrics = calc_metrics(trade_profits)
+                    score = composite_score(metrics)
                     all_results.append({
                         'symbol': symbol, 'k_period': k,
                         'sl_points': sl, 'tp_points': tp,
                         'profit': profit, 'n_trades': n_trades,
+                        'profit_factor': metrics['profit_factor'],
+                        'max_drawdown': metrics['max_drawdown'],
+                        'win_rate': metrics['win_rate'],
+                        'sharpe': metrics['sharpe'],
+                        'recovery': metrics['recovery'],
+                        'score': score,
                     })
-            all_results.sort(key=lambda x: x['profit'], reverse=True)
+            all_results.sort(key=lambda x: x['score'], reverse=True)
             top_results = all_results[:TOP_N]
             write_ranking(top_results, all_results)
             sync_active_strategies(top_results, now)
