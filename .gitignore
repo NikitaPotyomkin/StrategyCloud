@@ -27,3 +27,4 @@ __pycache__/
 # --- Любые логи (на будущее) ---
 *.log
 logs/
+checkpoints/
