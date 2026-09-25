@@ -92,6 +92,35 @@ if TEST_MODE:
     LOGREG_LOOKBACK_RANGE = (100, 150, 50)   # [100, 150]
     LOGREG_NBARS_RANGE    = (12, 18, 6)      # [12, 18]
     LOGREG_THRESHOLD_RANGE = (0.55, 0.60, 0.05)  # [0.55, 0.60]
+
+    # MACD + RSI (тестовый режим — минимальный перебор)
+    MACD_FAST_RANGE = (10, 14, 4)      # [10, 14]
+    MACD_SLOW_RANGE = (24, 28, 4)      # [24, 28]
+    MACD_SIGNAL_RANGE = (7, 11, 4)     # [7, 11]
+    RSI_PERIOD_RANGE = (12, 16, 4)     # [12, 16]
+    RSI_OVERSOLD_RANGE = (25, 35, 10)  # [25, 35]
+    RSI_OVERBOUGHT_RANGE = (65, 75, 10) # [65, 75]
+
+    # Bollinger (тестовый режим)
+    BB_PERIOD_RANGE = (20, 21, 1)      # [20]
+    BB_STD_RANGE = (2.0, 2.1, 0.1)     # [2.0]
+    VOLUME_PERIOD_RANGE = (20, 21, 1)  # [20]
+
+    # EMA Crossover (тестовый режим)
+    EMA_FAST_RANGE = (9, 10, 1)        # [9]
+    EMA_SLOW_RANGE = (21, 22, 1)       # [21]
+
+    # RSI Divergence (тестовый режим)
+    RSI_DIV_PERIOD_RANGE = (14, 15, 1)     # [14]
+    RSI_DIV_LOOKBACK_RANGE = (5, 6, 1)     # [5]
+    RSI_DIV_THRESHOLD_RANGE = (0.5, 0.6, 0.1)  # [0.5]
+
+    # Ichimoku (тестовый режим)
+    TENKAN_RANGE = (9, 10, 1)          # [9]
+    KIJUN_RANGE = (26, 27, 1)          # [26]
+    SENKOU_B_RANGE = (52, 53, 1)       # [52]
+    DISPLACEMENT_RANGE = (26, 27, 1)   # [26]
+
     BACKTEST_DAYS = 14
     POLL_INTERVAL = 2
 else:

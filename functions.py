@@ -851,6 +851,19 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     rf_per_symbol = len(RF_LOOKBACKS) * len(RF_NBARS) * len(RF_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
+    # Новые стратегии
+    macd_rsi_per_symbol = (len(MACD_FAST_LIST) * len(MACD_SLOW_LIST) * len(MACD_SIGNAL_LIST) *
+                           len(RSI_PERIOD_LIST) * len(RSI_OVERSOLD_LIST) * len(RSI_OVERBOUGHT_LIST) *
+                           len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    bollinger_per_symbol = (len(BB_PERIOD_LIST) * len(BB_STD_LIST) * len(VOLUME_PERIOD_LIST) *
+                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    ema_cross_per_symbol = (len(EMA_FAST_LIST) * len(EMA_SLOW_LIST) *
+                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    rsi_div_per_symbol = (len(RSI_DIV_PERIOD_LIST) * len(RSI_DIV_LOOKBACK_LIST) *
+                          len(RSI_DIV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    ichimoku_per_symbol = (len(TENKAN_LIST) * len(KIJUN_LIST) * len(SENKOU_B_LIST) *
+                           len(DISPLACEMENT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+
     # Фильтр по test_strategy
     if test_strategy == 'stoch':
         active_combos = stoch_per_symbol
@@ -862,8 +875,20 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         active_combos = rf_per_symbol
     elif test_strategy == 'logreg':
         active_combos = logreg_per_symbol
+    elif test_strategy == 'macd_rsi':
+        active_combos = macd_rsi_per_symbol
+    elif test_strategy == 'bollinger':
+        active_combos = bollinger_per_symbol
+    elif test_strategy == 'ema_cross':
+        active_combos = ema_cross_per_symbol
+    elif test_strategy == 'rsi_div':
+        active_combos = rsi_div_per_symbol
+    elif test_strategy == 'ichimoku':
+        active_combos = ichimoku_per_symbol
     else:
-        active_combos = stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol
+        active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol +
+                         logreg_per_symbol + macd_rsi_per_symbol + bollinger_per_symbol +
+                         ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol)
 
     combos_per_symbol = active_combos
 
