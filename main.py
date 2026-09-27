@@ -75,7 +75,7 @@ from data_loader import (
 
 
 # ═══ АВТОРАСПОЗНАВАНИЕ МАШИНЫ ═══
-tumbler = 1
+tumbler = 0
 
 if tumbler == 0:
     TEST_HOSTNAMES = ['LAPTOP-JU0TU1UM']
@@ -294,9 +294,12 @@ SENKOU_B_LIST     = int_range(*SENKOU_B_RANGE)
 DISPLACEMENT_LIST = int_range(*DISPLACEMENT_RANGE)
 
 # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
-def _combo(n1, n2=1, n3=1, n4=1):
+def _combo(*args):
     """Произведение длин списков."""
-    return n1 * n2 * n3 * n4
+    result = 1
+    for a in args:
+        result *= a
+    return result
 
 # Считаем комбинации для каждой стратегии
 integration_budgets_dict = {

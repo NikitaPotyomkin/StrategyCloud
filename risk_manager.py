@@ -46,7 +46,7 @@ def check_integration_budget(budgets, SYMBOLS):
             excess = budget - MAX_COMBOS_PER_STRATEGY
             violations.append((name, budget, excess))
 
-    for name, budget, limit, violated in results.items():
+    for name, (budget, limit, violated) in results.items():
         pct = budget / limit * 100 if limit > 0 else 0
         status = ""
         if violated:
