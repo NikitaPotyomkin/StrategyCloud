@@ -33,7 +33,7 @@ def get_non_usd(symbol):
 def strategy_key(symbol, param, stype='stoch', extra=None):
     if stype == 'parabolic' and extra is not None:
         return f"{symbol}_{stype}_S{param}_M{extra}"
-    elif stype in ('macd_cross', 'rsi_rev', 'macd_rsi', 'bollinger', 'ema_cross', 'rsi_div', 'ichimoku'):
+    elif stype in ('macd_cross', 'rsi_rev', 'bollinger', 'ema_cross', 'rsi_div', 'ichimoku'):
         # Для новых стратегий param — это строка вида "mf12_ms26_rsi14"
         return f"{symbol}_{stype}_{param}"
     return f"{symbol}_{stype}_K{param}"
@@ -51,11 +51,9 @@ def make_magic(symbol, stype, param, extra=None):
 def _short_name(r):
     pair = get_non_usd(r['symbol'])
     stype = r.get('type', 'stoch')
-    k = r['k_period']
+    k = r['param_key']
     if stype == 'parabolic':
         return f"{pair}/SAR s{k}"
-    elif stype == 'macd_rsi':
-        return f"{pair}/MACD+RSI {k}"
     elif stype == 'bollinger':
         return f"{pair}/BB {k}"
     elif stype == 'ema_cross':
@@ -81,9 +79,9 @@ def deduplicate_results(results, min_trades=10, min_score=1.0):
         sym = r['symbol']
 
         if stype == 'parabolic':
-            key = (sym, stype, r['k_period'], r.get('parabolic_max', 0.2))
+            key = (sym, stype, r['param_key'], r.get('parabolic_max', 0.2))
         else:
-            key = (sym, stype, r['k_period'])
+            key = (sym, stype, r['param_key'])
 
         if key not in best or r['score'] > best[key]['score']:
             best[key] = r
@@ -134,13 +132,13 @@ def write_ranking(top_strats, all_results, JOURNAL_DIR, BACKTEST_DAYS, TOP_N, LO
     csv_file = os.path.join(JOURNAL_DIR, "rankings.csv")
     with open(csv_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['rank', 'symbol', 'type', 'k_period', 'parabolic_max',
+        writer.writerow(['rank', 'symbol', 'type', 'param_key', 'parabolic_max',
                          'sl_points', 'tp_points',
                          'profit', 'pf', 'mdd', 'win_rate', 'sharpe',
                          'recovery', 'score', 'top'])
         for i, r in enumerate(all_results):
             is_active = any(
-                s['symbol'] == r['symbol'] and s['k_period'] == r['k_period']
+                s['symbol'] == r['symbol'] and s['param_key'] == r['param_key']
                 and s['sl_points'] == r['sl_points'] and s['tp_points'] == r['tp_points']
                 and s.get('type', 'stoch') == r.get('type', 'stoch')
                 and s.get('parabolic_max') == r.get('parabolic_max')
@@ -150,7 +148,7 @@ def write_ranking(top_strats, all_results, JOURNAL_DIR, BACKTEST_DAYS, TOP_N, LO
             stype = r.get('type', 'stoch')
             pmax = r.get('parabolic_max')
             pmax_str = f"{pmax:.2f}" if pmax is not None else ""
-            writer.writerow([i+1, pair, stype, r['k_period'], pmax_str,
+            writer.writerow([i+1, pair, stype, r['param_key'], pmax_str,
                              r['sl_points'], r['tp_points'],
                              round(r['profit'], 2), round(r['profit_factor'], 2),
                              round(r['max_drawdown'], 2), round(r['win_rate'], 1),
@@ -173,14 +171,14 @@ def write_ranking(top_strats, all_results, JOURNAL_DIR, BACKTEST_DAYS, TOP_N, LO
 
     for i, r in enumerate(all_results):
         is_active_txt = "* TOP" if any(
-            s['symbol'] == r['symbol'] and s['k_period'] == r['k_period']
+            s['symbol'] == r['symbol'] and s['param_key'] == r['param_key']
             and s['sl_points'] == r['sl_points'] and s['tp_points'] == r['tp_points']
             and s.get('type', 'stoch') == r.get('type', 'stoch')
             and s.get('parabolic_max') == r.get('parabolic_max')
             for s in top_strats
         ) else ""
         stype = r.get('type', 'stoch')
-        k_or_step = r['k_period']
+        k_or_step = r['param_key']
         pmax = r.get('parabolic_max')
         pmax_str = f"{pmax:.2f}" if pmax is not None else ""
         lines.append(
@@ -211,14 +209,14 @@ def write_active_state(active, active_strategies, balance, max_risk_pct, journal
         'strategies': []
     }
     for r in active:
-        key = strategy_key(r['symbol'], r['k_period'], r.get('type', 'stoch'),
+        key = strategy_key(r['symbol'], r['param_key'], r.get('type', 'stoch'),
                            r.get('parabolic_max'))
         strat = active_strategies.get(key, {})
         has_position = strat.get('position') is not None
         state['strategies'].append({
             'symbol': r['symbol'],
             'type': r.get('type', 'stoch'),
-            'k_period': r.get('k_period', '-'),
+            'param_key': r.get('param_key', '-'),
             'sl_points': r.get('sl_points', '-'),
             'tp_points': r.get('tp_points', '-'),
             'parabolic_step': r.get('parabolic_step', '-'),
@@ -245,7 +243,7 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
     top_keys = set()
     for r in top_results:
         stype = r.get('type', 'stoch')
-        param = r['k_period']
+        param = r['param_key']
         extra = r.get('parabolic_max')
         top_keys.add(strategy_key_fn(r['symbol'], param, stype, extra))
 
@@ -270,7 +268,7 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
     existing_magics = {s['magic'] for s in active_strategies.values()}
     for r in top_results:
         stype = r.get('type', 'stoch')
-        param = r['k_period']
+        param = r['param_key']
         extra = r.get('parabolic_max')
         key = strategy_key_fn(r['symbol'], param, stype, extra)
         if key not in active_strategies:
@@ -280,7 +278,7 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                 continue
             strat_dict = {
                 'symbol': r['symbol'],
-                'k_period': param,
+                'param_key': param,
                 'parabolic_max': r.get('parabolic_max'),
                 'sl_points': r['sl_points'],
                 'tp_points': r['tp_points'],
@@ -309,6 +307,60 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                         strat_dict['n_bars'] = int(p[2:])
                     elif p.startswith('th'):
                         strat_dict['threshold'] = float(p[2:])
+            # MACD Cross-specific params
+            elif stype == 'macd_cross':
+                k = param  # "mf12_ms26_sig9"
+                for p in k.split('_'):
+                    if p.startswith('mf'):
+                        strat_dict['macd_fast'] = int(p[2:])
+                    elif p.startswith('ms'):
+                        strat_dict['macd_slow'] = int(p[2:])
+                    elif p.startswith('sig'):
+                        strat_dict['macd_signal'] = int(p[3:])
+            # RSI Reversal-specific params
+            elif stype == 'rsi_rev':
+                k = param  # "rp14_ros30_rob70"
+                for p in k.split('_'):
+                    if p.startswith('rp'):
+                        strat_dict['rsi_period'] = int(p[2:])
+                    elif p.startswith('ros'):
+                        strat_dict['rsi_oversold'] = int(p[3:])
+                    elif p.startswith('rob'):
+                        strat_dict['rsi_overbought'] = int(p[3:])
+            # Bollinger-specific params
+            elif stype == 'bollinger':
+                k = param  # "bp20_bs2"
+                for p in k.split('_'):
+                    if p.startswith('bp'):
+                        strat_dict['bb_period'] = int(p[2:])
+                    elif p.startswith('bs'):
+                        strat_dict['bb_std'] = float(p[2:])
+            # EMA Crossover-specific params
+            elif stype == 'ema_cross':
+                k = param  # "ef9_es21"
+                for p in k.split('_'):
+                    if p.startswith('ef'):
+                        strat_dict['ema_fast'] = int(p[2:])
+                    elif p.startswith('es'):
+                        strat_dict['ema_slow'] = int(p[2:])
+            # RSI Divergence-specific params
+            elif stype == 'rsi_div':
+                k = param  # "rp14_lb5_th0.50"
+                for p in k.split('_'):
+                    if p.startswith('rp'):
+                        strat_dict['rsi_period'] = int(p[2:])
+                    elif p.startswith('lb'):
+                        strat_dict['lookback'] = int(p[2:])
+                    elif p.startswith('th'):
+                        strat_dict['threshold'] = float(p[2:])
+            # Ichimoku-specific params
+            elif stype == 'ichimoku':
+                k = param  # "ten9_kij26"
+                for p in k.split('_'):
+                    if p.startswith('ten'):
+                        strat_dict['tenkan'] = int(p[3:])
+                    elif p.startswith('kij'):
+                        strat_dict['kijun'] = int(p[3:])
             active_strategies[key] = strat_dict
             existing_magics.add(magic)
             print(f"  -> [{key}] Добавлен в топ-{TOP_N}, lot={strat_dict['lot']}")
@@ -344,7 +396,7 @@ def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
     """Общая логика записи закрытия сделки в журнал. Возвращает profit."""
     profit = _position_profit(s, exit_price, symbol_data)
     trade = {
-        'symbol': s['symbol'], 'k_period': s['k_period'],
+        'symbol': s['symbol'], 'param_key': s['param_key'],
         'sl_points': s['sl_points'], 'tp_points': s['tp_points'],
         'entry_time': s['position']['entry_time'], 'exit_time': now,
         'direction': s['position']['direction'],
@@ -552,8 +604,6 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          check_entry_rf_fn=None,
                          calc_logreg_fn=None, check_exit_logreg_fn=None,
                          check_entry_logreg_fn=None,
-                         calc_macd_rsi_fn=None, check_exit_macd_rsi_fn=None,
-                         check_entry_macd_rsi_fn=None,
                          calc_macd_cross_fn=None, check_exit_macd_cross_fn=None,
                          check_entry_macd_cross_fn=None,
                          calc_rsi_reversal_fn=None, check_exit_rsi_reversal_fn=None,
@@ -618,7 +668,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             digits = info.digits
 
             if stype == 'stoch':
-                df = calc_stochastic_fn(df, s['k_period'])
+                df = calc_stochastic_fn(df, s['param_key'])
                 if df is None or len(df) < 2:
                     continue
 
@@ -661,7 +711,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                 else:
                                     entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                                comment = f"{s['symbol']}, K={s['k_period']}"
+                                comment = f"{s['symbol']}, K={s['param_key']}"
                                 ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
                                                        sl, tp, s['magic'], comment, symbol_data,
                                                        risk_params=risk_params)
@@ -676,7 +726,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                     print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'parabolic':
-                df = calc_parabolic_fn(df, s['k_period'], s.get('parabolic_max', 0.2))
+                df = calc_parabolic_fn(df, s['param_key'], s.get('parabolic_max', 0.2))
                 if df is None or len(df) < 2:
                     continue
 
@@ -719,7 +769,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                 else:
                                     entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                                comment = f"{s['symbol']}, Step={s['k_period']}, Max={s.get('parabolic_max', 0.2)}"
+                                comment = f"{s['symbol']}, Step={s['param_key']}, Max={s.get('parabolic_max', 0.2)}"
                                 ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
                                                        sl, tp, s['magic'], comment, symbol_data,
                                                        risk_params=risk_params)
@@ -734,7 +784,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                     print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'ma':
-                df = calc_moving_average_fn(df, s['k_period'])
+                df = calc_moving_average_fn(df, s['param_key'])
                 if df is None or len(df) < 2:
                     continue
 
@@ -777,7 +827,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                 else:
                                     entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                                comment = f"{s['symbol']}, MA={s['k_period']}"
+                                comment = f"{s['symbol']}, MA={s['param_key']}"
                                 ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
                                                        sl, tp, s['magic'], comment, symbol_data,
                                                        risk_params=risk_params)
@@ -837,7 +887,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                 else:
                                     entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                                comment = f"{s['symbol']}, RF {s.get('k_period', '')}"
+                                comment = f"{s['symbol']}, RF {s.get('param_key', '')}"
                                 ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
                                                        sl, tp, s['magic'], comment, symbol_data,
                                                        risk_params=risk_params)
@@ -897,7 +947,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                 else:
                                     entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                                comment = f"{s['symbol']}, LogReg {s.get('k_period', '')}"
+                                comment = f"{s['symbol']}, LogReg {s.get('param_key', '')}"
                                 ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
                                                        sl, tp, s['magic'], comment, symbol_data,
                                                        risk_params=risk_params)
@@ -911,61 +961,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                     }
                                     print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
-            elif stype == 'macd_rsi':
-                if calc_macd_rsi_fn is None:
-                    print(f"  -> [{key}] MACD+RSI — модуль не передан")
-                    continue
-                df = calc_macd_rsi_fn(df)
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_macd_rsi_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_macd_rsi_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'macd_rsi' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/macd_rsi")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, MACD+RSI"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
             elif stype == 'macd_cross':
                 if calc_macd_cross_fn is None:
                     print(f"  -> [{key}] MACD-Cross — модуль не передан")
                     continue
-                df = calc_macd_cross_fn(df)
+                df = calc_macd_cross_fn(df, s.get('macd_fast', 12), s.get('macd_slow', 26), s.get('macd_signal', 9))
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]
@@ -1015,7 +1015,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if calc_rsi_reversal_fn is None:
                     print(f"  -> [{key}] RSI-Rev — модуль не передан")
                     continue
-                df = calc_rsi_reversal_fn(df)
+                df = calc_rsi_reversal_fn(df, s.get('rsi_period', 14), s.get('rsi_oversold', 30), s.get('rsi_overbought', 70))
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]
@@ -1065,7 +1065,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if calc_bollinger_fn is None:
                     print(f"  -> [{key}] Bollinger — модуль не передан")
                     continue
-                df = calc_bollinger_fn(df)
+                df = calc_bollinger_fn(df, s.get('bb_period', 20), s.get('bb_std', 2), s.get('volume_period', 20))
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]
@@ -1115,7 +1115,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if calc_ema_crossover_fn is None:
                     print(f"  -> [{key}] EMA — модуль не передан")
                     continue
-                df = calc_ema_crossover_fn(df)
+                df = calc_ema_crossover_fn(df, s.get('ema_fast', 9), s.get('ema_slow', 21))
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]
@@ -1165,7 +1165,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if calc_rsi_divergence_fn is None:
                     print(f"  -> [{key}] RSI-Div — модуль не передан")
                     continue
-                df = calc_rsi_divergence_fn(df)
+                df = calc_rsi_divergence_fn(df, s.get('rsi_period', 14), s.get('lookback', 5), s.get('threshold', 0.5))
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]
@@ -1215,7 +1215,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if calc_ichimoku_fn is None:
                     print(f"  -> [{key}] Ichimoku — модуль не передан")
                     continue
-                df = calc_ichimoku_fn(df)
+                df = calc_ichimoku_fn(df, s.get('tenkan', 9), s.get('kijun', 26), s.get('senkou_b', 52), s.get('displacement', 26))
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]

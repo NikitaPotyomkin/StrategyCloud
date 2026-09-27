@@ -7,10 +7,10 @@ SLOWING = 3
 D_PERIOD = 3
 
 
-def calc_stochastic(df, k_period):
+def calc_stochastic(df, param_key):
     """Добавляет колонки k и d в копию DataFrame."""
-    low_min = df['low'].rolling(k_period, min_periods=1).min()
-    high_max = df['high'].rolling(k_period, min_periods=1).max()
+    low_min = df['low'].rolling(param_key, min_periods=1).min()
+    high_max = df['high'].rolling(param_key, min_periods=1).max()
     k_raw = 100 * (df['close'] - low_min) / (high_max - low_min)
     k_raw = k_raw.replace([np.inf, -np.inf], np.nan).fillna(50)
     df = df.copy()
@@ -39,9 +39,9 @@ def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
     return (diff / tick_size) * tick_value * lot
 
 
-def backtest(df, k_period, sl_points, tp_points, point, tick_value, tick_size, sim_lot=0.01, spread_points=0):
+def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """Симуляция сделок на истории H1 с учётом спреда. Возвращает (profit, n_trades, trade_profits)."""
-    df = calc_stochastic(df, k_period)
+    df = calc_stochastic(df, param_key)
     sl_dist = sl_points * point
     tp_dist = tp_points * point
     spread = spread_points * point

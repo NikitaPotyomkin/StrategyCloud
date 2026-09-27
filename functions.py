@@ -78,10 +78,10 @@ def list_checkpoints():
 
 # ═══ BACKTEST-ФУНКЦИИ ДЛЯ МУЛЬТИПРОЦЕССИНГА ═══
 # Эти функции перенесены сюда, чтобы multiprocessing мог их сериализовать
-def _backtest_stoch(df, k_period, sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
+def _backtest_stoch(df, param_key, sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
     """Backtest для Stochastic."""
     from strategies.stochastic import backtest as stoch_backtest
-    return stoch_backtest(df, k_period, sl_points, tp_points, point, tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+    return stoch_backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
 
 
 def _backtest_parabolic(df, step, max_val, sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
@@ -483,7 +483,6 @@ def _backtest_symbol(args):
      LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
      MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
      RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-     MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
      BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
      EMA_FAST_LIST, EMA_SLOW_LIST,
      RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -504,7 +503,6 @@ def _backtest_symbol(args):
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     # Новые стратегии
-    macd_rsi_per_symbol = len(MACD_RSI_FAST_LIST) * len(MACD_RSI_SLOW_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     bollinger_per_symbol = len(BB_PERIOD_LIST) * len(BB_STD_LIST) * len(VOLUME_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     ema_cross_per_symbol = len(EMA_FAST_LIST) * len(EMA_SLOW_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     rsi_div_per_symbol = len(RSI_DIV_PERIOD_LIST) * len(RSI_DIV_LOOKBACK_LIST) * len(RSI_DIV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
@@ -520,8 +518,6 @@ def _backtest_symbol(args):
         active_combos = rf_per_symbol
     elif test_strategy == 'logreg':
         active_combos = logreg_per_symbol
-    elif test_strategy == 'macd_rsi':
-        active_combos = macd_rsi_per_symbol
     elif test_strategy == 'bollinger':
         active_combos = bollinger_per_symbol
     elif test_strategy == 'ema_cross':
@@ -531,7 +527,7 @@ def _backtest_symbol(args):
     elif test_strategy == 'ichimoku':
         active_combos = ichimoku_per_symbol
     else:
-        active_combos = stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol + macd_rsi_per_symbol + bollinger_per_symbol + ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol
+        active_combos = stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol + bollinger_per_symbol + ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol
 
     status = "старт" if symbol_idx < 4 else "в очереди"
     print(f"  [{symbol_idx + 1}/{total_symbols}] {symbol}: {status} ({active_combos} комб.)", flush=True)
@@ -551,7 +547,7 @@ def _backtest_symbol(args):
             metrics = calc_metrics(trade_profits)
             score = composite_score(metrics)
             results.append({
-                'symbol': symbol, 'type': 'stoch', 'k_period': k,
+                'symbol': symbol, 'type': 'stoch', 'param_key': k,
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -579,7 +575,7 @@ def _backtest_symbol(args):
             metrics = calc_metrics(trade_profits)
             score = composite_score(metrics)
             results.append({
-                'symbol': symbol, 'type': 'parabolic', 'k_period': step,
+                'symbol': symbol, 'type': 'parabolic', 'param_key': step,
                 'parabolic_max': max_val,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -604,7 +600,7 @@ def _backtest_symbol(args):
             metrics = calc_metrics(trade_profits)
             score = composite_score(metrics)
             results.append({
-                'symbol': symbol, 'type': 'ma', 'k_period': ma_period,
+                'symbol': symbol, 'type': 'ma', 'param_key': ma_period,
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -633,7 +629,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'rf',
-                'k_period': f"lb{lookback}_nb{n_bars}_th{threshold:.2f}",
+                'param_key': f"lb{lookback}_nb{n_bars}_th{threshold:.2f}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -662,7 +658,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'logreg',
-                'k_period': f"lb{lookback}_nb{n_bars}_th{threshold:.2f}",
+                'param_key': f"lb{lookback}_nb{n_bars}_th{threshold:.2f}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -692,7 +688,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'macd_cross',
-                'k_period': f"mf{mf}_ms{ms}_sig{msig}",
+                'param_key': f"mf{mf}_ms{ms}_sig{msig}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -721,7 +717,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'rsi_rev',
-                'k_period': f"rp{rp}_ros{ros}_rob{rob}",
+                'param_key': f"rp{rp}_ros{ros}_rob{rob}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -750,7 +746,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'bollinger',
-                'k_period': f"bp{bp}_bs{bs}",
+                'param_key': f"bp{bp}_bs{bs}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -778,7 +774,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'ema_cross',
-                'k_period': f"ef{ef}_es{es}",
+                'param_key': f"ef{ef}_es{es}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -807,7 +803,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'rsi_div',
-                'k_period': f"rp{rp}_lb{lb}_th{th:.2f}",
+                'param_key': f"rp{rp}_lb{lb}_th{th:.2f}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -836,7 +832,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'ichimoku',
-                'k_period': f"ten{ten}_kij{kij}",
+                'param_key': f"ten{ten}_kij{kij}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -868,7 +864,6 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
                       LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
                       MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
                       RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-                      MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
                       BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
                       EMA_FAST_LIST, EMA_SLOW_LIST,
                       RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -895,8 +890,6 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     # Новые стратегии
-    macd_rsi_per_symbol = (len(MACD_RSI_FAST_LIST) * len(MACD_RSI_SLOW_LIST) *
-                           len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     macd_cross_per_symbol = (len(MACD_CROSS_FAST_LIST) * len(MACD_CROSS_SLOW_LIST) *
                              len(MACD_CROSS_SIGNAL_LIST) *
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
@@ -923,8 +916,6 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         active_combos = rf_per_symbol
     elif test_strategy == 'logreg':
         active_combos = logreg_per_symbol
-    elif test_strategy == 'macd_rsi':
-        active_combos = macd_rsi_per_symbol
     elif test_strategy == 'macd_cross':
         active_combos = macd_cross_per_symbol
     elif test_strategy == 'rsi_rev':
@@ -939,7 +930,7 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         active_combos = ichimoku_per_symbol
     else:
         active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol +
-                         logreg_per_symbol + macd_rsi_per_symbol + macd_cross_per_symbol +
+                         logreg_per_symbol + macd_cross_per_symbol +
                          rsi_rev_per_symbol + bollinger_per_symbol + ema_cross_per_symbol +
                          rsi_div_per_symbol + ichimoku_per_symbol)
 
@@ -1030,7 +1021,6 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
             LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
             MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
             RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-            MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
             BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
             EMA_FAST_LIST, EMA_SLOW_LIST,
             RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -1063,8 +1053,6 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         strategies_to_run.append(f"RF: {rf_per_symbol} комб.")
     if not test_strategy or test_strategy == 'logreg':
         strategies_to_run.append(f"LogReg: {logreg_per_symbol} комб.")
-    if not test_strategy or test_strategy == 'macd_rsi':
-        strategies_to_run.append(f"MACD+RSI: {macd_rsi_per_symbol} комб.")
     if not test_strategy or test_strategy == 'bollinger':
         strategies_to_run.append(f"Bollinger: {bollinger_per_symbol} комб.")
     if not test_strategy or test_strategy == 'ema_cross':

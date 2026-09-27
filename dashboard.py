@@ -169,7 +169,7 @@ if state:
             lambda x: '🟢 в позиции' if x else '⚪ ожидание'
         )
 
-        display_cols = ['статус', 'symbol', 'type', 'k_period',
+        display_cols = ['статус', 'symbol', 'type', 'param_key',
                         'sl_points', 'tp_points', 'score', 'lot',
                         'profit', 'profit_factor', 'win_rate', 'n_trades']
         cols_to_show = [c for c in display_cols if c in df_active.columns]

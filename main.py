@@ -108,10 +108,6 @@ if TEST_MODE:
     RSI_REV_OVERSOLD_RANGE   = (25, 35, 10)
     RSI_REV_OVERBOUGHT_RANGE = (65, 75, 10)
 
-    # MACD + RSI Combo (MACD fast × slow, RSI фиксированный)
-    MACD_RSI_FAST_RANGE = (10, 14, 4)
-    MACD_RSI_SLOW_RANGE = (24, 28, 4)
-
     # Bollinger (тестовый режим)
     BB_PERIOD_RANGE = (20, 21, 1)      # [20]
     BB_STD_RANGE = (2.0, 2.1, 0.1)     # [2.0]
@@ -174,10 +170,6 @@ else:
     RSI_REV_OVERSOLD_RANGE   = (25, 35, 5)
     RSI_REV_OVERBOUGHT_RANGE = (65, 75, 5)
 
-    # MACD + RSI Combo (MACD fast × slow, RSI фиксированный)
-    MACD_RSI_FAST_RANGE = (10, 14, 2)
-    MACD_RSI_SLOW_RANGE = (24, 28, 2)
-
     # Bollinger
     BB_PERIOD_RANGE = (15, 25, 5)
     BB_STD_RANGE = (1.5, 2.5, 0.5)
@@ -233,7 +225,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 JOURNAL_DIR = os.path.join(BASE_DIR, "journals")
 JOURNAL_FILE = os.path.join(JOURNAL_DIR, f"journal_{datetime.now().strftime('%Y%m')}.csv")
 
-COLUMNS = ['symbol', 'k_period', 'sl_points', 'tp_points',
+COLUMNS = ['symbol', 'param_key', 'sl_points', 'tp_points',
            'entry_time', 'exit_time', 'direction',
            'entry_price', 'exit_price', 'lot', 'profit',
            'exit_reason', 'ticket']
@@ -276,8 +268,6 @@ MACD_CROSS_SIGNAL_LIST    = int_range(*MACD_CROSS_SIGNAL_RANGE)
 RSI_REV_PERIOD_LIST       = int_range(*RSI_REV_PERIOD_RANGE)
 RSI_REV_OVERSOLD_LIST     = int_range(*RSI_REV_OVERSOLD_RANGE)
 RSI_REV_OVERBOUGHT_LIST   = int_range(*RSI_REV_OVERBOUGHT_RANGE)
-MACD_RSI_FAST_LIST        = int_range(*MACD_RSI_FAST_RANGE)
-MACD_RSI_SLOW_LIST        = int_range(*MACD_RSI_SLOW_RANGE)
 
 BB_PERIOD_LIST      = int_range(*BB_PERIOD_RANGE)
 BB_STD_LIST         = float_range(*BB_STD_RANGE)
@@ -312,9 +302,6 @@ def filter_params_for_test():
         'logreg': {'LOGREG_LOOKBACKS': LOGREG_LOOKBACKS, 'LOGREG_NBARS': LOGREG_NBARS,
                    'LOGREG_THRESHOLDS': LOGREG_THRESHOLDS,
                    'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'macd_rsi': {'MACD_RSI_FAST_LIST': MACD_RSI_FAST_LIST,
-                     'MACD_RSI_SLOW_LIST': MACD_RSI_SLOW_LIST,
-                     'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
         'macd_cross': {'MACD_CROSS_FAST_LIST': MACD_CROSS_FAST_LIST,
                        'MACD_CROSS_SLOW_LIST': MACD_CROSS_SLOW_LIST,
                        'MACD_CROSS_SIGNAL_LIST': MACD_CROSS_SIGNAL_LIST,
@@ -407,7 +394,6 @@ if __name__ == '__main__':
         LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
         MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
         RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-        MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
         BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
         EMA_FAST_LIST, EMA_SLOW_LIST,
         RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -440,7 +426,7 @@ if __name__ == '__main__':
         stype = r.get('type', 'stoch')
         pmax = r.get('parabolic_max')
         pmax_str = f" Max={pmax:.2f}" if pmax is not None else ""
-        print(f"  {i + 1}. {r['symbol']} {stype} K={r['k_period']}{pmax_str} "
+        print(f"  {i + 1}. {r['symbol']} {stype} K={r['param_key']}{pmax_str} "
               f"SL={r['sl_points']} TP={r['tp_points']} "
               f"profit={r['profit']:+.1f} PF={r['profit_factor']:.2f} "
               f"WR={r['win_rate']:.0f}% trades={r['n_trades']} "
@@ -492,7 +478,6 @@ if __name__ == '__main__':
                     LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
                     MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
                     RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-                    MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
                     BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
                     EMA_FAST_LIST, EMA_SLOW_LIST,
                     RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
