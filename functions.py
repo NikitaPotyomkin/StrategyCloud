@@ -8,7 +8,6 @@ import json
 import glob
 import os
 import csv
-import hashlib
 from itertools import product
 
 
@@ -27,26 +26,26 @@ def _checkpoint_file(symbol):
 
 
 def load_checkpoint(symbol):
-    """Загрузить результаты для символа из чекпойнта. Возвращает список результатов или None."""
+    """Загрузить результаты для символа из чекпойнта. Возвращает (results, last_bar_time) или (None, None)."""
     path = _checkpoint_file(symbol)
     if not os.path.exists(path):
-        return None
+        return None, None
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data.get('results', [])
+        return data.get('results', []), data.get('last_bar_time')
     except (json.JSONDecodeError, KeyError):
-        return None
+        return None, None
 
 
-def save_checkpoint(symbol, results, data_hash=None):
+def save_checkpoint(symbol, results, last_bar_time=None):
     """Сохранить результаты для символа в чекпойнт."""
     path = _checkpoint_file(symbol)
     data = {
         'symbol': symbol,
         'timestamp': datetime.datetime.now().isoformat(),
         'n_results': len(results),
-        'data_hash': data_hash,
+        'last_bar_time': last_bar_time,
         'results': results
     }
     with open(path, 'w', encoding='utf-8') as f:
@@ -847,13 +846,8 @@ def _backtest_symbol(args):
         completed_strategies.append('Ichimoku')
 
     # ── Сохраняем чекпойнт после каждого символа ──
-    # Хешируем структуру + последний бар — тот же формат, что при загрузке
-    if df_window is not None:
-        last_bar = df_window.index[-1]
-        data_hash = hashlib.md5(
-            f"{df_window.shape[0]}_{df_window.shape[1]}_{last_bar.isoformat()}".encode()
-        ).hexdigest()
-    save_checkpoint(symbol, results, data_hash=data_hash)
+    last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
+    save_checkpoint(symbol, results, last_bar_time=last_bar_time)
 
     return symbol, results, combos_done, active_combos, completed_strategies
 
@@ -946,38 +940,21 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
             remove_checkpoint(symbol)
             continue
         if symbol in existing_checkpoints:
-            cached = load_checkpoint(symbol)
-            if cached is not None:
-                # Проверяем, не обновились ли данные с момента сохранения чекпоинта
-                if symbol in symbol_data:
-                    df = symbol_data[symbol]['df_h1']
-                    last_bar = df.index[-1]
-                    checkpoint_path = _checkpoint_file(symbol)
-                    try:
-                        import hashlib
-                        # Хешируем только структуру + последний бар — если не изменились,
-                        # значит данные те же и чекпоинт можно использовать
-                        data_hash = hashlib.md5(
-                            f"{df.shape[0]}_{df.shape[1]}_{last_bar.isoformat()}".encode()
-                        ).hexdigest()
-                        # Сохраняем хеш данных в чекпоинте
-                        with open(checkpoint_path, 'r', encoding='utf-8') as f:
-                            cp_data = json.load(f)
-                        if cp_data.get('data_hash') == data_hash:
-                            # Данные не изменились — пропускаем
-                            all_results.extend(cached)
-                            skipped_symbols[symbol] = len(cached)
-                        else:
-                            # Данные обновились — удаляем чекпоинт и пересчитываем
-                            remove_checkpoint(symbol)
-                            removed_stale.append(symbol)
-                    except (json.JSONDecodeError, KeyError):
-                        # Неверный формат чекпоинта — пересчитываем
-                        remove_checkpoint(symbol)
-                        removed_stale.append(symbol)
-                else:
+            cached, cached_bar_time = load_checkpoint(symbol)
+            if cached is not None and symbol in symbol_data:
+                df = symbol_data[symbol]['df_h1']
+                current_bar_time = df.index[-1].isoformat()
+                if cached_bar_time == current_bar_time:
+                    # Данные не изменились — пропускаем
                     all_results.extend(cached)
                     skipped_symbols[symbol] = len(cached)
+                else:
+                    # Данные обновились — удаляем чекпоинт и пересчитываем
+                    remove_checkpoint(symbol)
+                    removed_stale.append(symbol)
+            else:
+                all_results.extend(cached)
+                skipped_symbols[symbol] = len(cached)
 
     if skipped_symbols:
         print(f"\n  📦 Загружено из чекпойнтов {len(skipped_symbols)} символов:")

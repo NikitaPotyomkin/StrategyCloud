@@ -5,6 +5,70 @@ import MetaTrader5 as mt5
 import datetime
 
 
+# ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
+# Лимит комбинаций на КАЖДУЮ стратегию (на 1 символ).
+# Один лимит для всех — если стратегия превысила, сокращаем её списки параметров.
+MAX_COMBOS_PER_STRATEGY = 20_000
+
+
+def _combo(n1, n2=1, n3=1, n4=1):
+    """Произведение длин списков."""
+    return n1 * n2 * n3 * n4
+
+
+def check_integration_budget(budgets, SYMBOLS):
+    """Проверить бюджет при интеграции новых стратегий.
+
+    Вызывается один раз при загрузке main.py, ДО запуска бэктеста.
+    Каждая стратегия ограничена одинаковым лимитом MAX_COMBOS_PER_STRATEGY.
+
+    Args:
+        budgets: dict {strategy_name: combos} комбинаций на 1 символ
+        SYMBOLS: список символов для расчёта общего бюджета
+
+    Returns:
+        dict {strategy_name: (budget, limit, violated)}
+    """
+    total = sum(budgets.values())
+    n_symbols = len(SYMBOLS)
+    total_all_symbols = total * n_symbols
+
+    print(f"\n{'═' * 70}")
+    print(f"  ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ (лимит {MAX_COMBOS_PER_STRATEGY:,} на стратегию)")
+    print(f"{'═' * 70}")
+
+    results = {}
+    violations = []
+    for name, budget in sorted(budgets.items(), key=lambda x: x[1], reverse=True):
+        violated = budget > MAX_COMBOS_PER_STRATEGY
+        results[name] = (budget, MAX_COMBOS_PER_STRATEGY, violated)
+        if violated:
+            excess = budget - MAX_COMBOS_PER_STRATEGY
+            violations.append((name, budget, excess))
+
+    for name, budget, limit, violated in results.items():
+        pct = budget / limit * 100 if limit > 0 else 0
+        status = ""
+        if violated:
+            status = " 🔴 ПРЕРЫВАНИЕ"
+        elif budget > limit * 0.8:
+            status = " 🟡 близко"
+        print(f"  {name:<15} {budget:>8,} / {limit:>8,} ({pct:5.1f}%){status}")
+
+    print(f"{'─' * 70}")
+    print(f"  ИТОГО: {total:>8,} комб./символ | {total_all_symbols:>10,} комб. ({n_symbols} символов)")
+
+    if violations:
+        print(f"\n  ⛔ {len(violations)} стратегий превысили лимит {MAX_COMBOS_PER_STRATEGY:,}:")
+        for name, budget, excess in violations:
+            print(f"    {name}: {budget:,} > {MAX_COMBOS_PER_STRATEGY:,} (+{excess:,} комб.)")
+    else:
+        print(f"\n  ✅ Все стратегии в пределах лимита {MAX_COMBOS_PER_STRATEGY:,}.")
+    print(f"{'═' * 70}\n")
+
+    return results
+
+
 # ═══ КОНСТАНТЫ ОЦЕНКИ ═══
 # Веса composite_score (см. функцию ниже).
 SCORE_WEIGHTS = {

@@ -234,6 +234,75 @@ def write_active_state(active, active_strategies, balance, max_risk_pct, journal
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+# ═══ РЕЕСТР СТРАТЕГИЙ ═══
+def _registry_path():
+    """Путь к файлу реестра стратегий."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, 'journals', 'strategy_registry.csv')
+
+
+def _ensure_registry():
+    """Создать файл реестра с заголовком, если не существует."""
+    path = _registry_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not os.path.exists(path):
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['magic', 'symbol', 'type', 'param_key', 'parabolic_max',
+                             'activated_at', 'deactivated_at', 'conflict'])
+
+
+def _register_strategy(magic, symbol, stype, param_key, parabolic_max, activated_at):
+    """Добавить/обновить запись в реестре."""
+    path = _registry_path()
+    _ensure_registry()
+    
+    # Проверяем, есть ли уже такая запись
+    existing = []
+    with open(path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if int(row['magic']) == magic and row['symbol'] == symbol:
+                # Параметры совпали — не дублируем
+                if (row['type'] == stype and row['param_key'] == param_key and
+                        str(row.get('parabolic_max', '')) == str(parabolic_max)):
+                    return  # Уже есть
+                # Параметры изменились — обновляем
+                existing.append(row)
+                break
+    
+    if not existing:
+        # Новая стратегия — добавляем
+        with open(path, 'a', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([magic, symbol, stype, param_key,
+                             f"{parabolic_max:.2f}" if parabolic_max is not None else '',
+                             activated_at, '', 0])
+
+
+def _deregister_strategy(magic, symbol, deactivated_at):
+    """Пометить стратегию как деактивированную."""
+    path = _registry_path()
+    if not os.path.exists(path):
+        return
+    
+    rows = []
+    updated = False
+    with open(path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if int(row['magic']) == magic and row['symbol'] == symbol and not row['deactivated_at']:
+                row['deactivated_at'] = deactivated_at
+                updated = True
+            rows.append(row)
+    
+    if updated:
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+
+
 # ═══ СИНХРОНИЗАЦИЯ АКТИВНЫХ СТРАТЕГИЙ ═══
 def sync_active_strategies(top_results, now, symbol_data, active_strategies, close_order_fn,
                            get_deal_exit_price_fn, record_trade_fn, strategy_key_fn,
@@ -262,6 +331,7 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                 # Стратегия остаётся под управлением до успешного закрытия.
                 print(f"  -> [{key}] Не удалось закрыть (rerank) — позиция остаётся под управлением")
                 continue
+        _deregister_strategy(s['magic'], s['symbol'], now.isoformat())
         del active_strategies[key]
 
     # Добавляем новые из топа
@@ -363,6 +433,8 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                         strat_dict['kijun'] = int(p[3:])
             active_strategies[key] = strat_dict
             existing_magics.add(magic)
+            # ── Регистрируем новую стратегию ──
+            _register_strategy(magic, r['symbol'], stype, param, extra, now.isoformat())
             print(f"  -> [{key}] Добавлен в топ-{TOP_N}, lot={strat_dict['lot']}")
 
     # Проверяем реальные позиции (могли закрыться по SL/TP у брокера)

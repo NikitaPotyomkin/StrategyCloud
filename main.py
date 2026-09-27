@@ -1,13 +1,15 @@
 import MetaTrader5 as mt5
 from datetime import datetime, timedelta
 import os
+import csv
 import time
 import socket
 import warnings
 warnings.filterwarnings('ignore')
 
 from functions import terminal_on, run_full_backtest
-from risk_manager import calc_metrics, composite_score, distribute_lots
+from daily_report import generate_daily_report, generate_missing_reports
+from risk_manager import calc_metrics, composite_score, distribute_lots, check_integration_budget, MAX_COMBOS_PER_STRATEGY
 from strategy_engine import (
     write_ranking, sync_active_strategies, check_active_signals,
     send_order, close_order, get_deal_exit_price,
@@ -15,6 +17,12 @@ from strategy_engine import (
     deduplicate_results, _short_name,
     write_active_state, get_non_usd
 )
+
+# ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
+# Максимальное число комбинаций на ОДИН символ (все стратегии вместе).
+# Бэктест идёт по multiprocessing — каждый символ считает все комбинации.
+# Если сумма всех стратегий превышает этот лимит — новые стратегии блокируются.
+# ═══ ПАРАМЕТРЫ БЭКТЕСТА ═══
 from strategies.stochastic import (
     calc_stochastic, backtest as backtest_stoch,
     check_entry as check_entry_stoch, check_exit as check_exit_stoch,
@@ -285,6 +293,29 @@ KIJUN_LIST        = int_range(*KIJUN_RANGE)
 SENKOU_B_LIST     = int_range(*SENKOU_B_RANGE)
 DISPLACEMENT_LIST = int_range(*DISPLACEMENT_RANGE)
 
+# ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
+def _combo(n1, n2=1, n3=1, n4=1):
+    """Произведение длин списков."""
+    return n1 * n2 * n3 * n4
+
+# Считаем комбинации для каждой стратегии
+integration_budgets_dict = {
+    'Stoch':          _combo(len(K_PERIODS), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Parabolic':      _combo(len(PARABOLIC_STEPS), len(PARABOLIC_MAXS), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'MA':             _combo(len(MA_PERIODS), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'RandomForest':   _combo(len(RF_LOOKBACKS), len(RF_NBARS), len(RF_THRESHOLDS), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'LogReg':         _combo(len(LOGREG_LOOKBACKS), len(LOGREG_NBARS), len(LOGREG_THRESHOLDS), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'MACD-Cross':     _combo(len(MACD_CROSS_FAST_LIST), len(MACD_CROSS_SLOW_LIST), len(MACD_CROSS_SIGNAL_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'RSI-Rev':        _combo(len(RSI_REV_PERIOD_LIST), len(RSI_REV_OVERSOLD_LIST), len(RSI_REV_OVERBOUGHT_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Bollinger':      _combo(len(BB_PERIOD_LIST), len(BB_STD_LIST), len(VOLUME_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'EMA':            _combo(len(EMA_FAST_LIST), len(EMA_SLOW_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'RSI-Div':        _combo(len(RSI_DIV_PERIOD_LIST), len(RSI_DIV_LOOKBACK_LIST), len(RSI_DIV_THRESHOLD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Ichimoku':       _combo(len(TENKAN_LIST), len(KIJUN_LIST), len(SENKOU_B_LIST), len(DISPLACEMENT_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+}
+
+# Проверка бюджета при интеграции (один раз при загрузке main.py)
+budget_results = check_integration_budget(integration_budgets_dict, SYMBOLS)
+
 
 # ── Фильтр стратегий для тестового режима ──
 def filter_params_for_test():
@@ -380,6 +411,25 @@ if __name__ == '__main__':
 
     # ═══ АКТИВНЫЕ СТРАТЕГИИ ═══
     active_strategies = {}
+
+    # ═══ ГЕНЕРАЦИЯ ПРОПУЩЕННЫХ ОТЧЁТОВ ═══
+    print("\nПроверка пропущенных daily отчётов...")
+    # Ищем первый день с реестром и генерируем всё до вчера
+    registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'journals', 'strategy_registry.csv')
+    if os.path.exists(registry_path):
+        # Берём дату первой записи из реестра
+        with open(registry_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            if rows:
+                first_date_str = rows[0].get('activated_at', '')
+                if first_date_str:
+                    first_date = datetime.datetime.strptime(first_date_str, '%Y-%m-%dT%H:%M:%S').date()
+                    yesterday = datetime.date.today() - datetime.timedelta(days=1)
+                    if first_date <= yesterday:
+                        generate_missing_reports(first_date, yesterday)
+    else:
+        print("  ⚠️  Реестр не найден — отчёты будут генерироваться с первого дня")
 
 
     # ═══ ПЕРВЫЙ РАСЧЁТ ═══
@@ -503,6 +553,11 @@ if __name__ == '__main__':
                                        close_order, get_deal_exit_price, record_trade,
                                        strategy_key, make_magic, MAGIC_BASE, len(active))
                 write_active_state(active, active_strategies, balance, MAX_RISK_PCT, JOURNAL_DIR)
+                
+                # ── Генерация daily report за предыдущие сутки ──
+                yesterday = now.date() - datetime.timedelta(days=1)
+                report = generate_daily_report(yesterday)
+                
                 print(f"  Готово: {len(all_results)} комбинаций, {len(active)} активных")
 
             # Периодическое обновление баланса (раз в минуту)

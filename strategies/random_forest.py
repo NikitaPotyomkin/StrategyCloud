@@ -146,7 +146,7 @@ def backtest(df, lookback, n_bars, threshold, sl_points, tp_points, point,
     Возвращает (profit, n_trades, trade_profits).
     """
     # 1. Считаем признаки и обучаем модель один раз
-    df_calc = calc_random_forest_once(df, lookback, n_bars, n_estimators, max_depth)
+    df_calc = calc_random_forest_once(df, lookback, n_bars, threshold=threshold, n_estimators=n_estimators, max_depth=max_depth)
 
     sl_dist = sl_points * point
     tp_dist = tp_points * point
