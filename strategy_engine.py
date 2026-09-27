@@ -9,7 +9,10 @@ import MetaTrader5 as mt5
 
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots,
-    _normalize_volume, _position_profit, DEFAULT_LOT
+    _normalize_volume, _position_profit, DEFAULT_LOT,
+    get_positions, positions_total, check_margin_available,
+    get_stops_levels, validate_stops, check_position_limits,
+    check_daily_loss_limit, check_equity_stop, realtime_quota_recalc
 )
 
 # Режим счёта, необходимый для нескольких стратегий на одном символе.
@@ -30,7 +33,7 @@ def get_non_usd(symbol):
 def strategy_key(symbol, param, stype='stoch', extra=None):
     if stype == 'parabolic' and extra is not None:
         return f"{symbol}_{stype}_S{param}_M{extra}"
-    elif stype in ('macd_rsi', 'bollinger', 'ema_cross', 'rsi_div', 'ichimoku'):
+    elif stype in ('macd_cross', 'rsi_rev', 'macd_rsi', 'bollinger', 'ema_cross', 'rsi_div', 'ichimoku'):
         # Для новых стратегий param — это строка вида "mf12_ms26_rsi14"
         return f"{symbol}_{stype}_{param}"
     return f"{symbol}_{stype}_K{param}"
@@ -394,11 +397,29 @@ def check_account_mode():
     return ok
 
 
-def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data):
+def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
+               risk_params=None):
+    """Отправить ордер с расширенной проверкой риск-менеджмента.
+    
+    Args:
+        risk_params: dict с ключами:
+            - check_margin: bool (по умолчанию True)
+            - check_stops: bool (по умолчанию True)
+            - min_sl_distance_points: int (по умолчанию 10)
+            - max_sl_distance_points: int (по умолчанию 500)
+    """
+    if risk_params is None:
+        risk_params = {}
+    
+    check_margin = risk_params.get('check_margin', True)
+    check_stops = risk_params.get('check_stops', True)
+    min_sl_dist = risk_params.get('min_sl_distance_points', 10)
+    max_sl_dist = risk_params.get('max_sl_distance_points', 500)
+    
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return None
-
+    
     info = symbol_data.get(symbol, {}).get('info')
     if info is not None:
         lot = _normalize_volume(lot, info)
@@ -406,14 +427,42 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data):
             print(f"  -> {symbol}: объём вне [min, max] или шаг некорректен — отказ")
             return None
     digits = info.digits if info is not None else 5
-
+    
+    # ── Проверка 1: Free margin (пункт 2) ──
+    if check_margin:
+        entry_price = tick.ask if direction == 'long' else tick.bid
+        sl_dist_points = abs(entry_price - sl) / info.point if info else 0
+        margin_ok, margin_req, margin_free = check_margin_available(
+            lot, symbol, entry_price, sl_dist_points
+        )
+        if not margin_ok:
+            print(f"  -> [WARN] {symbol}: недостаточно margin (req={margin_req:.2f}, free={margin_free:.2f}) — ордер пропущен")
+            return None
+    
+    # ── Проверка 2: Stops levels брокера (пункт 5) ──
+    if check_stops:
+        valid, reason, min_dist = validate_stops(sl, tp, tick.ask if direction == 'long' else tick.bid, symbol)
+        if not valid:
+            print(f"  -> [WARN] {symbol}: SL/TP отклонены ({reason}) — ордер пропущен")
+            return None
+        
+        # Проверка минимального расстояния SL
+        entry_price = tick.ask if direction == 'long' else tick.bid
+        sl_distance_points = abs(entry_price - sl) / info.point if info else 0
+        if sl_distance_points < min_sl_dist:
+            print(f"  -> [WARN] {symbol}: SL слишком близко ({sl_distance_points:.0f} < {min_sl_dist} пуктов) — ордер пропущен")
+            return None
+        if sl_distance_points > max_sl_dist:
+            print(f"  -> [WARN] {symbol}: SL слишком далеко ({sl_distance_points:.0f} > {max_sl_dist} пуктов) — ордер пропущен")
+            return None
+    
     # Один раз на символ предупреждаем про netting-счёт
     acc = mt5.account_info()
     if acc is not None and getattr(acc, 'margin_mode', None) != HEDGING_MODE:
         if symbol not in _NETTING_WARNED and mt5.positions_get(symbol=symbol):
             _NETTING_WARNED.add(symbol)
             print(f"  -> [WARN] {symbol}: счёт НЕ hedging — новый объём сольётся с открытой позицией")
-
+    
     if direction == 'long':
         order_type, price = mt5.ORDER_TYPE_BUY, tick.ask
     else:
@@ -437,6 +486,9 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data):
         elif result.retcode == mt5.TRADE_RETCODE_INVALID_VOLUME:
             print(f"  -> [WARN] Ордер {symbol} {direction}: invalid volume — "
                   f"lot={lot:.2f} вне [min, max] или шаг")
+        elif result.retcode == mt5.TRADE_RETCODE_NOT_ENOUGH_MONEY:
+            acc = mt5.account_info()
+            print(f"  -> [WARN] Ордер {symbol} {direction}: не хватает денег (free={acc.margin_free if acc else 0:.2f})")
         request["type_filling"] = mt5.ORDER_FILLING_IOC
         result = mt5.order_send(request)
         if result is None:
@@ -502,6 +554,10 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          check_entry_logreg_fn=None,
                          calc_macd_rsi_fn=None, check_exit_macd_rsi_fn=None,
                          check_entry_macd_rsi_fn=None,
+                         calc_macd_cross_fn=None, check_exit_macd_cross_fn=None,
+                         check_entry_macd_cross_fn=None,
+                         calc_rsi_reversal_fn=None, check_exit_rsi_reversal_fn=None,
+                         check_entry_rsi_reversal_fn=None,
                          calc_bollinger_fn=None, check_exit_bollinger_fn=None,
                          check_entry_bollinger_fn=None,
                          calc_ema_crossover_fn=None, check_exit_ema_crossover_fn=None,
@@ -509,17 +565,46 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          calc_rsi_divergence_fn=None, check_exit_rsi_divergence_fn=None,
                          check_entry_rsi_divergence_fn=None,
                          calc_ichimoku_fn=None, check_exit_ichimoku_fn=None,
-                         check_entry_ichimoku_fn=None):
+                         check_entry_ichimoku_fn=None,
+                         risk_params=None, position_limits=None):
     """Проверяет сигналы для активных стратегий на закрытом баре.
-
-    Правило: на одну комбинацию (символ + тип стратегии) — максимум 1 открытая позиция.
-    RF и LogReg-аргументы опциональны.
+    
+    Args:
+        risk_params: dict параметров риск-менеджмента (пропускается в send_order)
+        position_limits: dict лимитов {'max_total': int, 'max_per_symbol': int}
     """
-    # Собираем занятые (символ, тип) из открытых позиций
-    occupied = set()
-    for s in active_strategies.values():
-        if s['position'] is not None:
-            occupied.add((s['symbol'], s.get('type', 'stoch')))
+    if risk_params is None:
+        risk_params = {}
+    if position_limits is None:
+        position_limits = {'max_total': 15, 'max_per_symbol': 3}
+    
+    # ── Проверка 1: Реальные позиции MT5 (пункт 1) ──
+    # Собираем занятые (символ, тип) ИЗ РЕАЛЬНЫХ ПОЗИЦИЙ MT5
+    occupied_by_symbol = {}
+    real_positions = mt5.positions_get()
+    if real_positions:
+        for pos in real_positions:
+            sym = pos.symbol
+            if sym not in occupied_by_symbol:
+                occupied_by_symbol[sym] = set()
+            # Определяем тип по magic number
+            for key, s in active_strategies.items():
+                if pos.magic == s['magic']:
+                    occupied_by_symbol[sym].add(s.get('type', 'stoch'))
+                    break
+            else:
+                # Если magic не найден в active_strategies, считаем как 'unknown'
+                occupied_by_symbol[sym].add('unknown')
+    
+    # ── Проверка 2: Лимиты позиций (пункт 3) ──
+    current_counts = {sym: len(types) for sym, types in occupied_by_symbol.items()}
+    limits_ok, limits_reason, limits_details = check_position_limits(
+        current_counts,
+        position_limits['max_total'],
+        position_limits['max_per_symbol']
+    )
+    if not limits_ok:
+        print(f"  -> [WARN] Лимиты позиций: {limits_reason}")
 
     for key, s in active_strategies.items():
         try:
@@ -557,32 +642,38 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_stoch_fn(prev_k, last_k)
                     if entry_dir:
-                        if (s['symbol'], stype) in occupied:
+                        # Проверка лимитов
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and stype in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/{stype}")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is None:
+                                pass
+                            else:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                        comment = f"{s['symbol']}, K={s['k_period']}"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {
-                                'direction': entry_dir,
-                                'entry_price': entry,
-                                'entry_time': now,
-                                'ticket': ticket,
-                                'lot': s['lot'],
-                            }
-                            occupied.add((s['symbol'], stype))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                                comment = f"{s['symbol']}, K={s['k_period']}"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {
+                                        'direction': entry_dir,
+                                        'entry_price': entry,
+                                        'entry_time': now,
+                                        'ticket': ticket,
+                                        'lot': s['lot'],
+                                    }
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'parabolic':
                 df = calc_parabolic_fn(df, s['k_period'], s.get('parabolic_max', 0.2))
@@ -612,32 +703,35 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_parabolic_fn(prev_sar, current_sar, prev_close, current_close)
                     if entry_dir:
-                        if (s['symbol'], 'parabolic') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'parabolic' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/parabolic")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                        comment = f"{s['symbol']}, Step={s['k_period']}, Max={s.get('parabolic_max', 0.2)}"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {
-                                'direction': entry_dir,
-                                'entry_price': entry,
-                                'entry_time': now,
-                                'ticket': ticket,
-                                'lot': s['lot'],
-                            }
-                            occupied.add((s['symbol'], 'parabolic'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                                comment = f"{s['symbol']}, Step={s['k_period']}, Max={s.get('parabolic_max', 0.2)}"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {
+                                        'direction': entry_dir,
+                                        'entry_price': entry,
+                                        'entry_time': now,
+                                        'ticket': ticket,
+                                        'lot': s['lot'],
+                                    }
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'ma':
                 df = calc_moving_average_fn(df, s['k_period'])
@@ -667,32 +761,35 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_ma_fn(prev_ma, prev_close, curr_ma, curr_close)
                     if entry_dir:
-                        if (s['symbol'], 'ma') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'ma' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ma")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                        comment = f"{s['symbol']}, MA={s['k_period']}"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {
-                                'direction': entry_dir,
-                                'entry_price': entry,
-                                'entry_time': now,
-                                'ticket': ticket,
-                                'lot': s['lot'],
-                            }
-                            occupied.add((s['symbol'], 'ma'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                                comment = f"{s['symbol']}, MA={s['k_period']}"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {
+                                        'direction': entry_dir,
+                                        'entry_price': entry,
+                                        'entry_time': now,
+                                        'ticket': ticket,
+                                        'lot': s['lot'],
+                                    }
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'rf':
                 if calc_random_forest_fn is None:
@@ -724,32 +821,35 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_rf_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'rf') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'rf' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rf")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                        comment = f"{s['symbol']}, RF {s.get('k_period', '')}"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {
-                                'direction': entry_dir,
-                                'entry_price': entry,
-                                'entry_time': now,
-                                'ticket': ticket,
-                                'lot': s['lot'],
-                            }
-                            occupied.add((s['symbol'], 'rf'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                                comment = f"{s['symbol']}, RF {s.get('k_period', '')}"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {
+                                        'direction': entry_dir,
+                                        'entry_price': entry,
+                                        'entry_time': now,
+                                        'ticket': ticket,
+                                        'lot': s['lot'],
+                                    }
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'logreg':
                 if calc_logreg_fn is None:
@@ -781,32 +881,35 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_logreg_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'logreg') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'logreg' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/logreg")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
 
-                        comment = f"{s['symbol']}, LogReg {s.get('k_period', '')}"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {
-                                'direction': entry_dir,
-                                'entry_price': entry,
-                                'entry_time': now,
-                                'ticket': ticket,
-                                'lot': s['lot'],
-                            }
-                            occupied.add((s['symbol'], 'logreg'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                                comment = f"{s['symbol']}, LogReg {s.get('k_period', '')}"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {
+                                        'direction': entry_dir,
+                                        'entry_price': entry,
+                                        'entry_time': now,
+                                        'ticket': ticket,
+                                        'lot': s['lot'],
+                                    }
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'macd_rsi':
                 if calc_macd_rsi_fn is None:
@@ -830,26 +933,133 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_macd_rsi_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'macd_rsi') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'macd_rsi' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/macd_rsi")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                        comment = f"{s['symbol']}, MACD+RSI"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                             'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                            occupied.add((s['symbol'], 'macd_rsi'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, MACD+RSI"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+
+            elif stype == 'macd_cross':
+                if calc_macd_cross_fn is None:
+                    print(f"  -> [{key}] MACD-Cross — модуль не передан")
+                    continue
+                df = calc_macd_cross_fn(df)
+                if df is None or len(df) < 2:
+                    continue
+                prev_signal = df['signal'].iloc[-2]
+                curr_signal = df['signal'].iloc[-1]
+                if s['position'] is not None:
+                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
+                                             _record_close_fn, record_trade_fn):
+                        continue
+                    if check_exit_macd_cross_fn(prev_signal, curr_signal, s['position']['direction']):
+                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
+                                                    s['position']['direction'], s['magic'], symbol_data)
+                        if exit_price is not None:
+                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
+                                             journal_df, JOURNAL_FILE)
+                if s['position'] is None:
+                    entry_dir = check_entry_macd_cross_fn(prev_signal, curr_signal)
+                    if entry_dir:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'macd_cross' in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/macd_cross")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        else:
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, MACD-Cross"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+
+            elif stype == 'rsi_rev':
+                if calc_rsi_reversal_fn is None:
+                    print(f"  -> [{key}] RSI-Rev — модуль не передан")
+                    continue
+                df = calc_rsi_reversal_fn(df)
+                if df is None or len(df) < 2:
+                    continue
+                prev_signal = df['signal'].iloc[-2]
+                curr_signal = df['signal'].iloc[-1]
+                if s['position'] is not None:
+                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
+                                             _record_close_fn, record_trade_fn):
+                        continue
+                    if check_exit_rsi_reversal_fn(prev_signal, curr_signal, s['position']['direction']):
+                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
+                                                    s['position']['direction'], s['magic'], symbol_data)
+                        if exit_price is not None:
+                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
+                                             journal_df, JOURNAL_FILE)
+                if s['position'] is None:
+                    entry_dir = check_entry_rsi_reversal_fn(prev_signal, curr_signal)
+                    if entry_dir:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'rsi_rev' in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rsi_rev")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        else:
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, RSI-Rev"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'bollinger':
                 if calc_bollinger_fn is None:
@@ -873,26 +1083,33 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_bollinger_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'bollinger') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'bollinger' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/bollinger")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                        comment = f"{s['symbol']}, Bollinger"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                             'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                            occupied.add((s['symbol'], 'bollinger'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, Bollinger"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'ema_cross':
                 if calc_ema_crossover_fn is None:
@@ -916,26 +1133,33 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_ema_crossover_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'ema_cross') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'ema_cross' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ema_cross")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                        comment = f"{s['symbol']}, EMA"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                             'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                            occupied.add((s['symbol'], 'ema_cross'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, EMA"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'rsi_div':
                 if calc_rsi_divergence_fn is None:
@@ -959,26 +1183,33 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_rsi_divergence_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'rsi_div') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'rsi_div' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rsi_div")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                        comment = f"{s['symbol']}, RSI-Div"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                             'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                            occupied.add((s['symbol'], 'rsi_div'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, RSI-Div"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
             elif stype == 'ichimoku':
                 if calc_ichimoku_fn is None:
@@ -1002,26 +1233,33 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_ichimoku_fn(prev_signal, curr_signal)
                     if entry_dir:
-                        if (s['symbol'], 'ichimoku') in occupied:
+                        if not limits_ok:
+                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                        elif s['symbol'] in occupied_by_symbol and 'ichimoku' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ichimoku")
-                            continue
-                        tick = mt5.symbol_info_tick(s['symbol'])
-                        if tick is None:
-                            continue
-                        sl_dist = s['sl_points'] * info.point
-                        tp_dist = s['tp_points'] * info.point
-                        if entry_dir == 'long':
-                            entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
+                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
                         else:
-                            entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                        comment = f"{s['symbol']}, Ichimoku"
-                        ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                               sl, tp, s['magic'], comment, symbol_data)
-                        if ticket is not None:
-                            s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                             'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                            occupied.add((s['symbol'], 'ichimoku'))
-                            print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                            tick = mt5.symbol_info_tick(s['symbol'])
+                            if tick is not None:
+                                sl_dist = s['sl_points'] * info.point
+                                tp_dist = s['tp_points'] * info.point
+                                if entry_dir == 'long':
+                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
+                                else:
+                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            else:
+                                entry = sl = tp = None
+                            
+                            if entry is not None:
+                                comment = f"{s['symbol']}, Ichimoku"
+                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                       sl, tp, s['magic'], comment, symbol_data,
+                                                       risk_params=risk_params)
+                                if ticket is not None:
+                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
+                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
+                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
         except Exception as e:
             print(f"\n[WARN] Ошибка стратегии {key}: {e!r}", flush=True)

@@ -108,14 +108,23 @@ def _backtest_logreg(df, lookback, n_bars, threshold, sl_points, tp_points, poin
     return logreg_backtest(df, lookback, n_bars, threshold, sl_points, tp_points, point, tick_value, tick_size, sim_lot=sim_lot, spread_points=spread_points)
 
 
-def _backtest_macd_rsi(df, macd_fast, macd_slow, macd_signal, rsi_period,
-                       rsi_oversold, rsi_overbought, sl_points, tp_points,
-                       point, tick_value, tick_size, spread_points=0):
-    """Backtest для MACD + RSI."""
-    from strategies.macd_rsi import backtest_macd_rsi
-    return backtest_macd_rsi(df, macd_fast, macd_slow, macd_signal, rsi_period,
-                             rsi_oversold, rsi_overbought, sl_points, tp_points,
-                             point, tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+def _backtest_macd_cross(df, macd_fast, macd_slow, macd_signal,
+                         sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
+    """Backtest для MACD Crossover."""
+    from strategies.macd_cross import backtest_macd_cross
+    return backtest_macd_cross(df, macd_fast, macd_slow, macd_signal,
+                               sl_points, tp_points, point, tick_value, tick_size,
+                               sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
+                           sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
+    """Backtest для RSI Reversal."""
+    from strategies.rsi_reversal import backtest_rsi_reversal
+    return backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
+                                 sl_points, tp_points, point, tick_value, tick_size,
+                                 sim_lot=0.01, spread_points=spread_points)
 
 
 def _backtest_bollinger(df, bb_period, bb_std, volume_period,
@@ -472,8 +481,9 @@ def _backtest_symbol(args):
     (symbol_idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
      PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
      LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
-     MACD_FAST_LIST, MACD_SLOW_LIST, MACD_SIGNAL_LIST, RSI_PERIOD_LIST,
-     RSI_OVERSOLD_LIST, RSI_OVERBOUGHT_LIST,
+     MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
+     RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+     MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
      BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
      EMA_FAST_LIST, EMA_SLOW_LIST,
      RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -494,7 +504,7 @@ def _backtest_symbol(args):
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     # Новые стратегии
-    macd_rsi_per_symbol = len(MACD_FAST_LIST) * len(MACD_SLOW_LIST) * len(MACD_SIGNAL_LIST) * len(RSI_PERIOD_LIST) * len(RSI_OVERSOLD_LIST) * len(RSI_OVERBOUGHT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    macd_rsi_per_symbol = len(MACD_RSI_FAST_LIST) * len(MACD_RSI_SLOW_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     bollinger_per_symbol = len(BB_PERIOD_LIST) * len(BB_STD_LIST) * len(VOLUME_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     ema_cross_per_symbol = len(EMA_FAST_LIST) * len(EMA_SLOW_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     rsi_div_per_symbol = len(RSI_DIV_PERIOD_LIST) * len(RSI_DIV_LOOKBACK_LIST) * len(RSI_DIV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
@@ -666,23 +676,23 @@ def _backtest_symbol(args):
             combos_done += 1
         completed_strategies.append('LogReg')
 
-    # ── MACD + RSI ──
-    if not test_strategy or test_strategy == 'macd_rsi':
-        for i, (mf, ms, msign, rp, ros, rob, sl, tp) in enumerate(
-            product(MACD_FAST_LIST, MACD_SLOW_LIST, MACD_SIGNAL_LIST,
-                    RSI_PERIOD_LIST, RSI_OVERSOLD_LIST, RSI_OVERBOUGHT_LIST,
+
+    # ── MACD Cross ──
+    if not test_strategy or test_strategy == 'macd_cross':
+        for i, (mf, ms, msig, sl, tp) in enumerate(
+            product(MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_macd_rsi(
-                df_window, mf, ms, msign, rp, ros, rob, sl, tp,
+            profit, n_trades, trade_profits = _backtest_macd_cross(
+                df_window, mf, ms, msig, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
             )
             metrics = calc_metrics(trade_profits)
             score = composite_score(metrics)
             results.append({
-                'symbol': symbol, 'type': 'macd_rsi',
-                'k_period': f"mf{mf}_ms{ms}_rsi{rp}",
+                'symbol': symbol, 'type': 'macd_cross',
+                'k_period': f"mf{mf}_ms{ms}_sig{msig}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -694,7 +704,36 @@ def _backtest_symbol(args):
                 'score': score,
             })
             combos_done += 1
-        completed_strategies.append('MACD+RSI')
+        completed_strategies.append('MACD-Cross')
+
+    # ── RSI Reversal ──
+    if not test_strategy or test_strategy == 'rsi_rev':
+        for i, (rp, ros, rob, sl, tp) in enumerate(
+            product(RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_rsi_reversal(
+                df_window, rp, ros, rob, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'rsi_rev',
+                'k_period': f"rp{rp}_ros{ros}_rob{rob}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('RSI-Rev')
 
     # ── Bollinger Breakout ──
     if not test_strategy or test_strategy == 'bollinger':
@@ -812,9 +851,12 @@ def _backtest_symbol(args):
         completed_strategies.append('Ichimoku')
 
     # ── Сохраняем чекпойнт после каждого символа ──
-    # Вычисляем хеш данных для проверки обновления
-    import hashlib
-    data_hash = hashlib.md5(df_window.to_csv().encode()).hexdigest() if df_window is not None else None
+    # Хешируем структуру + последний бар — тот же формат, что при загрузке
+    if df_window is not None:
+        last_bar = df_window.index[-1]
+        data_hash = hashlib.md5(
+            f"{df_window.shape[0]}_{df_window.shape[1]}_{last_bar.isoformat()}".encode()
+        ).hexdigest()
     save_checkpoint(symbol, results, data_hash=data_hash)
 
     return symbol, results, combos_done, active_combos, completed_strategies
@@ -824,8 +866,9 @@ def _backtest_symbol(args):
 def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
                       PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
                       LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
-                      MACD_FAST_LIST, MACD_SLOW_LIST, MACD_SIGNAL_LIST, RSI_PERIOD_LIST,
-                      RSI_OVERSOLD_LIST, RSI_OVERBOUGHT_LIST,
+                      MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
+                      RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+                      MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
                       BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
                       EMA_FAST_LIST, EMA_SLOW_LIST,
                       RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -852,9 +895,14 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     # Новые стратегии
-    macd_rsi_per_symbol = (len(MACD_FAST_LIST) * len(MACD_SLOW_LIST) * len(MACD_SIGNAL_LIST) *
-                           len(RSI_PERIOD_LIST) * len(RSI_OVERSOLD_LIST) * len(RSI_OVERBOUGHT_LIST) *
+    macd_rsi_per_symbol = (len(MACD_RSI_FAST_LIST) * len(MACD_RSI_SLOW_LIST) *
                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    macd_cross_per_symbol = (len(MACD_CROSS_FAST_LIST) * len(MACD_CROSS_SLOW_LIST) *
+                             len(MACD_CROSS_SIGNAL_LIST) *
+                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    rsi_rev_per_symbol = (len(RSI_REV_PERIOD_LIST) * len(RSI_REV_OVERSOLD_LIST) *
+                          len(RSI_REV_OVERBOUGHT_LIST) *
+                          len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     bollinger_per_symbol = (len(BB_PERIOD_LIST) * len(BB_STD_LIST) * len(VOLUME_PERIOD_LIST) *
                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     ema_cross_per_symbol = (len(EMA_FAST_LIST) * len(EMA_SLOW_LIST) *
@@ -877,6 +925,10 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         active_combos = logreg_per_symbol
     elif test_strategy == 'macd_rsi':
         active_combos = macd_rsi_per_symbol
+    elif test_strategy == 'macd_cross':
+        active_combos = macd_cross_per_symbol
+    elif test_strategy == 'rsi_rev':
+        active_combos = rsi_rev_per_symbol
     elif test_strategy == 'bollinger':
         active_combos = bollinger_per_symbol
     elif test_strategy == 'ema_cross':
@@ -887,8 +939,9 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         active_combos = ichimoku_per_symbol
     else:
         active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol +
-                         logreg_per_symbol + macd_rsi_per_symbol + bollinger_per_symbol +
-                         ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol)
+                         logreg_per_symbol + macd_rsi_per_symbol + macd_cross_per_symbol +
+                         rsi_rev_per_symbol + bollinger_per_symbol + ema_cross_per_symbol +
+                         rsi_div_per_symbol + ichimoku_per_symbol)
 
     combos_per_symbol = active_combos
 
@@ -911,7 +964,11 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
                     checkpoint_path = _checkpoint_file(symbol)
                     try:
                         import hashlib
-                        data_hash = hashlib.md5(df.to_csv().encode()).hexdigest()
+                        # Хешируем только структуру + последний бар — если не изменились,
+                        # значит данные те же и чекпоинт можно использовать
+                        data_hash = hashlib.md5(
+                            f"{df.shape[0]}_{df.shape[1]}_{last_bar.isoformat()}".encode()
+                        ).hexdigest()
                         # Сохраняем хеш данных в чекпоинте
                         with open(checkpoint_path, 'r', encoding='utf-8') as f:
                             cp_data = json.load(f)
@@ -971,8 +1028,9 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
             len(symbol_args), symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
             PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
             LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
-            MACD_FAST_LIST, MACD_SLOW_LIST, MACD_SIGNAL_LIST, RSI_PERIOD_LIST,
-            RSI_OVERSOLD_LIST, RSI_OVERBOUGHT_LIST,
+            MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
+            RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+            MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
             BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
             EMA_FAST_LIST, EMA_SLOW_LIST,
             RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,

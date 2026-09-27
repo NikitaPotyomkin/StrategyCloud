@@ -27,9 +27,14 @@ from strategies.moving_average import (
     calc_moving_average, backtest as backtest_ma,
     check_entry as check_entry_ma, check_exit as check_exit_ma,
 )
-from strategies.macd_rsi import (
-    calc_macd_rsi, backtest_macd_rsi,
-    check_entry as check_entry_macd_rsi, check_exit as check_exit_macd_rsi,
+
+from strategies.macd_cross import (
+    calc_macd_cross, backtest_macd_cross,
+    check_entry as check_entry_macd_cross, check_exit as check_exit_macd_cross,
+)
+from strategies.rsi_reversal import (
+    calc_rsi_reversal, backtest_rsi_reversal,
+    check_entry as check_entry_rsi_reversal, check_exit as check_exit_rsi_reversal,
 )
 from strategies.bollinger_breakout import (
     calc_bollinger, backtest_bollinger,
@@ -62,7 +67,7 @@ from data_loader import (
 
 
 # ═══ АВТОРАСПОЗНАВАНИЕ МАШИНЫ ═══
-tumbler = 0
+tumbler = 1
 
 if tumbler == 0:
     TEST_HOSTNAMES = ['LAPTOP-JU0TU1UM']
@@ -93,13 +98,19 @@ if TEST_MODE:
     LOGREG_NBARS_RANGE    = (12, 18, 6)      # [12, 18]
     LOGREG_THRESHOLD_RANGE = (0.55, 0.60, 0.05)  # [0.55, 0.60]
 
-    # MACD + RSI (тестовый режим — минимальный перебор)
-    MACD_FAST_RANGE = (10, 14, 4)      # [10, 14]
-    MACD_SLOW_RANGE = (24, 28, 4)      # [24, 28]
-    MACD_SIGNAL_RANGE = (7, 11, 4)     # [7, 11]
-    RSI_PERIOD_RANGE = (12, 16, 4)     # [12, 16]
-    RSI_OVERSOLD_RANGE = (25, 35, 10)  # [25, 35]
-    RSI_OVERBOUGHT_RANGE = (65, 75, 10) # [65, 75]
+    # MACD Cross (только MACD crossover)
+    MACD_CROSS_FAST_RANGE   = (10, 14, 4)
+    MACD_CROSS_SLOW_RANGE   = (24, 28, 4)
+    MACD_CROSS_SIGNAL_RANGE = (7, 11, 4)
+
+    # RSI Reversal (только RSI)
+    RSI_REV_PERIOD_RANGE     = (12, 16, 4)
+    RSI_REV_OVERSOLD_RANGE   = (25, 35, 10)
+    RSI_REV_OVERBOUGHT_RANGE = (65, 75, 10)
+
+    # MACD + RSI Combo (MACD fast × slow, RSI фиксированный)
+    MACD_RSI_FAST_RANGE = (10, 14, 4)
+    MACD_RSI_SLOW_RANGE = (24, 28, 4)
 
     # Bollinger (тестовый режим)
     BB_PERIOD_RANGE = (20, 21, 1)      # [20]
@@ -121,6 +132,15 @@ if TEST_MODE:
     SENKOU_B_RANGE = (52, 53, 1)       # [52]
     DISPLACEMENT_RANGE = (26, 27, 1)   # [26]
 
+    # Risk management для TEST_MODE
+    MAX_TOTAL_POSITIONS = 5
+    MAX_POSITIONS_PER_SYMBOL = 2
+    DAILY_LOSS_LIMIT_PCT = 5.0
+    EQUITY_STOP_PCT = 15.0
+    REALTIME_QUOTA_RECALC = False
+    MIN_SL_DISTANCE_POINTS = 10
+    MAX_SL_DISTANCE_POINTS = 500
+
     BACKTEST_DAYS = 14
     POLL_INTERVAL = 2
 else:
@@ -130,47 +150,53 @@ else:
     SYMBOLS = ["EURUSDrfd", "GBPUSDrfd", "USDJPYrfd", "USDCHFrfd",
                "USDCADrfd", "AUDUSDrfd", "NZDUSDrfd"]
     K_PERIOD_RANGE  = (7, 28, 7)
-    SL_POINTS_RANGE = (300, 1200, 200)
-    TP_POINTS_RANGE = (300, 1200, 200)
+    SL_POINTS_RANGE = (300, 1200, 400)
+    TP_POINTS_RANGE = (300, 1200, 400)
     PARABOLIC_STEP_RANGE = (0.02, 0.2, 0.02)
     PARABOLIC_MAX_RANGE  = (0.2, 0.4, 0.05)
     MA_PERIOD_RANGE      = (10, 200, 25)
 
-    RF_LOOKBACK_RANGE = (200, 400, 100)  # было (200, 500, 100)
-    RF_NBARS_RANGE = (5, 10, 5)  # было (5, 10, 5) — ок
-    RF_THRESHOLD_RANGE = (0.55, 0.65, 0.05)  # было (0.60, 0.70, 0.05)
+    RF_LOOKBACK_RANGE = (200, 400, 100)
+    RF_NBARS_RANGE = (5, 10, 5)
+    RF_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
 
     LOGREG_LOOKBACK_RANGE = (200, 400, 100)
     LOGREG_NBARS_RANGE = (6, 12, 6)
-    LOGREG_THRESHOLD_RANGE = (0.55, 0.65, 0.05)
+    LOGREG_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
 
-    # MACD + RSI
-    MACD_FAST_RANGE = (10, 14, 2)      # [10, 14]
-    MACD_SLOW_RANGE = (24, 28, 2)      # [24, 28]
-    MACD_SIGNAL_RANGE = (7, 11, 2)     # [7, 11]
-    RSI_PERIOD_RANGE = (12, 16, 2)     # [12, 16]
-    RSI_OVERSOLD_RANGE = (25, 35, 5)   # [25, 35]
-    RSI_OVERBOUGHT_RANGE = (65, 75, 5) # [65, 75]
+    # MACD Cross (только MACD crossover)
+    MACD_CROSS_FAST_RANGE   = (10, 14, 2)
+    MACD_CROSS_SLOW_RANGE   = (24, 28, 2)
+    MACD_CROSS_SIGNAL_RANGE = (7, 11, 2)
+
+    # RSI Reversal (только RSI)
+    RSI_REV_PERIOD_RANGE     = (12, 16, 2)
+    RSI_REV_OVERSOLD_RANGE   = (25, 35, 5)
+    RSI_REV_OVERBOUGHT_RANGE = (65, 75, 5)
+
+    # MACD + RSI Combo (MACD fast × slow, RSI фиксированный)
+    MACD_RSI_FAST_RANGE = (10, 14, 2)
+    MACD_RSI_SLOW_RANGE = (24, 28, 2)
 
     # Bollinger
-    BB_PERIOD_RANGE = (15, 25, 5)      # [15, 25]
-    BB_STD_RANGE = (1.5, 2.5, 0.5)     # [1.5, 2.5]
-    VOLUME_PERIOD_RANGE = (15, 25, 5)  # [15, 25]
+    BB_PERIOD_RANGE = (15, 25, 5)
+    BB_STD_RANGE = (1.5, 2.5, 0.5)
+    VOLUME_PERIOD_RANGE = (15, 25, 5)
 
     # EMA Crossover
-    EMA_FAST_RANGE = (8, 12, 1)        # [8, 12]
-    EMA_SLOW_RANGE = (18, 24, 2)       # [18, 24]
+    EMA_FAST_RANGE = (8, 12, 1)
+    EMA_SLOW_RANGE = (18, 24, 3)
 
     # RSI Divergence
-    RSI_DIV_PERIOD_RANGE = (12, 16, 2)     # [12, 16]
-    RSI_DIV_LOOKBACK_RANGE = (4, 7, 1)     # [4, 7]
-    RSI_DIV_THRESHOLD_RANGE = (0.4, 0.6, 0.1)  # [0.4, 0.6]
+    RSI_DIV_PERIOD_RANGE = (12, 16, 2)
+    RSI_DIV_LOOKBACK_RANGE = (4, 7, 1)
+    RSI_DIV_THRESHOLD_RANGE = (0.4, 0.6, 0.1)
 
     # Ichimoku
-    TENKAN_RANGE = (7, 12, 2)          # [7, 12]
-    KIJUN_RANGE = (22, 30, 4)          # [22, 30]
-    SENKOU_B_RANGE = (45, 55, 5)       # [45, 55]
-    DISPLACEMENT_RANGE = (22, 30, 4)   # [22, 30]
+    TENKAN_RANGE = (7, 12, 4)
+    KIJUN_RANGE = (22, 30, 4)
+    SENKOU_B_RANGE = (45, 55, 5)
+    DISPLACEMENT_RANGE = (22, 30, 4)
 
     BACKTEST_DAYS = 30
     POLL_INTERVAL = 5
@@ -180,6 +206,23 @@ MIN_LOT = 0.01
 MIN_SCORE = 1.0
 NIGHT_BACKTEST_HOUR = 3
 MAGIC_BASE = 770000
+
+# ═══ РИСК-МЕНЕДЖМЕНТ ═══
+# Лимиты позиций (пункт 3)
+MAX_TOTAL_POSITIONS = 15        # Максимум позиций одновременно
+MAX_POSITIONS_PER_SYMBOL = 3    # Максимум на один символ
+
+# Daily stop-loss / equity stop (пункт 6)
+DAILY_LOSS_LIMIT_PCT = 3.0      # Макс убыток за день в %
+EQUITY_STOP_PCT = 10.0          # Глобальный стоп при просадке equity в %
+
+# Real-time quota recalc (пункт 4)
+REALTIME_QUOTA_RECALC = True    # Пересчёт квоты в реальном времени
+QUOTA_RECALC_INTERVAL_SEC = 300 # Интервал пересчёта квоты (5 мин)
+
+# Stops levels (пункт 5)
+MIN_SL_DISTANCE_POINTS = 10     # Минимальное расстояние SL
+MAX_SL_DISTANCE_POINTS = 500    # Максимальное расстояние SL
 
 # Допустимое «молчание» терминала до предупреждения о потере связи
 CONNECTION_TIMEOUT_SEC = 300      # тиков нет 5 минут — подозрительно (кроме выходных)
@@ -227,12 +270,14 @@ LOGREG_NBARS        = int_range(*LOGREG_NBARS_RANGE)
 LOGREG_THRESHOLDS   = float_range(*LOGREG_THRESHOLD_RANGE)
 
 # Новые стратегии
-MACD_FAST_LIST      = int_range(*MACD_FAST_RANGE)
-MACD_SLOW_LIST      = int_range(*MACD_SLOW_RANGE)
-MACD_SIGNAL_LIST    = int_range(*MACD_SIGNAL_RANGE)
-RSI_PERIOD_LIST     = int_range(*RSI_PERIOD_RANGE)
-RSI_OVERSOLD_LIST   = int_range(*RSI_OVERSOLD_RANGE)
-RSI_OVERBOUGHT_LIST = int_range(*RSI_OVERBOUGHT_RANGE)
+MACD_CROSS_FAST_LIST      = int_range(*MACD_CROSS_FAST_RANGE)
+MACD_CROSS_SLOW_LIST      = int_range(*MACD_CROSS_SLOW_RANGE)
+MACD_CROSS_SIGNAL_LIST    = int_range(*MACD_CROSS_SIGNAL_RANGE)
+RSI_REV_PERIOD_LIST       = int_range(*RSI_REV_PERIOD_RANGE)
+RSI_REV_OVERSOLD_LIST     = int_range(*RSI_REV_OVERSOLD_RANGE)
+RSI_REV_OVERBOUGHT_LIST   = int_range(*RSI_REV_OVERBOUGHT_RANGE)
+MACD_RSI_FAST_LIST        = int_range(*MACD_RSI_FAST_RANGE)
+MACD_RSI_SLOW_LIST        = int_range(*MACD_RSI_SLOW_RANGE)
 
 BB_PERIOD_LIST      = int_range(*BB_PERIOD_RANGE)
 BB_STD_LIST         = float_range(*BB_STD_RANGE)
@@ -267,10 +312,17 @@ def filter_params_for_test():
         'logreg': {'LOGREG_LOOKBACKS': LOGREG_LOOKBACKS, 'LOGREG_NBARS': LOGREG_NBARS,
                    'LOGREG_THRESHOLDS': LOGREG_THRESHOLDS,
                    'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'macd_rsi': {'MACD_FAST_LIST': MACD_FAST_LIST, 'MACD_SLOW_LIST': MACD_SLOW_LIST,
-                     'MACD_SIGNAL_LIST': MACD_SIGNAL_LIST, 'RSI_PERIOD_LIST': RSI_PERIOD_LIST,
-                     'RSI_OVERSOLD_LIST': RSI_OVERSOLD_LIST, 'RSI_OVERBOUGHT_LIST': RSI_OVERBOUGHT_LIST,
+        'macd_rsi': {'MACD_RSI_FAST_LIST': MACD_RSI_FAST_LIST,
+                     'MACD_RSI_SLOW_LIST': MACD_RSI_SLOW_LIST,
                      'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
+        'macd_cross': {'MACD_CROSS_FAST_LIST': MACD_CROSS_FAST_LIST,
+                       'MACD_CROSS_SLOW_LIST': MACD_CROSS_SLOW_LIST,
+                       'MACD_CROSS_SIGNAL_LIST': MACD_CROSS_SIGNAL_LIST,
+                       'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
+        'rsi_rev': {'RSI_REV_PERIOD_LIST': RSI_REV_PERIOD_LIST,
+                    'RSI_REV_OVERSOLD_LIST': RSI_REV_OVERSOLD_LIST,
+                    'RSI_REV_OVERBOUGHT_LIST': RSI_REV_OVERBOUGHT_LIST,
+                    'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
         'bollinger': {'BB_PERIOD_LIST': BB_PERIOD_LIST, 'BB_STD_LIST': BB_STD_LIST,
                       'VOLUME_PERIOD_LIST': VOLUME_PERIOD_LIST,
                       'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
@@ -353,8 +405,9 @@ if __name__ == '__main__':
         SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
         PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
         LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
-        MACD_FAST_LIST, MACD_SLOW_LIST, MACD_SIGNAL_LIST, RSI_PERIOD_LIST,
-        RSI_OVERSOLD_LIST, RSI_OVERBOUGHT_LIST,
+        MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
+        RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+        MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
         BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
         EMA_FAST_LIST, EMA_SLOW_LIST,
         RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -414,6 +467,9 @@ if __name__ == '__main__':
     last_ticks_time = datetime.now()
     last_conn_warn_time = datetime.min
     last_balance_refresh = datetime.now()
+    last_quota_recalc = datetime.now()
+    initial_equity = None  # Для equity stop (пункт 6)
+    daily_start_balance = None  # Для daily stop-loss (пункт 6)
 
     try:
         while True:
@@ -434,8 +490,9 @@ if __name__ == '__main__':
                     SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
                     PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
                     LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
-                    MACD_FAST_LIST, MACD_SLOW_LIST, MACD_SIGNAL_LIST, RSI_PERIOD_LIST,
-                    RSI_OVERSOLD_LIST, RSI_OVERBOUGHT_LIST,
+                    MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
+                    RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+                    MACD_RSI_FAST_LIST, MACD_RSI_SLOW_LIST,
                     BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
                     EMA_FAST_LIST, EMA_SLOW_LIST,
                     RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
@@ -468,7 +525,71 @@ if __name__ == '__main__':
                 acc = mt5.account_info()
                 if acc is not None:
                     balance = acc.balance
-                last_balance_refresh = now
+                    equity = acc.equity
+                    
+                    # Инициализация initial_equity при старте
+                    if initial_equity is None:
+                        initial_equity = equity
+                        print(f"  [INIT] Initial equity: {equity:.2f}")
+                    
+                    # Сброс daily_start_balance в начале нового дня
+                    if daily_start_balance is None or now.date() != last_mode_check:
+                        daily_start_balance = balance
+                        print(f"  [INIT] Daily start balance: {balance:.2f}")
+                    
+                    last_balance_refresh = now
+                    
+                    # ── Проверка 1: Daily stop-loss (пункт 6) ──
+                    if daily_start_balance is not None:
+                        from risk_manager import check_daily_loss_limit
+                        dl_ok, dl_pct, dl_reason = check_daily_loss_limit(
+                            daily_start_balance, equity, DAILY_LOSS_LIMIT_PCT
+                        )
+                        if not dl_ok:
+                            print(f"\n  [STOP] Daily loss limit: {dl_reason} — остановка торговли!")
+                            # Закрываем все позиции
+                            for key, s in list(active_strategies.items()):
+                                if s['position'] is not None:
+                                    print(f"  -> Закрытие {key} по daily stop-loss")
+                                    exit_price = close_order(s['symbol'], s['position']['ticket'],
+                                                            s['position']['direction'], s['magic'], symbol_data)
+                                    if exit_price is not None:
+                                        _record_close(key, s, now, exit_price, 'daily_stop', symbol_data,
+                                                     record_trade, journal_df, JOURNAL_FILE)
+                            continue
+                    
+                    # ── Проверка 2: Equity stop (пункт 6) ──
+                    if initial_equity is not None:
+                        from risk_manager import check_equity_stop
+                        eq_ok, eq_dd, eq_reason = check_equity_stop(equity, initial_equity, EQUITY_STOP_PCT)
+                        if not eq_ok:
+                            print(f"\n  [STOP] Equity stop: {eq_reason} — аварийная остановка!")
+                            # Закрываем все позиции и выходим
+                            for key, s in list(active_strategies.items()):
+                                if s['position'] is not None:
+                                    print(f"  -> Закрытие {key} по equity stop")
+                                    exit_price = close_order(s['symbol'], s['position']['ticket'],
+                                                            s['position']['direction'], s['magic'], symbol_data)
+                                    if exit_price is not None:
+                                        _record_close(key, s, now, exit_price, 'equity_stop', symbol_data,
+                                                     record_trade, journal_df, JOURNAL_FILE)
+                            raise RuntimeError(f"Equity stop triggered: {eq_reason}")
+                    
+                    # ── Проверка 3: Realtime quota recalc (пункт 4) ──
+                    if REALTIME_QUOTA_RECALC and (now - last_quota_recalc).total_seconds() >= QUOTA_RECALC_INTERVAL_SEC:
+                        from risk_manager import realtime_quota_recalc
+                        active_positions = []
+                        for s in active_strategies.values():
+                            if s['position'] is not None:
+                                active_positions.append({
+                                    'symbol': s['symbol'],
+                                    'lot': s['position']['lot'],
+                                    'sl_points': s['sl_points']
+                                })
+                        quota_ok, risk_pct, quota = realtime_quota_recalc(balance, active_positions, MAX_RISK_PCT)
+                        if not quota_ok:
+                            print(f"  [WARN] Realtime quota exceeded: risk={risk_pct:.2f}% > quota — "
+                                  f"новые ордера не открываются до пересчёта в 3:00")
 
             # Тики
             ticks = {}
@@ -505,6 +626,20 @@ if __name__ == '__main__':
             # Проверка сигналов
             if any_finalized:
                 try:
+                    # Формируем risk_params для send_order
+                    risk_params = {
+                        'check_margin': True,
+                        'check_stops': True,
+                        'min_sl_distance_points': MIN_SL_DISTANCE_POINTS,
+                        'max_sl_distance_points': MAX_SL_DISTANCE_POINTS
+                    }
+                    
+                    # Формируем position_limits
+                    position_limits = {
+                        'max_total': MAX_TOTAL_POSITIONS,
+                        'max_per_symbol': MAX_POSITIONS_PER_SYMBOL
+                    }
+                    
                     check_active_signals(
                         now, active_strategies, symbol_data,
                         calc_stochastic, check_exit_stoch, check_entry_stoch,
@@ -515,11 +650,14 @@ if __name__ == '__main__':
                         journal_df, JOURNAL_FILE,
                         calc_random_forest, check_exit_rf, check_entry_rf,
                         calc_logreg, check_exit_logreg, check_entry_logreg,
-                        calc_macd_rsi, check_exit_macd_rsi, check_entry_macd_rsi,
+                        calc_macd_cross, check_exit_macd_cross, check_entry_macd_cross,
+                        calc_rsi_reversal, check_exit_rsi_reversal, check_entry_rsi_reversal,
                         calc_bollinger, check_exit_bollinger, check_entry_bollinger,
                         calc_ema_crossover, check_exit_ema_crossover, check_entry_ema_crossover,
                         calc_rsi_divergence, check_exit_rsi_divergence, check_entry_rsi_divergence,
                         calc_ichimoku, check_exit_ichimoku, check_entry_ichimoku,
+                        risk_params=risk_params,
+                        position_limits=position_limits,
                     )
                 except Exception as e:
                     print(f"\n[WARN] Ошибка проверки сигналов: {e!r}", flush=True)

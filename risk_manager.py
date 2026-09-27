@@ -1,6 +1,8 @@
 """Управление рисками: метрики, скоринг, распределение лотов."""
 import math
 import numpy as np
+import MetaTrader5 as mt5
+import datetime
 
 
 # ═══ КОНСТАНТЫ ОЦЕНКИ ═══
@@ -172,6 +174,278 @@ def distribute_lots(ranked_results, symbol_data, balance,
             break
 
     return active
+
+
+# ═══ УТИЛИТЫ ПОЗИЦИЙ ═══
+
+def get_positions(symbol=None, magic=None):
+    """Получить все позиции MT5 с фильтрацией по символу и magic.
+    
+    Возвращает список объектов mt5.PositionInfo.
+    """
+    if symbol is not None:
+        positions = mt5.positions_get(symbol=symbol)
+    else:
+        positions = mt5.positions_get()
+    
+    if positions is None:
+        return []
+    
+    result = list(positions)
+    
+    if magic is not None:
+        result = [p for p in result if p.magic == magic]
+    
+    return result
+
+
+def positions_total(symbol=None, magic=None):
+    """Подсчитать количество позиций MT5.
+    
+    Args:
+        symbol: Символ или None для всех символов
+        magic: Magic number или None для всех маджиков
+    
+    Returns:
+        int — количество позиций
+    """
+    return len(get_positions(symbol=symbol, magic=magic))
+
+
+def get_position_by_ticket(ticket):
+    """Получить позицию по тикету.
+    
+    Returns:
+        mt5.PositionInfo или None
+    """
+    positions = mt5.positions_get(ticket=ticket)
+    return positions[0] if positions else None
+
+
+def get_symbol_positions(symbol):
+    """Получить все позиции по символу, сгруппированные по direction.
+    
+    Returns:
+        dict: {'long': [...], 'short': [...]}
+    """
+    positions = get_positions(symbol=symbol)
+    result = {'long': [], 'short': []}
+    for p in positions:
+        if p.type == mt5.ORDER_TYPE_BUY:
+            result['long'].append(p)
+        elif p.type == mt5.ORDER_TYPE_SELL:
+            result['short'].append(p)
+    return result
+
+
+def check_margin_available(lot, symbol, price, sl_points=0):
+    """Проверить, достаточно ли free margin для открытия позиции.
+    
+    Args:
+        lot: Объём позиции
+        symbol: Символ
+        price: Цена входа
+        sl_points: SL в пунктах (опционально)
+    
+    Returns:
+        tuple: (достаточно: bool, margin_required: float, margin_free: float)
+    """
+    account = mt5.account_info()
+    if account is None:
+        return False, 0.0, 0.0
+    
+    free_margin = account.margin_free
+    
+    # Рассчитать требуемую маржу
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return False, 0.0, free_margin
+    
+    # Маржа = объём × цена × размер контракта
+    margin_required = lot * price * symbol_info.trade_tick_value / symbol_info.trade_tick_size
+    
+    # Добавить буфер на SL (если указан)
+    if sl_points > 0:
+        point = symbol_info.point
+        sl_money = sl_points * point * lot * symbol_info.trade_tick_value / symbol_info.trade_tick_size
+        margin_required += sl_money
+    
+    # Проверить с запасом 20%
+    margin_required *= 1.2
+    
+    return free_margin >= margin_required, margin_required, free_margin
+
+
+def get_stops_levels(symbol):
+    """Получить уровни stops/freeze для символа.
+    
+    Returns:
+        dict: {'stops_level': int, 'freeze_level': int, 'mode': str}
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return {'stops_level': 0, 'freeze_level': 0, 'mode': 'unknown'}
+    
+    return {
+        'stops_level': symbol_info.stops_level,
+        'freeze_level': symbol_info.freeze_level,
+        'mode': 'hedging' if getattr(symbol_info, 'exchange', False) else 'netting'
+    }
+
+
+def validate_stops(sl_price, tp_price, entry_price, symbol):
+    """Проверить, что SL/TP допустимы брокером.
+    
+    Args:
+        sl_price: Цена SL
+        tp_price: Цена TP
+        entry_price: Цена входа
+        symbol: Символ
+    
+    Returns:
+        tuple: (valid: bool, reason: str, min_distance_points: int)
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return False, 'symbol_info not found', 0
+    
+    point = symbol_info.point
+    stops_level = symbol_info.stops_level
+    
+    # Минимальное расстояние в пунктах
+    min_distance_points = stops_level // point if point > 0 else 10
+    
+    # Проверка для BUY позиции
+    if sl_price < entry_price:  # BUY SL ниже
+        sl_distance = (entry_price - sl_price) / point
+        if sl_distance < min_distance_points:
+            return False, f'SL слишком близко: {sl_distance:.0f} < {min_distance_points}', min_distance_points
+    
+    if tp_price > entry_price:  # BUY TP выше
+        tp_distance = (tp_price - entry_price) / point
+        if tp_distance < min_distance_points:
+            return False, f'TP слишком близко: {tp_distance:.0f} < {min_distance_points}', min_distance_points
+    
+    # Проверка для SELL позиции
+    if sl_price > entry_price:  # SELL SL выше
+        sl_distance = (sl_price - entry_price) / point
+        if sl_distance < min_distance_points:
+            return False, f'SL слишком близко: {sl_distance:.0f} < {min_distance_points}', min_distance_points
+    
+    if tp_price < entry_price:  # SELL TP ниже
+        tp_distance = (entry_price - tp_price) / point
+        if tp_distance < min_distance_points:
+            return False, f'TP слишком близко: {tp_distance:.0f} < {min_distance_points}', min_distance_points
+    
+    return True, 'OK', min_distance_points
+
+
+def check_position_limits(current_positions, max_total_positions, max_per_symbol):
+    """Проверить лимиты на количество позиций.
+    
+    Args:
+        current_positions: dict {symbol: count} — текущие позиции по символам
+        max_total_positions: Максимальное общее число позиций
+        max_per_symbol: Максимум позиций на один символ
+    
+    Returns:
+        tuple: (allowed: bool, reason: str, details: dict)
+    """
+    total = sum(current_positions.values())
+    
+    if total >= max_total_positions:
+        return False, f'Достигнут лимит общих позиций: {total}/{max_total_positions}', {
+            'total': total, 'max': max_total_positions
+        }
+    
+    for sym, count in current_positions.items():
+        if count >= max_per_symbol:
+            return False, f'Достигнут лимит для {sym}: {count}/{max_per_symbol}', {
+                'symbol': sym, 'count': count, 'max': max_per_symbol
+            }
+    
+    return True, 'OK', {'total': total, 'max': max_total_positions, 'positions': dict(current_positions)}
+
+
+def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0):
+    """Проверить daily stop-loss по убытку.
+    
+    Args:
+        initial_balance: Баланс на начало дня
+        current_equity: Текущая equity
+        daily_loss_pct: Максимальный убыток в % от баланса
+    
+    Returns:
+        tuple: (allowed: bool, daily_loss_pct: float, reason: str)
+    """
+    account = mt5.account_info()
+    if account is None:
+        return False, 0.0, 'account_info not available'
+    
+    balance = account.balance
+    equity = account.equity
+    
+    # Если initial_balance не передан, используем balance
+    if initial_balance is None:
+        initial_balance = balance
+    
+    daily_loss = ((initial_balance - equity) / initial_balance) * 100
+    
+    if daily_loss >= daily_loss_pct:
+        return False, daily_loss, f'Daily loss {daily_loss:.2f}% >= {daily_loss_pct}%'
+    
+    return True, daily_loss, f'OK: daily loss {daily_loss:.2f}% < {daily_loss_pct}%'
+
+
+def check_equity_stop(current_equity, initial_equity, equity_stop_pct=10.0):
+    """Проверить equity stop — глобальный стоп при просадке.
+    
+    Args:
+        current_equity: Текущая equity
+        initial_equity: Начальная equity (старт бота)
+        equity_stop_pct: Максимальная просадка в %
+    
+    Returns:
+        tuple: (allowed: bool, drawdown_pct: float, reason: str)
+    """
+    if initial_equity <= 0:
+        return True, 0.0, 'initial_equity invalid'
+    
+    drawdown = ((initial_equity - current_equity) / initial_equity) * 100
+    
+    if drawdown >= equity_stop_pct:
+        return False, drawdown, f'Equity drawdown {drawdown:.2f}% >= {equity_stop_pct}%'
+    
+    return True, drawdown, f'OK: drawdown {drawdown:.2f}% < {equity_stop_pct}%'
+
+
+def realtime_quota_recalc(balance, current_positions, max_risk_pct=0.05):
+    """Пересчёт квоты в реальном времени.
+    
+    Проверяет, не превышена ли квота риска при изменении баланса.
+    
+    Args:
+        balance: Текущий баланс
+        current_positions: Список активных позиций с полями 'lot', 'sl_points', 'symbol'
+        max_risk_pct: Максимальный риск в % от баланса
+    
+    Returns:
+        tuple: (quota_ok: bool, current_risk: float, quota: float)
+    """
+    quota = balance * max_risk_pct
+    
+    # Рассчитать текущий риск
+    total_risk = 0
+    for pos in current_positions:
+        info = mt5.symbol_info(pos['symbol'])
+        if info is None:
+            continue
+        sl_money = pos['sl_points'] * info.point * pos['lot'] * info.trade_tick_value / info.trade_tick_size
+        total_risk += sl_money
+    
+    current_risk_pct = (total_risk / balance * 100) if balance > 0 else 0
+    
+    return total_risk <= quota, current_risk_pct, quota
 
 
 # ═══ УТИЛИТЫ ПОЗИЦИЙ ═══
