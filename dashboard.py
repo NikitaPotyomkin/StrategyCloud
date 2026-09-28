@@ -156,7 +156,8 @@ if data:
     # ── Журнал сделок ──
     st.subheader("Журнал сделок (последние 50)")
     if not data['trades_df'].empty:
-        show_cols = ['timestamp', 'symbol', 'type', 'entry', 'volume',
+        show_cols = ['timestamp', 'symbol', 'strategy_type', 'param_key',
+                     'type', 'entry', 'volume',
                      'price', 'profit', 'commission', 'swap', 'profit_net',
                      'magic']
         cols_available = [c for c in show_cols if c in data['trades_df'].columns]

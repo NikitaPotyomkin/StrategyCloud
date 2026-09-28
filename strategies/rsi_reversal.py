@@ -1,47 +1,45 @@
-"""Стратегия RSI Reversal.
-
-Вход: RSI < oversold → buy, RSI > overbought → sell.
-Выход: RSI возвращается к 50 (средней).
-"""
 import numpy as np
 import pandas as pd
 
 
 def calc_rsi_reversal(df, rsi_period=14, rsi_oversold=30, rsi_overbought=70):
-    """Добавляет колонку 'signal' на основе RSI отскока от зон."""
     df = df.copy()
 
-    # RSI
+    # RSI по Уайдеру
     delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(rsi_period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(rsi_period).mean()
+    gain = delta.where(delta > 0, 0).ewm(alpha=1/rsi_period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/rsi_period, adjust=False).mean()
     rs = gain / loss.replace(0, np.nan)
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    # Сигнал: отскок от зон
+    # Вход на ВЫХОДЕ из зоны, не на входе в неё
     df['signal'] = 0
-    long_cond = (df['rsi'] < rsi_oversold) & (df['rsi'].shift(1) >= rsi_oversold)
-    short_cond = (df['rsi'] > rsi_overbought) & (df['rsi'].shift(1) <= rsi_overbought)
+    long_cond = (df['rsi'] > rsi_oversold) & (df['rsi'].shift(1) <= rsi_oversold)
+    short_cond = (df['rsi'] < rsi_overbought) & (df['rsi'].shift(1) >= rsi_overbought)
     df.loc[long_cond, 'signal'] = 1
     df.loc[short_cond, 'signal'] = -1
+
+    # Фильтр тренда: EMA(200) на close
+    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+    df['trend'] = np.where(df['close'] > df['ema200'], 1, -1)
 
     return df
 
 
-def check_entry_rsi_reversal(prev_signal, curr_signal):
-    """Вход по смене сигнала."""
-    if prev_signal == 0 and curr_signal == 1:
+def check_entry_rsi_reversal(prev_signal, curr_signal, curr_trend):
+    """Вход только по тренду."""
+    if prev_signal == 0 and curr_signal == 1 and curr_trend == 1:
         return 'long'
-    if prev_signal == 0 and curr_signal == -1:
+    if prev_signal == 0 and curr_signal == -1 and curr_trend == -1:
         return 'short'
     return None
 
 
-def check_exit_rsi_reversal(prev_signal, curr_signal, direction):
+def check_exit_rsi_reversal(rsi_value, direction, exit_level=50):
     """Выход при возврате RSI к 50."""
     if direction == 'long':
-        return curr_signal == -1
-    return curr_signal == 1
+        return rsi_value >= exit_level
+    return rsi_value <= exit_level
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -52,10 +50,6 @@ def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
 def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
                           sl_points, tp_points, point, tick_value, tick_size,
                           sim_lot=0.01, spread_points=0):
-    """Симуляция сделок на истории с RSI Reversal.
-    
-    Возвращает (profit, n_trades, trade_profits).
-    """
     df = calc_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought)
     sl_dist = sl_points * point
     tp_dist = tp_points * point
@@ -66,14 +60,16 @@ def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
     position = None
     trade_profits = []
 
-    for i in range(1, len(df)):
+    for i in range(max(rsi_period + 1, 201), len(df)):
         prev_signal = df['signal'].iloc[i - 1]
         curr_signal = df['signal'].iloc[i]
         curr_close = df['close'].iloc[i]
+        curr_rsi = df['rsi'].iloc[i]
+        curr_trend = df['trend'].iloc[i]
         current_high = df['high'].iloc[i]
         current_low = df['low'].iloc[i]
 
-        # ── Проверка выхода ──
+        # ── Выход ──
         if position:
             exited = False
             p = 0.0
@@ -88,7 +84,7 @@ def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
-                elif check_exit_rsi_reversal(prev_signal, curr_signal, 'long'):
+                elif check_exit_rsi_reversal(curr_rsi, 'long'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
@@ -101,7 +97,7 @@ def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
-                elif check_exit_rsi_reversal(prev_signal, curr_signal, 'short'):
+                elif check_exit_rsi_reversal(curr_rsi, 'short'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
@@ -113,9 +109,9 @@ def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
                 trade_profits.append(p)
                 position = None
 
-        # ── Проверка входа ──
+        # ── Вход ──
         if position is None:
-            entry_dir = check_entry_rsi_reversal(prev_signal, curr_signal)
+            entry_dir = check_entry_rsi_reversal(prev_signal, curr_signal, curr_trend)
             if entry_dir == 'long':
                 entry = curr_close + spread
                 position = {'direction': 'long', 'entry': entry,
@@ -128,6 +124,5 @@ def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
     return profit, n_trades, trade_profits
 
 
-# Алиасы для совместимости с IDE-референсами
 check_entry = check_entry_rsi_reversal
 check_exit = check_exit_rsi_reversal

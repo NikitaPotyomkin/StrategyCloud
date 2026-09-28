@@ -454,16 +454,24 @@ def get_dashboard_data(days_back=30):
             # 🔑 ФИЛЬТР ПО СИМВОЛУ — только наши символы с суффиксом rfd
             trades_df = trades_df[trades_df['symbol'].str.endswith(OUR_SYMBOLS_SUFFIX, na=False)]
 
-            # 🔑 ФИЛЬТР ПО COMMENT — наши сделки содержат K= или тип стратегии
-            # Формат: "EURUSDrfd, K=21" или "EURUSDrfd, MACD-Cross" или "EURUSDrfd, BB 20.0"
-            our_comment_mask = trades_df['comment'].fillna('').str.contains(
-                r'(K=|MACD|RSI|BB |EMA |Ichimoku|Stoch|Parabolic|MA |RF |LogReg|Zscore|Autocorr|Hurst|LRC|Percentile|Runs|Coint|Sharpe|Skewness|Bayesian|Kurtosis|ChiSq)',
-                regex=True, case=False
+            # 🔑 Привязка сделок к стратегиям: magic → (strategy_type, param_key)
+            # ПРИМЕЧАНИЕ: фильтр по comment намеренно удалён (полная выдача).
+            registry = _load_registry()
+            trades_df['strategy_type'] = trades_df['magic'].map(
+                lambda m: registry[m].get('type', '?') if m in registry else '?'
             )
-            before_filter = len(trades_df)
-            trades_df = trades_df[our_comment_mask]
-            after_filter = len(trades_df)
-            print(f"  [DASHBOARD] Deals: {before_filter} → {after_filter} (magic>=770k + rfd + comment)")
+            trades_df['param_key'] = trades_df['magic'].map(
+                lambda m: registry[m].get('param_key', '?') if m in registry else '?'
+            )
+            # Отсев по comment убран: закрывающие сделки идут с comment='close'
+            # и несут весь PnL; фильтруем только magic + rfd-суффикс символa.
+                
+                
+            
+            
+            
+            
+            print(f"  [DASHBOARD] Deals: {len(trades_df)} (magic [770000, 869999] + rfd)")
 
             # PnL нетто
             trades_df['profit_net'] = trades_df['profit'] + trades_df['commission'] + trades_df['swap']
@@ -473,6 +481,29 @@ def get_dashboard_data(days_back=30):
 
             # Сортировка
             trades_df = trades_df.sort_values('timestamp').reset_index(drop=True)
+
+            # ── Закрытые сделки: одна строка на позицию (вход+выход) ──
+            # Открытые позиции (без DEAL_ENTRY_OUT) исключаются — их можно взять
+            # отдельно из MT history (positions_get).
+            trades_df['position_id'] = trades_df['position_id'].astype(str)
+            closed_ids = trades_df.loc[trades_df['entry'] == mt5.DEAL_ENTRY_OUT, 'position_id']
+            trades_df = trades_df[trades_df['position_id'].isin(closed_ids)].copy()
+            agg = trades_df.sort_values('timestamp').groupby('position_id').agg(
+                symbol=('symbol', 'first'),
+                strategy_type=('strategy_type', 'first'),
+                param_key=('param_key', 'first'),
+                type=('type', 'first'),
+                entry=('entry', 'max'),
+                volume=('volume', 'first'),
+                price=('price', 'last'),
+                profit=('profit', 'sum'),
+                commission=('commission', 'sum'),
+                swap=('swap', 'sum'),
+                profit_net=('profit_net', 'sum'),
+                magic=('magic', 'first'),
+                timestamp=('timestamp', 'max'),
+            ).reset_index()
+            trades_df = agg.sort_values('timestamp').reset_index(drop=True)
 
         # 4. Активные стратегии (из реестра + текущие позиции)
         registry = _load_registry()
