@@ -185,7 +185,7 @@ def _backtest_hurst(df, window, trend_threshold, vol_period, sl_points, tp_point
                     point, tick_value, tick_size, spread_points=0):
     """Backtest для Hurst regime filter."""
     from strategies.hurst_regime_filter import backtest as backtest_hurst
-    return backtest_hurst(df, window, trend_threshold, sl_points, tp_points, point,
+    return backtest_hurst(df, window, trend_threshold, 0.5, sl_points, tp_points, point,
                           tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
                           spread_points=spread_points)
 
@@ -203,7 +203,7 @@ def _backtest_percentile(df, period, pct_low, pct_high, vol_period, sl_points, t
                          point, tick_value, tick_size, spread_points=0):
     """Backtest для Percentile reversion."""
     from strategies.percentile_reversion import backtest as backtest_percentile
-    return backtest_percentile(df, period, pct_low, pct_high, sl_points, tp_points, point,
+    return backtest_percentile(df, period, pct_low, pct_high, 50.0, sl_points, tp_points, point,
                                tick_value, tick_size, sim_lot=0.01,
                                spread_points=spread_points)
 
@@ -230,7 +230,7 @@ def _backtest_sharpe(df, window, threshold, vol_period, sl_points, tp_points,
                      point, tick_value, tick_size, spread_points=0):
     """Backtest для Rolling Sharpe filter."""
     from strategies.rolling_sharpe_filter import backtest as backtest_sharpe
-    return backtest_sharpe(df, window, threshold, sl_points, tp_points, point,
+    return backtest_sharpe(df, window, threshold, 0.0, sl_points, tp_points, point,
                            tick_value, tick_size, sim_lot=0.01,
                            spread_points=spread_points)
 
@@ -239,7 +239,7 @@ def _backtest_skewness(df, window, threshold, vol_period, sl_points, tp_points,
                        point, tick_value, tick_size, spread_points=0):
     """Backtest для Skewness extreme."""
     from strategies.skewness_extreme import backtest as backtest_skewness
-    return backtest_skewness(df, window, threshold, sl_points, tp_points, point,
+    return backtest_skewness(df, window, threshold, 0.3, sl_points, tp_points, point,
                              tick_value, tick_size, sim_lot=0.01,
                              spread_points=spread_points)
 
@@ -248,7 +248,7 @@ def _backtest_bayesian(df, window, threshold, prior, sl_points, tp_points,
                        point, tick_value, tick_size, spread_points=0):
     """Backtest для Bayesian trend update."""
     from strategies.bayesian_trend_update import backtest as backtest_bayesian
-    return backtest_bayesian(df, window, threshold, prior, sl_points, tp_points, point,
+    return backtest_bayesian(df, window, prior, threshold, 0.5, sl_points, tp_points, point,
                              tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
 
 
@@ -256,7 +256,7 @@ def _backtest_kurtosis(df, window, threshold, vol_period, sl_points, tp_points,
                        point, tick_value, tick_size, spread_points=0):
     """Backtest для Kurtosis spike."""
     from strategies.kurtosis_spike import backtest as backtest_kurtosis
-    return backtest_kurtosis(df, window, threshold, sl_points, tp_points, point,
+    return backtest_kurtosis(df, window, threshold, 3.0, 1.0, sl_points, tp_points, point,
                              tick_value, tick_size, sim_lot=0.01,
                              spread_points=spread_points)
 
@@ -666,10 +666,21 @@ def _backtest_symbol(args):
     combos_done = 0
     completed_strategies = []
 
+    # ── Обёртка для безопасного бэктеста ──
+    def _safe_backtest(strategy_name, bt_fn, *args, **kwargs):
+        """Безопасный вызов бэктеста — ловит ошибки, не прерывая весь процесс."""
+        nonlocal combos_done
+        try:
+            return bt_fn(*args, **kwargs)
+        except Exception as e:
+            print(f"  [ERROR] {symbol} | {strategy_name}: {e}", flush=True)
+            return 0, 0, []
+
     # ── Стохастик ──
     if not test_strategy or test_strategy == 'stoch':
         for i, (k, sl, tp) in enumerate(product(K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST), start=1):
-            profit, n_trades, trade_profits = _backtest_stoch(
+            profit, n_trades, trade_profits = _safe_backtest(
+                'Stochastic', _backtest_stoch,
                 df_window, k, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -697,7 +708,7 @@ def _backtest_symbol(args):
             product(PARABOLIC_STEPS, PARABOLIC_MAXS, SL_POINTS_LIST, TP_POINTS_LIST),
             start=1
         ):
-            profit, n_trades, trade_profits = _backtest_parabolic(
+            profit, n_trades, trade_profits = _safe_backtest('Parabolic', _backtest_parabolic,
                 df_window, step, max_val, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -722,7 +733,7 @@ def _backtest_symbol(args):
     # ── Moving Average ──
     if not test_strategy or test_strategy == 'ma':
         for i, (ma_period, sl, tp) in enumerate(product(MA_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST), start=1):
-            profit, n_trades, trade_profits = _backtest_ma(
+            profit, n_trades, trade_profits = _safe_backtest('MA', _backtest_ma,
                 df_window, ma_period, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -750,7 +761,7 @@ def _backtest_symbol(args):
             product(RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST),
             start=1
         ):
-            profit, n_trades, trade_profits = _backtest_rf(
+            profit, n_trades, trade_profits = _safe_backtest('RF', _backtest_rf,
                 df_window, lookback, n_bars, threshold, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 sim_lot=0.01, spread_points=info.spread
@@ -779,7 +790,7 @@ def _backtest_symbol(args):
             product(LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST),
             start=1
         ):
-            profit, n_trades, trade_profits = _backtest_logreg(
+            profit, n_trades, trade_profits = _safe_backtest('LogReg', _backtest_logreg,
                 df_window, lookback, n_bars, threshold, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 sim_lot=0.01, spread_points=info.spread
@@ -809,7 +820,7 @@ def _backtest_symbol(args):
             product(MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_macd_cross(
+            profit, n_trades, trade_profits = _safe_backtest('MACD-Cross', _backtest_macd_cross,
                 df_window, mf, ms, msig, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -838,7 +849,7 @@ def _backtest_symbol(args):
             product(RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_rsi_reversal(
+            profit, n_trades, trade_profits = _safe_backtest('RSI-Rev', _backtest_rsi_reversal,
                 df_window, rp, ros, rob, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -867,7 +878,7 @@ def _backtest_symbol(args):
             product(BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_bollinger(
+            profit, n_trades, trade_profits = _safe_backtest('Bollinger', _backtest_bollinger,
                 df_window, bp, bs, vp, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -895,7 +906,7 @@ def _backtest_symbol(args):
         for i, (ef, es, sl, tp) in enumerate(
             product(EMA_FAST_LIST, EMA_SLOW_LIST, SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_ema_crossover(
+            profit, n_trades, trade_profits = _safe_backtest('EMA', _backtest_ema_crossover,
                 df_window, ef, es, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -924,7 +935,7 @@ def _backtest_symbol(args):
             product(RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_rsi_divergence(
+            profit, n_trades, trade_profits = _safe_backtest('RSI-Div', _backtest_rsi_divergence,
                 df_window, rp, lb, th, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -953,7 +964,7 @@ def _backtest_symbol(args):
             product(TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_ichimoku(
+            profit, n_trades, trade_profits = _safe_backtest('Ichimoku', _backtest_ichimoku,
                 df_window, ten, kij, senk, disp, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -982,7 +993,7 @@ def _backtest_symbol(args):
             product(ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_zscore(
+            profit, n_trades, trade_profits = _safe_backtest('Zscore', _backtest_zscore,
                 df_window, sma_p, z_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1011,7 +1022,7 @@ def _backtest_symbol(args):
             product(AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_autocorr(
+            profit, n_trades, trade_profits = _safe_backtest('Autocorr', _backtest_autocorr,
                 df_window, acf_lag, acf_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1040,7 +1051,7 @@ def _backtest_symbol(args):
             product(HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_hurst(
+            profit, n_trades, trade_profits = _safe_backtest('Hurst', _backtest_hurst,
                 df_window, win, trend_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1069,7 +1080,7 @@ def _backtest_symbol(args):
             product(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_lrc(
+            profit, n_trades, trade_profits = _safe_backtest('LRC', _backtest_lrc,
                 df_window, period, std_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1098,7 +1109,7 @@ def _backtest_symbol(args):
             product(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_percentile(
+            profit, n_trades, trade_profits = _safe_backtest('Percentile', _backtest_percentile,
                 df_window, per, pct_l, pct_h, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1127,7 +1138,7 @@ def _backtest_symbol(args):
             product(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_runs(
+            profit, n_trades, trade_profits = _safe_backtest('Runs', _backtest_runs,
                 df_window, win, runs_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1156,7 +1167,7 @@ def _backtest_symbol(args):
             product(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_coint(
+            profit, n_trades, trade_profits = _safe_backtest('Coint', _backtest_coint,
                 df_window, win, coint_th, beta_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1185,7 +1196,7 @@ def _backtest_symbol(args):
             product(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_sharpe(
+            profit, n_trades, trade_profits = _safe_backtest('Sharpe', _backtest_sharpe,
                 df_window, win, sharpe_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1214,7 +1225,7 @@ def _backtest_symbol(args):
             product(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_skewness(
+            profit, n_trades, trade_profits = _safe_backtest('Skewness', _backtest_skewness,
                 df_window, win, skew_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1243,7 +1254,7 @@ def _backtest_symbol(args):
             product(BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_bayesian(
+            profit, n_trades, trade_profits = _safe_backtest('Bayesian', _backtest_bayesian,
                 df_window, win, bay_th, prior, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1272,7 +1283,7 @@ def _backtest_symbol(args):
             product(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_kurtosis(
+            profit, n_trades, trade_profits = _safe_backtest('Kurtosis', _backtest_kurtosis,
                 df_window, win, kurt_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread
@@ -1301,7 +1312,7 @@ def _backtest_symbol(args):
             product(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
-            profit, n_trades, trade_profits = _backtest_chi_square(
+            profit, n_trades, trade_profits = _safe_backtest('ChiSq', _backtest_chi_square,
                 df_window, win, entry_th, exit_th, vol_p, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
                 spread_points=info.spread

@@ -45,26 +45,30 @@ def calc_hurst(df, window, h_threshold=0.6, h_exit=0.5):
                     hurst_values.append(0.5)
     
     df['hurst'] = hurst_values
-    df['trend_up'] = df['hurst'] > h_threshold
-    df['trend_down'] = df['hurst'] < h_exit
+    df['mean_ret'] = returns.rolling(window, min_periods=1).mean()
+    df['trend_up'] = (df['hurst'] > h_threshold) & (df['mean_ret'] > 0)
+    df['trend_down'] = (df['hurst'] > h_threshold) & (df['mean_ret'] < 0)
+    df['trend_exit'] = df['hurst'] < h_exit
     return df
 
 
-def check_entry(prev_trend, curr_trend):
+def check_entry(prev_up, prev_down, curr_up, curr_down):
+    """Вход при появлении сильного НАПРАВЛЕННОГО тренда (H>порога и знак mean_ret):
+    H сам по себе не даёт знака, поэтому long/short различаются знаком среднего возврата за окно."""
     """
-    Вход при смене тренда.
+    Аудит: H (R/S) не несёт знака — направление входа задаёт знак среднего возврата за окно (mean_ret), H — фильтр силы тренда.
     
     Returns:
-        'long', 'short' или None
+        'long' — появился сильный восходящий тренд, 'short' — нисходящий, None — иначе
     """
-    if not prev_trend and curr_trend:
+    if curr_up and not prev_up:
         return 'long'
-    if prev_trend and not curr_trend:
+    if curr_down and not prev_down:
         return 'short'
     return None
 
 
-def check_exit(prev_trend, curr_trend, direction):
+def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
     Выход при смене тренда.
     
@@ -75,9 +79,9 @@ def check_exit(prev_trend, curr_trend, direction):
         True если нужно выйти
     """
     if direction == 'long':
-        return not curr_trend
+        return not curr_up
     else:
-        return curr_trend
+        return not curr_down
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -104,8 +108,10 @@ def backtest(df, window, h_threshold, h_exit, sl_points, tp_points, point,
     trade_profits = []
 
     for i in range(1, len(df)):
-        prev_trend = df['trend_up'].iloc[i - 1] if df['trend_up'].iloc[i - 1] else df['trend_down'].iloc[i - 1]
-        curr_trend = df['trend_up'].iloc[i] if df['trend_up'].iloc[i] else df['trend_down'].iloc[i]
+        prev_up = df['trend_up'].iloc[i - 1]
+        prev_down = df['trend_down'].iloc[i - 1]
+        curr_up = df['trend_up'].iloc[i]
+        curr_down = df['trend_down'].iloc[i]
         curr_close = df['close'].iloc[i]
         current_high = df['high'].iloc[i]
         current_low = df['low'].iloc[i]
@@ -125,7 +131,7 @@ def backtest(df, window, h_threshold, h_exit, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
-                elif check_exit(prev_trend, curr_trend, 'long'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'long'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
@@ -138,7 +144,7 @@ def backtest(df, window, h_threshold, h_exit, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
-                elif check_exit(prev_trend, curr_trend, 'short'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'short'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
@@ -152,7 +158,7 @@ def backtest(df, window, h_threshold, h_exit, sl_points, tp_points, point,
 
         # ── Проверка входа ──
         if position is None:
-            entry_dir = check_entry(prev_trend, curr_trend)
+            entry_dir = check_entry(prev_up, prev_down, curr_up, curr_down)
             if entry_dir == 'long':
                 entry = curr_close + spread
                 position = {'direction': 'long', 'entry': entry,

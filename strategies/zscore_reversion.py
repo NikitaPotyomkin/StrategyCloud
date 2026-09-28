@@ -150,12 +150,12 @@ def backtest(df, sma_period, z_threshold, sl_points, tp_points, point,
 
         # ── Проверка входа ──
         if position is None:
-            # Вход при экстремальном Z-score
-            if curr_z > z_threshold:
+            # Вход при возврате к SMA после экстремума
+            if prev_z > z_threshold and curr_z < z_threshold:
                 entry = curr_close + spread
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
-            elif curr_z < -z_threshold:
+            elif prev_z < -z_threshold and curr_z > -z_threshold:
                 entry = curr_close - spread
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
