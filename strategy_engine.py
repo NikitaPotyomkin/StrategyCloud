@@ -15,6 +15,9 @@ from risk_manager import (
     check_daily_loss_limit, check_equity_stop, realtime_quota_recalc
 )
 
+from config import RiskParams
+
+
 # Режим счёта, необходимый для нескольких стратегий на одном символе.
 HEDGING_MODE = getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 2)
 
@@ -770,7 +773,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          check_exit_parabolic_fn, check_entry_parabolic_fn,
                          calc_moving_average_fn, check_exit_ma_fn, check_entry_ma_fn,
                          send_order_fn, close_order_fn, get_deal_exit_price_fn,
-                         _record_close_fn, LOT_PER_STRATEGY, record_trade_fn,
+                         _record_close_fn, record_trade_fn,
                          journal_df=None, JOURNAL_FILE=None,
                          calc_random_forest_fn=None, check_exit_rf_fn=None,
                          check_entry_rf_fn=None,
@@ -800,17 +803,17 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          calc_bayesian_trend_fn=None, check_exit_bayesian_fn=None, check_entry_bayesian_fn=None,
                          calc_kurtosis_fn=None, check_exit_kurtosis_fn=None, check_entry_kurtosis_fn=None,
                          calc_chi_square_fn=None, check_exit_chi_square_fn=None, check_entry_chi_square_fn=None,
-                         risk_params=None, position_limits=None):
+                         risk_cfg=None):
     """Проверяет сигналы для активных стратегий на закрытом баре.
     
     Args:
-        risk_params: dict параметров риск-менеджмента (пропускается в send_order)
-        position_limits: dict лимитов {'max_total': int, 'max_per_symbol': int}
+        risk_cfg: RiskParams — параметры риск-менеджмента и лимиты позиций (config.py)
+        (check-флаги и SL/TP-дистанции уходят в send_order; лимиты применяются здесь)
     """
-    if risk_params is None:
-        risk_params = {}
-    if position_limits is None:
-        position_limits = {'max_total': 15, 'max_per_symbol': 3}
+    if risk_cfg is None:
+        risk_cfg = RiskParams()
+    risk_params = {'check_margin': True, 'check_stops': True,
+        'min_sl_distance_points': risk_cfg.min_sl_distance_points, 'max_sl_distance_points': risk_cfg.max_sl_distance_points}
     
     # ── Проверка 1: Реальные позиции MT5 (пункт 1) ──
     # Собираем занятые (символ, тип) ИЗ РЕАЛЬНЫХ ПОЗИЦИЙ MT5
@@ -834,8 +837,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
     current_counts = {sym: len(types) for sym, types in occupied_by_symbol.items()}
     limits_ok, limits_reason, limits_details = check_position_limits(
         current_counts,
-        position_limits['max_total'],
-        position_limits['max_per_symbol']
+        risk_cfg.max_total_positions,
+        risk_cfg.max_per_symbol
     )
     if not limits_ok:
         print(f"  -> [WARN] Лимиты позиций: {limits_reason}")
@@ -881,8 +884,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and stype in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/{stype}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is None:
@@ -941,8 +944,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'parabolic' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/parabolic")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -999,8 +1002,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'ma' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ma")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1059,8 +1062,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'rf' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rf")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1119,8 +1122,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'logreg' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/logreg")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1171,8 +1174,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'macd_cross' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/macd_cross")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1221,8 +1224,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'rsi_rev' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rsi_rev")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1271,8 +1274,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'bollinger' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/bollinger")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1321,8 +1324,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'ema_cross' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ema_cross")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1371,8 +1374,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'rsi_div' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rsi_div")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1421,8 +1424,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'ichimoku' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ichimoku")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1471,8 +1474,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'zscore' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/zscore")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1521,8 +1524,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'autocorr' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/autocorr")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1573,8 +1576,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'hurst' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/hurst")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1623,8 +1626,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'lrc' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/lrc")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1673,8 +1676,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'percentile' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/percentile")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1723,8 +1726,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'runs' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/runs")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1773,8 +1776,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'coint' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/coint")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1823,8 +1826,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'sharpe' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/sharpe")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1873,8 +1876,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'skewness' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/skewness")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1923,8 +1926,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'bayesian' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/bayesian")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -1975,8 +1978,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'kurtosis' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/kurtosis")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:
@@ -2025,8 +2028,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                         elif s['symbol'] in occupied_by_symbol and 'chi_square' in occupied_by_symbol[s['symbol']]:
                             print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/chi_square")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= position_limits['max_per_symbol']:
-                            print(f"  -> [{key}] Пропущен вход: {position_limits['max_per_symbol']} позиций на {s['symbol']}")
+                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
                             tick = mt5.symbol_info_tick(s['symbol'])
                             if tick is not None:

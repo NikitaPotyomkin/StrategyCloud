@@ -585,6 +585,7 @@ def _reconstruct_symbol_info(symbol, info_dict):
 def _backtest_symbol(args):
     """Бэктест одного символа (для multiprocessing)."""
     (symbol_idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
+     
      PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
      LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
      MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
@@ -1343,29 +1344,8 @@ def _backtest_symbol(args):
 
 
 
-def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
-                      PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
-                      LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
-                      MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
-                      RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-                      BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
-                      EMA_FAST_LIST, EMA_SLOW_LIST,
-                      RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
-                      TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
-                      ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
-                      AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
-                      HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
-                      LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
-                      PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
-                      RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
-                      COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
-                      SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
-                      SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
-                      BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
-                      KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
-                      CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
-                      BACKTEST_DAYS, TOP_N,
-                      test_strategy=None, test_mode=False, force_recalc=False):
+def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
+    test_strategy=None, test_mode=False, force_recalc=False):
     """Перебирает все комбинации stoch, parabolic, ma, rf, logreg. Возвращает (top, all).
 
     TOP_N — максимальное число стратегий на ОДНУ валюту.
@@ -1373,6 +1353,79 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     test_mode — если True, выводит спец-сообщение для тестового режима.
     force_recalc — если True, игнорирует чекпоинты и пересчитывает всё с нуля.
     """
+    # ── Распаковка контейнеров (рефакторинг: единый источник — config.py) ──
+    SYMBOLS = list(symbols)
+    K_PERIODS = strategy_params.k_periods
+    SL_POINTS_LIST = strategy_params.sl_points_list
+    TP_POINTS_LIST = strategy_params.tp_points_list
+    PARABOLIC_STEPS = strategy_params.parabolic_steps
+    PARABOLIC_MAXS = strategy_params.parabolic_maxs
+    MA_PERIODS = strategy_params.ma_periods
+    RF_LOOKBACKS = strategy_params.rf_lookbacks
+    RF_NBARS = strategy_params.rf_nbars
+    RF_THRESHOLDS = strategy_params.rf_thresholds
+    LOGREG_LOOKBACKS = strategy_params.logreg_lookbacks
+    LOGREG_NBARS = strategy_params.logreg_nbars
+    LOGREG_THRESHOLDS = strategy_params.logreg_thresholds
+    MACD_CROSS_FAST_LIST = strategy_params.macd_cross_fast_list
+    MACD_CROSS_SLOW_LIST = strategy_params.macd_cross_slow_list
+    MACD_CROSS_SIGNAL_LIST = strategy_params.macd_cross_signal_list
+    RSI_REV_PERIOD_LIST = strategy_params.rsi_rev_period_list
+    RSI_REV_OVERSOLD_LIST = strategy_params.rsi_rev_oversold_list
+    RSI_REV_OVERBOUGHT_LIST = strategy_params.rsi_rev_overbought_list
+    BB_PERIOD_LIST = strategy_params.bb_period_list
+    BB_STD_LIST = strategy_params.bb_std_list
+    VOLUME_PERIOD_LIST = strategy_params.volume_period_list
+    EMA_FAST_LIST = strategy_params.ema_fast_list
+    EMA_SLOW_LIST = strategy_params.ema_slow_list
+    RSI_DIV_PERIOD_LIST = strategy_params.rsi_div_period_list
+    RSI_DIV_LOOKBACK_LIST = strategy_params.rsi_div_lookback_list
+    RSI_DIV_THRESHOLD_LIST = strategy_params.rsi_div_threshold_list
+    TENKAN_LIST = strategy_params.tenkan_list
+    KIJUN_LIST = strategy_params.kijun_list
+    SENKOU_B_LIST = strategy_params.senkou_b_list
+    DISPLACEMENT_LIST = strategy_params.displacement_list
+    ZSCORE_SMA_PERIOD_LIST = strategy_params.zscore_sma_period_list
+    ZSCORE_THRESHOLD_LIST = strategy_params.zscore_threshold_list
+    ZSCORE_VOL_PERIOD_LIST = strategy_params.zscore_vol_period_list
+    AUTOCORR_LAG_LIST = strategy_params.autocorr_lag_list
+    AUTOCORR_THRESHOLD_LIST = strategy_params.autocorr_threshold_list
+    AUTOCORR_VOL_PERIOD_LIST = strategy_params.autocorr_vol_period_list
+    HURST_WINDOW_LIST = strategy_params.hurst_window_list
+    HURST_TREND_THRESHOLD_LIST = strategy_params.hurst_trend_threshold_list
+    HURST_VOL_PERIOD_LIST = strategy_params.hurst_vol_period_list
+    LRC_PERIOD_LIST = strategy_params.lrc_period_list
+    LRC_STD_THRESHOLD_LIST = strategy_params.lrc_std_threshold_list
+    LRC_VOL_PERIOD_LIST = strategy_params.lrc_vol_period_list
+    PCT_PERIOD_LIST = strategy_params.pct_period_list
+    PCT_LOW_LIST = strategy_params.pct_low_list
+    PCT_HIGH_LIST = strategy_params.pct_high_list
+    PCT_VOL_PERIOD_LIST = strategy_params.pct_vol_period_list
+    RUNS_WINDOW_LIST = strategy_params.runs_window_list
+    RUNS_THRESHOLD_LIST = strategy_params.runs_threshold_list
+    RUNS_VOL_PERIOD_LIST = strategy_params.runs_vol_period_list
+    COINT_WINDOW_LIST = strategy_params.coint_window_list
+    COINT_THRESHOLD_LIST = strategy_params.coint_threshold_list
+    COINT_BETA_PERIOD_LIST = strategy_params.coint_beta_period_list
+    SHARPE_WINDOW_LIST = strategy_params.sharpe_window_list
+    SHARPE_THRESHOLD_LIST = strategy_params.sharpe_threshold_list
+    SHARPE_VOL_PERIOD_LIST = strategy_params.sharpe_vol_period_list
+    SKEW_WINDOW_LIST = strategy_params.skew_window_list
+    SKEW_THRESHOLD_LIST = strategy_params.skew_threshold_list
+    SKEW_VOL_PERIOD_LIST = strategy_params.skew_vol_period_list
+    BAYES_WINDOW_LIST = strategy_params.bayes_window_list
+    BAYES_THRESHOLD_LIST = strategy_params.bayes_threshold_list
+    BAYES_PRIOR_LIST = strategy_params.bayes_prior_list
+    KURT_WINDOW_LIST = strategy_params.kurt_window_list
+    KURT_THRESHOLD_LIST = strategy_params.kurt_threshold_list
+    KURT_VOL_PERIOD_LIST = strategy_params.kurt_vol_period_list
+    CHISQ_WINDOW_LIST = strategy_params.chisq_window_list
+    CHISQ_ENTRY_LIST = strategy_params.chisq_entry_list
+    CHISQ_EXIT_LIST = strategy_params.chisq_exit_list
+    CHISQ_VOL_PERIOD_LIST = strategy_params.chisq_vol_period_list
+    BACKTEST_DAYS = backtest_config.backtest_days
+    TOP_N = backtest_config.top_n
+
     from strategy_engine import calc_metrics, composite_score, deduplicate_results
 
     all_results = []
@@ -1556,6 +1609,7 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
         symbol_args.append((
             idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
+            
             PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
             LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
             MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
