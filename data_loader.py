@@ -15,9 +15,12 @@ def load_h1(symbol):
         return None
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
-    df = df.set_index("time")[["open", "high", "low", "close"]]
+    df = df.set_index("time")
+    # Группировка M5 → H1 с volume (sum = тиковый объём за час)
     df = df.groupby(pd.Grouper(freq="1h")).agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+        {"open": "first", "high": "max", "low": "min", "close": "last", "tick_volume": "sum"}
+    ).dropna()
+    df = df.rename(columns={"tick_volume": "volume"})
     return df
 
 
@@ -30,7 +33,8 @@ def update_symbol_bar(symbol, bid, ask, now):
         if sd['forming_bar'] is not None:
             new_row = pd.DataFrame(
                 {'open': sd['forming_bar']['open'], 'high': sd['forming_bar']['high'],
-                 'low': sd['forming_bar']['low'], 'close': sd['forming_bar']['close']},
+                 'low': sd['forming_bar']['low'], 'close': sd['forming_bar']['close'],
+                 'volume': 0},  # volume=0 для live-бара (неизвестен)
                 index=pd.DatetimeIndex([sd['current_hour']])
             )
             sd['df_h1'] = pd.concat([sd['df_h1'], new_row])
