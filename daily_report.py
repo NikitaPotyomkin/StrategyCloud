@@ -402,7 +402,12 @@ def get_dashboard_data(days_back=30):
         - 'total_profit': float — суммарный PnL за период
     """
     # MAGIC_BASE = 770000 — все наши стратегии используют magic >= 770000
+    # make_magic (strategy_engine.py) = 770000 + hash % 100000 → диапазон [770000, 869999]
     OUR_MAGIC_MIN = 770000
+    OUR_MAGIC_MAX = OUR_MAGIC_MIN + 100000 - 1  # 869999
+
+    # Наши символы имеют суффикс rfd — фильтруем по ним
+    OUR_SYMBOLS_SUFFIX = 'rfd'
 
     # 1. Подключение к MT5
     mt5.shutdown()
@@ -421,9 +426,9 @@ def get_dashboard_data(days_back=30):
         equity = acc.equity
         quota = balance * 0.05  # MAX_RISK_PCT = 0.05
 
-        # 3. История сделок
+        # 3. История сделок — от max(1 сентября 2026, today - days_back)
         date_to = datetime.datetime.now()
-        date_from = date_to - datetime.timedelta(days=days_back)
+        date_from = max(datetime.datetime(2026, 9, 1), date_to - datetime.timedelta(days=days_back))
 
         deals = mt5.history_deals_get(date_from, date_to)
         if deals is None or len(deals) == 0:
@@ -443,7 +448,22 @@ def get_dashboard_data(days_back=30):
             trades_df = trades_df[trades_df['entry'] != mt5.DEAL_ENTRY_OUT_BY]
 
             # 🔑 ФИЛЬТР ПО MAGIC — только наши сделки (>= 770000)
-            trades_df = trades_df[trades_df['magic'] >= OUR_MAGIC_MIN]
+            trades_df['magic'] = trades_df['magic'].fillna(0).astype(int)
+            trades_df = trades_df[(trades_df['magic'] >= OUR_MAGIC_MIN) & (trades_df['magic'] <= OUR_MAGIC_MAX)]
+
+            # 🔑 ФИЛЬТР ПО СИМВОЛУ — только наши символы с суффиксом rfd
+            trades_df = trades_df[trades_df['symbol'].str.endswith(OUR_SYMBOLS_SUFFIX, na=False)]
+
+            # 🔑 ФИЛЬТР ПО COMMENT — наши сделки содержат K= или тип стратегии
+            # Формат: "EURUSDrfd, K=21" или "EURUSDrfd, MACD-Cross" или "EURUSDrfd, BB 20.0"
+            our_comment_mask = trades_df['comment'].fillna('').str.contains(
+                r'(K=|MACD|RSI|BB |EMA |Ichimoku|Stoch|Parabolic|MA |RF |LogReg|Zscore|Autocorr|Hurst|LRC|Percentile|Runs|Coint|Sharpe|Skewness|Bayesian|Kurtosis|ChiSq)',
+                regex=True, case=False
+            )
+            before_filter = len(trades_df)
+            trades_df = trades_df[our_comment_mask]
+            after_filter = len(trades_df)
+            print(f"  [DASHBOARD] Deals: {before_filter} → {after_filter} (magic>=770k + rfd + comment)")
 
             # PnL нетто
             trades_df['profit_net'] = trades_df['profit'] + trades_df['commission'] + trades_df['swap']
