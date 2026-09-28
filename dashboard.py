@@ -67,12 +67,11 @@ if data:
 
     st.caption(f"Обновлено: {updated} | Сделок за {days_back} дн.: {data['total_trades']}")
 
-    # ── Облако сделок (Cumulative PnL) ──
+    # ── Облако сделок (Scatter) ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("☁️ Облако сделок — Cumulative PnL")
+        st.subheader("☁️ Облако сделок")
 
         df_sorted = data['trades_df'].sort_values('timestamp').copy()
-        df_sorted['cumulative'] = df_sorted['profit_net'].cumsum()
 
         # Цвета: зелёный для прибыли, красный для убытка
         colors = ['#26A69A' if x >= 0 else '#EF5350' for x in df_sorted['profit_net']]
@@ -82,30 +81,20 @@ if data:
         # Scatter plot — каждая точка = сделка
         fig.add_trace(go.Scatter(
             x=df_sorted['timestamp'],
-            y=df_sorted['cumulative'],
+            y=df_sorted['profit_net'],
             mode='markers',
             marker=dict(
-                size=8,
+                size=10,
                 color=colors,
                 line=dict(width=1, color='white'),
                 symbol='diamond'
             ),
             text=df_sorted.apply(
-                lambda r: f"{r['symbol']}<br>{r['entry']}<br>PnL: {r['profit_net']:+.2f}<br>Cum: {r['cumulative']:+.2f}",
+                lambda r: f"{r['symbol']}<br>{r['entry']}<br>PnL: {r['profit_net']:+.2f}<br>Vol: {r.get('volume', 0):.2f}",
                 axis=1
             ),
             hoverinfo='text',
             name='Сделки'
-        ))
-
-        # Линия cumulative
-        fig.add_trace(go.Scatter(
-            x=df_sorted['timestamp'],
-            y=df_sorted['cumulative'],
-            mode='lines',
-            line=dict(color='#42A5F5', width=2),
-            name='Cumulative PnL',
-            hovertemplate='Cumulative: %{y:+.2f}<br><extra></extra>'
         ))
 
         # Горизонтальная линия 0
@@ -119,9 +108,9 @@ if data:
         fig.update_layout(
             height=400,
             xaxis_title="Время",
-            yaxis_title="Cumulative PnL (руб)",
+            yaxis_title="PnL (руб)",
             hovermode="x unified",
-            showlegend=True,
+            showlegend=False,
             template="plotly_white",
             margin=dict(l=60, r=20, t=30, b=40)
         )

@@ -396,11 +396,14 @@ def get_dashboard_data(days_back=30):
         - 'equity': float — текущая equity
         - 'quota': float — квота риска (balance * 0.05)
         - 'updated': str — время обновления (ISO format)
-        - 'trades_df': DataFrame — все сделки за период
+        - 'trades_df': DataFrame — все сделки за период (только наш magic)
         - 'active_strategies': list — активные стратегии с позициями
         - 'total_trades': int — кол-во сделок за период
         - 'total_profit': float — суммарный PnL за период
     """
+    # MAGIC_BASE = 770000 — все наши стратегии используют magic >= 770000
+    OUR_MAGIC_MIN = 770000
+
     # 1. Подключение к MT5
     mt5.shutdown()
     if not mt5.initialize():
@@ -428,10 +431,6 @@ def get_dashboard_data(days_back=30):
         else:
             trades_df = pd.DataFrame([d._asdict() for d in deals])
 
-
-
-
-
             # Фильтр: только торговые сделки
             type_map = {
                 mt5.DEAL_TYPE_BUY: 'buy',
@@ -442,6 +441,9 @@ def get_dashboard_data(days_back=30):
 
             # Исключаем балансовые операции
             trades_df = trades_df[trades_df['entry'] != mt5.DEAL_ENTRY_OUT_BY]
+
+            # 🔑 ФИЛЬТР ПО MAGIC — только наши сделки (>= 770000)
+            trades_df = trades_df[trades_df['magic'] >= OUR_MAGIC_MIN]
 
             # PnL нетто
             trades_df['profit_net'] = trades_df['profit'] + trades_df['commission'] + trades_df['swap']
