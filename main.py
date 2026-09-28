@@ -1,5 +1,5 @@
 import MetaTrader5 as mt5
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 import csv
 import time
@@ -427,8 +427,8 @@ if __name__ == '__main__':
             if rows:
                 first_date_str = rows[0].get('activated_at', '')
                 if first_date_str:
-                    first_date = datetime.datetime.strptime(first_date_str, '%Y-%m-%dT%H:%M:%S').date()
-                    yesterday = datetime.date.today() - datetime.timedelta(days=1)
+                    first_date = datetime.strptime(first_date_str, '%Y-%m-%dT%H:%M:%S.%f').date()
+                    yesterday = date.today() - timedelta(days=1)
                     if first_date <= yesterday:
                         generate_missing_reports(first_date, yesterday)
     else:
@@ -558,7 +558,7 @@ if __name__ == '__main__':
                 write_active_state(active, active_strategies, balance, MAX_RISK_PCT, JOURNAL_DIR)
                 
                 # ── Генерация daily report за предыдущие сутки ──
-                yesterday = now.date() - datetime.timedelta(days=1)
+                yesterday = now.date() - timedelta(days=1)
                 report = generate_daily_report(yesterday)
                 
                 print(f"  Готово: {len(all_results)} комбинаций, {len(active)} активных")
