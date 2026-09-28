@@ -974,7 +974,7 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     valid_symbols = []
     for symbol in SYMBOLS:
         # Пропускаем символы с готовыми чекпойнтами
-        if symbol in existing_checkpoints:
+        if symbol in skipped_symbols:
             continue
         if symbol not in symbol_data:
             continue
