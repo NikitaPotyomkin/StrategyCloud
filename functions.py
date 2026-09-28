@@ -163,6 +163,113 @@ def _backtest_ichimoku(df, tenkan, kijun, senkou_b, displacement,
                              sim_lot=0.01, spread_points=spread_points)
 
 
+def _backtest_zscore(df, sma_period, z_threshold, vol_period, sl_points, tp_points,
+                     point, tick_value, tick_size, spread_points=0):
+    """Backtest для Z-score reversion."""
+    from strategies.zscore_reversion import backtest as backtest_zscore
+    return backtest_zscore(df, sma_period, z_threshold, sl_points, tp_points, point,
+                           tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                           spread_points=spread_points)
+
+
+def _backtest_autocorr(df, acf_lag, threshold, vol_period, sl_points, tp_points,
+                       point, tick_value, tick_size, spread_points=0):
+    """Backtest для Autocorrelation momentum."""
+    from strategies.autocorrelation_momentum import backtest as backtest_autocorr
+    return backtest_autocorr(df, acf_lag, threshold, sl_points, tp_points, point,
+                             tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                             spread_points=spread_points)
+
+
+def _backtest_hurst(df, window, trend_threshold, vol_period, sl_points, tp_points,
+                    point, tick_value, tick_size, spread_points=0):
+    """Backtest для Hurst regime filter."""
+    from strategies.hurst_regime_filter import backtest as backtest_hurst
+    return backtest_hurst(df, window, trend_threshold, sl_points, tp_points, point,
+                          tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                          spread_points=spread_points)
+
+
+def _backtest_lrc(df, period, std_threshold, vol_period, sl_points, tp_points,
+                  point, tick_value, tick_size, spread_points=0):
+    """Backtest для Linear Regression Channel."""
+    from strategies.linear_regression_channel import backtest as backtest_lrc
+    return backtest_lrc(df, period, std_threshold, sl_points, tp_points, point,
+                        tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                        spread_points=spread_points)
+
+
+def _backtest_percentile(df, period, pct_low, pct_high, vol_period, sl_points, tp_points,
+                         point, tick_value, tick_size, spread_points=0):
+    """Backtest для Percentile reversion."""
+    from strategies.percentile_reversion import backtest as backtest_percentile
+    return backtest_percentile(df, period, pct_low, pct_high, sl_points, tp_points, point,
+                               tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                               spread_points=spread_points)
+
+
+def _backtest_runs(df, window, threshold, vol_period, sl_points, tp_points,
+                   point, tick_value, tick_size, spread_points=0):
+    """Backtest для Runs Test trend."""
+    from strategies.runs_test_trend import backtest as backtest_runs
+    return backtest_runs(df, window, threshold, sl_points, tp_points, point,
+                         tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                         spread_points=spread_points)
+
+
+def _backtest_coint(df, window, threshold, beta_period, sl_points, tp_points,
+                    point, tick_value, tick_size, spread_points=0):
+    """Backtest для Cointegration pairs."""
+    from strategies.cointegration_pairs import backtest as backtest_coint
+    return backtest_coint(df, window, threshold, sl_points, tp_points, point,
+                          tick_value, tick_size, beta_period=beta_period, sim_lot=0.01,
+                          spread_points=spread_points)
+
+
+def _backtest_sharpe(df, window, threshold, vol_period, sl_points, tp_points,
+                     point, tick_value, tick_size, spread_points=0):
+    """Backtest для Rolling Sharpe filter."""
+    from strategies.rolling_sharpe_filter import backtest as backtest_sharpe
+    return backtest_sharpe(df, window, threshold, sl_points, tp_points, point,
+                           tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                           spread_points=spread_points)
+
+
+def _backtest_skewness(df, window, threshold, vol_period, sl_points, tp_points,
+                       point, tick_value, tick_size, spread_points=0):
+    """Backtest для Skewness extreme."""
+    from strategies.skewness_extreme import backtest as backtest_skewness
+    return backtest_skewness(df, window, threshold, sl_points, tp_points, point,
+                             tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                             spread_points=spread_points)
+
+
+def _backtest_bayesian(df, window, threshold, prior, sl_points, tp_points,
+                       point, tick_value, tick_size, spread_points=0):
+    """Backtest для Bayesian trend update."""
+    from strategies.bayesian_trend_update import backtest as backtest_bayesian
+    return backtest_bayesian(df, window, threshold, prior, sl_points, tp_points, point,
+                             tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_kurtosis(df, window, threshold, vol_period, sl_points, tp_points,
+                       point, tick_value, tick_size, spread_points=0):
+    """Backtest для Kurtosis spike."""
+    from strategies.kurtosis_spike import backtest as backtest_kurtosis
+    return backtest_kurtosis(df, window, threshold, sl_points, tp_points, point,
+                             tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                             spread_points=spread_points)
+
+
+def _backtest_chi_square(df, window, entry_threshold, exit_threshold, vol_period,
+                         sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
+    """Backtest для Chi-square distribution."""
+    from strategies.chi_square_distribution import backtest as backtest_chi_square
+    return backtest_chi_square(df, window, entry_threshold, exit_threshold, sl_points,
+                               tp_points, point, tick_value, tick_size, vol_period=vol_period,
+                               sim_lot=0.01, spread_points=spread_points)
+
+
 # ═══ УТИЛИТЫ ВРЕМЕНИ И ДАТЫ ═══
 def curr_time():
     """Текущее время в формате ЧЧ:ММ."""
@@ -486,6 +593,18 @@ def _backtest_symbol(args):
      EMA_FAST_LIST, EMA_SLOW_LIST,
      RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
      TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
+     ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+     AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+     HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+     LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+     PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+     RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+     COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+     SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+     SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+     BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+     KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+     CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
      BACKTEST_DAYS, test_strategy, test_mode, total_symbols) = args
 
     # Восстановить объект "info" из примитивного словаря
@@ -502,6 +621,12 @@ def _backtest_symbol(args):
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     # Новые стратегии
+    macd_cross_per_symbol = (len(MACD_CROSS_FAST_LIST) * len(MACD_CROSS_SLOW_LIST) *
+                             len(MACD_CROSS_SIGNAL_LIST) *
+                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    rsi_rev_per_symbol = (len(RSI_REV_PERIOD_LIST) * len(RSI_REV_OVERSOLD_LIST) *
+                          len(RSI_REV_OVERBOUGHT_LIST) *
+                          len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     bollinger_per_symbol = len(BB_PERIOD_LIST) * len(BB_STD_LIST) * len(VOLUME_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     ema_cross_per_symbol = len(EMA_FAST_LIST) * len(EMA_SLOW_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     rsi_div_per_symbol = len(RSI_DIV_PERIOD_LIST) * len(RSI_DIV_LOOKBACK_LIST) * len(RSI_DIV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
@@ -517,6 +642,10 @@ def _backtest_symbol(args):
         active_combos = rf_per_symbol
     elif test_strategy == 'logreg':
         active_combos = logreg_per_symbol
+    elif test_strategy == 'macd_cross':
+        active_combos = macd_cross_per_symbol
+    elif test_strategy == 'rsi_rev':
+        active_combos = rsi_rev_per_symbol
     elif test_strategy == 'bollinger':
         active_combos = bollinger_per_symbol
     elif test_strategy == 'ema_cross':
@@ -526,7 +655,9 @@ def _backtest_symbol(args):
     elif test_strategy == 'ichimoku':
         active_combos = ichimoku_per_symbol
     else:
-        active_combos = stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol + bollinger_per_symbol + ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol
+        active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol +
+                         macd_cross_per_symbol + rsi_rev_per_symbol + bollinger_per_symbol +
+                         ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol)
 
     status = "старт" if symbol_idx < 4 else "в очереди"
     print(f"  [{symbol_idx + 1}/{total_symbols}] {symbol}: {status} ({active_combos} комб.)", flush=True)
@@ -845,6 +976,354 @@ def _backtest_symbol(args):
             combos_done += 1
         completed_strategies.append('Ichimoku')
 
+    # ── Z-score reversion ──
+    if not test_strategy or test_strategy == 'zscore':
+        for i, (sma_p, z_th, vol_p, sl, tp) in enumerate(
+            product(ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_zscore(
+                df_window, sma_p, z_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'zscore',
+                'param_key': f"sma{sma_p}_z{z_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Zscore')
+
+    # ── Autocorrelation momentum ──
+    if not test_strategy or test_strategy == 'autocorr':
+        for i, (acf_lag, acf_th, vol_p, sl, tp) in enumerate(
+            product(AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_autocorr(
+                df_window, acf_lag, acf_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'autocorr',
+                'param_key': f"lag{acf_lag}_th{acf_th:.2f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Autocorr')
+
+    # ── Hurst regime filter ──
+    if not test_strategy or test_strategy == 'hurst':
+        for i, (win, trend_th, vol_p, sl, tp) in enumerate(
+            product(HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_hurst(
+                df_window, win, trend_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'hurst',
+                'param_key': f"win{win}_th{trend_th:.2f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Hurst')
+
+    # ── Linear Regression Channel ──
+    if not test_strategy or test_strategy == 'lrc':
+        for i, (period, std_th, vol_p, sl, tp) in enumerate(
+            product(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_lrc(
+                df_window, period, std_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'lrc',
+                'param_key': f"per{period}_std{std_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('LRC')
+
+    # ── Percentile reversion ──
+    if not test_strategy or test_strategy == 'percentile':
+        for i, (per, pct_l, pct_h, vol_p, sl, tp) in enumerate(
+            product(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_percentile(
+                df_window, per, pct_l, pct_h, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'percentile',
+                'param_key': f"per{per}_l{pct_l}_h{pct_h}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Percentile')
+
+    # ── Runs Test trend ──
+    if not test_strategy or test_strategy == 'runs':
+        for i, (win, runs_th, vol_p, sl, tp) in enumerate(
+            product(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_runs(
+                df_window, win, runs_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'runs',
+                'param_key': f"win{win}_th{runs_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Runs')
+
+    # ── Cointegration pairs ──
+    if not test_strategy or test_strategy == 'coint':
+        for i, (win, coint_th, beta_p, sl, tp) in enumerate(
+            product(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_coint(
+                df_window, win, coint_th, beta_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'coint',
+                'param_key': f"win{win}_th{coint_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Coint')
+
+    # ── Rolling Sharpe filter ──
+    if not test_strategy or test_strategy == 'sharpe':
+        for i, (win, sharpe_th, vol_p, sl, tp) in enumerate(
+            product(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_sharpe(
+                df_window, win, sharpe_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'sharpe',
+                'param_key': f"win{win}_th{sharpe_th:.2f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Sharpe')
+
+    # ── Skewness extreme ──
+    if not test_strategy or test_strategy == 'skewness':
+        for i, (win, skew_th, vol_p, sl, tp) in enumerate(
+            product(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_skewness(
+                df_window, win, skew_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'skewness',
+                'param_key': f"win{win}_th{skew_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Skewness')
+
+    # ── Bayesian trend update ──
+    if not test_strategy or test_strategy == 'bayesian':
+        for i, (win, bay_th, prior, sl, tp) in enumerate(
+            product(BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_bayesian(
+                df_window, win, bay_th, prior, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'bayesian',
+                'param_key': f"win{win}_th{bay_th:.2f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Bayesian')
+
+    # ── Kurtosis spike ──
+    if not test_strategy or test_strategy == 'kurtosis':
+        for i, (win, kurt_th, vol_p, sl, tp) in enumerate(
+            product(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_kurtosis(
+                df_window, win, kurt_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'kurtosis',
+                'param_key': f"win{win}_th{kurt_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Kurtosis')
+
+    # ── Chi-square distribution ──
+    if not test_strategy or test_strategy == 'chi_square':
+        for i, (win, entry_th, exit_th, vol_p, sl, tp) in enumerate(
+            product(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        ):
+            profit, n_trades, trade_profits = _backtest_chi_square(
+                df_window, win, entry_th, exit_th, vol_p, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'chi_square',
+                'param_key': f"win{win}_e{entry_th:.2f}_x{exit_th:.2f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('ChiSq')
+
     # ── Сохраняем чекпойнт после каждого символа ──
     last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
     save_checkpoint(symbol, results, last_bar_time=last_bar_time)
@@ -862,6 +1341,18 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
                       EMA_FAST_LIST, EMA_SLOW_LIST,
                       RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
                       TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
+                      ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+                      AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+                      HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+                      LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+                      PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+                      RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+                      COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+                      SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+                      SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+                      BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+                      KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+                      CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
                       BACKTEST_DAYS, TOP_N,
                       test_strategy=None, test_mode=False, force_recalc=False):
     """Перебирает все комбинации stoch, parabolic, ma, rf, logreg. Возвращает (top, all).
@@ -899,6 +1390,33 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     ichimoku_per_symbol = (len(TENKAN_LIST) * len(KIJUN_LIST) * len(SENKOU_B_LIST) *
                            len(DISPLACEMENT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
+    # STANDALONE стратегии
+    zscore_per_symbol = (len(ZSCORE_SMA_PERIOD_LIST) * len(ZSCORE_THRESHOLD_LIST) *
+                         len(ZSCORE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    autocorr_per_symbol = (len(AUTOCORR_LAG_LIST) * len(AUTOCORR_THRESHOLD_LIST) *
+                           len(AUTOCORR_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    hurst_per_symbol = (len(HURST_WINDOW_LIST) * len(HURST_TREND_THRESHOLD_LIST) *
+                        len(HURST_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    lrc_per_symbol = (len(LRC_PERIOD_LIST) * len(LRC_STD_THRESHOLD_LIST) *
+                      len(LRC_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    percentile_per_symbol = (len(PCT_PERIOD_LIST) * len(PCT_LOW_LIST) * len(PCT_HIGH_LIST) *
+                             len(PCT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    runs_per_symbol = (len(RUNS_WINDOW_LIST) * len(RUNS_THRESHOLD_LIST) *
+                       len(RUNS_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    coint_per_symbol = (len(COINT_WINDOW_LIST) * len(COINT_THRESHOLD_LIST) *
+                        len(COINT_BETA_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    sharpe_per_symbol = (len(SHARPE_WINDOW_LIST) * len(SHARPE_THRESHOLD_LIST) *
+                         len(SHARPE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    skewness_per_symbol = (len(SKEW_WINDOW_LIST) * len(SKEW_THRESHOLD_LIST) *
+                           len(SKEW_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    bayesian_per_symbol = (len(BAYES_WINDOW_LIST) * len(BAYES_THRESHOLD_LIST) *
+                           len(BAYES_PRIOR_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    kurtosis_per_symbol = (len(KURT_WINDOW_LIST) * len(KURT_THRESHOLD_LIST) *
+                           len(KURT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    chi_square_per_symbol = (len(CHISQ_WINDOW_LIST) * len(CHISQ_ENTRY_LIST) *
+                             len(CHISQ_EXIT_LIST) * len(CHISQ_VOL_PERIOD_LIST) *
+                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+
     # Фильтр по test_strategy
     if test_strategy == 'stoch':
         active_combos = stoch_per_symbol
@@ -922,11 +1440,37 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         active_combos = rsi_div_per_symbol
     elif test_strategy == 'ichimoku':
         active_combos = ichimoku_per_symbol
+    elif test_strategy == 'zscore':
+        active_combos = zscore_per_symbol
+    elif test_strategy == 'autocorr':
+        active_combos = autocorr_per_symbol
+    elif test_strategy == 'hurst':
+        active_combos = hurst_per_symbol
+    elif test_strategy == 'lrc':
+        active_combos = lrc_per_symbol
+    elif test_strategy == 'percentile':
+        active_combos = percentile_per_symbol
+    elif test_strategy == 'runs':
+        active_combos = runs_per_symbol
+    elif test_strategy == 'coint':
+        active_combos = coint_per_symbol
+    elif test_strategy == 'sharpe':
+        active_combos = sharpe_per_symbol
+    elif test_strategy == 'skewness':
+        active_combos = skewness_per_symbol
+    elif test_strategy == 'bayesian':
+        active_combos = bayesian_per_symbol
+    elif test_strategy == 'kurtosis':
+        active_combos = kurtosis_per_symbol
+    elif test_strategy == 'chi_square':
+        active_combos = chi_square_per_symbol
     else:
-        active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol +
-                         logreg_per_symbol + macd_cross_per_symbol +
-                         rsi_rev_per_symbol + bollinger_per_symbol + ema_cross_per_symbol +
-                         rsi_div_per_symbol + ichimoku_per_symbol)
+        active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol +
+                         macd_cross_per_symbol + rsi_rev_per_symbol + bollinger_per_symbol + ema_cross_per_symbol +
+                         rsi_div_per_symbol + ichimoku_per_symbol + zscore_per_symbol + autocorr_per_symbol +
+                         hurst_per_symbol + lrc_per_symbol + percentile_per_symbol + runs_per_symbol +
+                         coint_per_symbol + sharpe_per_symbol + skewness_per_symbol + bayesian_per_symbol +
+                         kurtosis_per_symbol + chi_square_per_symbol)
 
     combos_per_symbol = active_combos
 
@@ -969,8 +1513,7 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
     if force_recalc:
         print(f"\n  ⚡ Принудительный пересчёт — чекпоинты игнорируются")
 
-    # ── Подготовить аргументы для каждого символа ──
-    symbol_args = []
+    # ── Сначала собрать valid_symbols ──
     valid_symbols = []
     for symbol in SYMBOLS:
         # Пропускаем символы с готовыми чекпойнтами
@@ -978,6 +1521,18 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
             continue
         if symbol not in symbol_data:
             continue
+        sd = symbol_data[symbol]
+        df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
+        if len(df_window) < 30:
+            print(f"  ⚠ {symbol}: мало данных ({len(df_window)} баров), пропускаем")
+            continue
+        valid_symbols.append(symbol)
+
+    total_symbols = len(valid_symbols)
+
+    # ── Теперь собрать args с правильным total_symbols ──
+    symbol_args = []
+    for idx, symbol in enumerate(valid_symbols):
         sd = symbol_data[symbol]
         info = sd['info']
         # Извлечь только примитивные поля (SymbolInfo нельзя pickle)
@@ -988,12 +1543,8 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
             'spread': info.spread,
         }
         df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
-        if len(df_window) < 30:
-            print(f"  ⚠ {symbol}: мало данных ({len(df_window)} баров), пропускаем")
-            continue
-        valid_symbols.append(symbol)
         symbol_args.append((
-            len(symbol_args), symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
+            idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
             PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
             LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
             MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
@@ -1002,10 +1553,20 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
             EMA_FAST_LIST, EMA_SLOW_LIST,
             RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
             TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
-            BACKTEST_DAYS, test_strategy, test_mode, len(symbol_args)
+            ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+            AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+            HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+            LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+            PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+            RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+            COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+            SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+            SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+            BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+            KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+            CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+            BACKTEST_DAYS, test_strategy, test_mode, total_symbols
         ))
-
-    total_symbols = len(valid_symbols)
     total_combos = combos_per_symbol * total_symbols
     n_skipped = len(skipped_symbols)
 

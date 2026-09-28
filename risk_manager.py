@@ -350,9 +350,12 @@ def get_stops_levels(symbol):
     if symbol_info is None:
         return {'stops_level': 0, 'freeze_level': 0, 'mode': 'unknown'}
     
+    stops_level = getattr(symbol_info, 'trade_stops_level', 0) or 0
+    freeze_level = getattr(symbol_info, 'trade_freeze_level', 0) or 0
+    
     return {
-        'stops_level': symbol_info.stops_level,
-        'freeze_level': symbol_info.freeze_level,
+        'stops_level': stops_level,
+        'freeze_level': freeze_level,
         'mode': 'hedging' if getattr(symbol_info, 'exchange', False) else 'netting'
     }
 
@@ -374,7 +377,7 @@ def validate_stops(sl_price, tp_price, entry_price, symbol):
         return False, 'symbol_info not found', 0
     
     point = symbol_info.point
-    stops_level = symbol_info.stops_level
+    stops_level = getattr(symbol_info, 'trade_stops_level', 0) or 0
     
     # Минимальное расстояние в пунктах
     min_distance_points = stops_level // point if point > 0 else 10
@@ -518,9 +521,9 @@ def _normalize_volume(lot, info):
     """Округляет лот вниз до шага объёма; None — если вне [volume_min, volume_max]."""
     if info is None:
         return lot
-    step = info.volume_step if info.volume_step > 0 else DEFAULT_LOT
+    step = info.trade_volume_step if info.trade_volume_step > 0 else DEFAULT_LOT
     volume = math.floor(lot / step + 1e-9) * step
-    if volume < info.volume_min - 1e-9 or volume > info.volume_max + 1e-9:
+    if volume < info.trade_volume_min - 1e-9 or volume > info.trade_volume_max + 1e-9:
         return None
     return round(volume, 8)
 

@@ -68,138 +68,175 @@ from strategies.logreg import (
     calc_logreg, backtest as backtest_logreg,
     check_entry as check_entry_logreg, check_exit as check_exit_logreg,
 )
+from strategies.zscore_reversion import (
+    calc_zscore, backtest as backtest_zscore,
+    check_entry as check_entry_zscore, check_exit as check_exit_zscore,
+)
+from strategies.autocorrelation_momentum import (
+    calc_autocorrelation, backtest as backtest_autocorr,
+    check_entry as check_entry_autocorr, check_exit as check_exit_autocorr,
+)
+from strategies.hurst_regime_filter import (
+    calc_hurst, backtest as backtest_hurst,
+    check_entry as check_entry_hurst, check_exit as check_exit_hurst,
+)
+from strategies.linear_regression_channel import (
+    calc_lr_channel, backtest as backtest_lrc,
+    check_entry as check_entry_lrc, check_exit as check_exit_lrc,
+)
+from strategies.percentile_reversion import (
+    calc_percentile, backtest as backtest_percentile,
+    check_entry as check_entry_percentile, check_exit as check_exit_percentile,
+)
+from strategies.runs_test_trend import (
+    calc_runs_test, backtest as backtest_runs,
+    check_entry as check_entry_runs, check_exit as check_exit_runs,
+)
+from strategies.cointegration_pairs import (
+    calc_cointegration, backtest as backtest_coint,
+    check_entry as check_entry_coint, check_exit as check_exit_coint,
+)
+from strategies.rolling_sharpe_filter import (
+    calc_rolling_sharpe, backtest as backtest_sharpe,
+    check_entry as check_entry_sharpe, check_exit as check_exit_sharpe,
+)
+from strategies.skewness_extreme import (
+    calc_skewness, backtest as backtest_skewness,
+    check_entry as check_entry_skewness, check_exit as check_exit_skewness,
+)
+from strategies.bayesian_trend_update import (
+    calc_bayesian_trend, backtest as backtest_bayesian,
+    check_entry as check_entry_bayesian, check_exit as check_exit_bayesian,
+)
+from strategies.kurtosis_spike import (
+    calc_kurtosis, backtest as backtest_kurtosis,
+    check_entry as check_entry_kurtosis, check_exit as check_exit_kurtosis,
+)
+from strategies.chi_square_distribution import (
+    calc_chi_square, backtest as backtest_chi_square,
+    check_entry as check_entry_chi_square, check_exit as check_exit_chi_square,
+)
 from data_loader import (
     symbol_data, load_h1, update_symbol_bar,
     load_journal, save_journal, record_trade,
 )
 
 
-# ═══ АВТОРАСПОЗНАВАНИЕ МАШИНЫ ═══
-tumbler = 0
-
-if tumbler == 0:
-    TEST_HOSTNAMES = ['LAPTOP-JU0TU1UM']
-else:
-    TEST_HOSTNAMES = ['FAKE_LAPTOP']
-
-CURRENT_HOST = socket.gethostname()
-TEST_MODE = any(h.lower() in CURRENT_HOST.lower() for h in TEST_HOSTNAMES)
-
-
 # ═══ КОНФИГУРАЦИЯ ═══
-if TEST_MODE:
-    # –– Быстрая обкатка на рабочем компе ––
-    # ── Тестируем все стратегии с минимальным перебором параметров ──
-    TEST_STRATEGY = None  # все стратегии
 
-    SYMBOLS = ["EURUSDrfd"]
-    K_PERIOD_RANGE  = (7, 28, 21)          # [7, 28]
-    SL_POINTS_RANGE = (300, 700, 400)      # [300, 700]
-    TP_POINTS_RANGE = (300, 700, 400)      # [300, 700]
-    PARABOLIC_STEP_RANGE = (0.02, 0.09, 0.07)  # [0.02, 0.09]
-    PARABOLIC_MAX_RANGE  = (0.2, 0.3, 0.1)     # [0.2, 0.3]
-    MA_PERIOD_RANGE      = (20, 50, 30)      # [20, 50]
-    RF_LOOKBACK_RANGE    = (100, 150, 50)    # [100, 150]
-    RF_NBARS_RANGE       = (3, 6, 3)         # [3, 6]
-    RF_THRESHOLD_RANGE   = (0.55, 0.65, 0.10)  # [0.55, 0.65]
-    LOGREG_LOOKBACK_RANGE = (100, 150, 50)   # [100, 150]
-    LOGREG_NBARS_RANGE    = (12, 18, 6)      # [12, 18]
-    LOGREG_THRESHOLD_RANGE = (0.55, 0.60, 0.05)  # [0.55, 0.60]
 
-    # MACD Cross (только MACD crossover)
-    MACD_CROSS_FAST_RANGE   = (10, 14, 4)
-    MACD_CROSS_SLOW_RANGE   = (24, 28, 4)
-    MACD_CROSS_SIGNAL_RANGE = (7, 11, 4)
 
-    # RSI Reversal (только RSI)
-    RSI_REV_PERIOD_RANGE     = (12, 16, 4)
-    RSI_REV_OVERSOLD_RANGE   = (25, 35, 10)
-    RSI_REV_OVERBOUGHT_RANGE = (65, 75, 10)
+SYMBOLS = ["EURUSDrfd", "GBPUSDrfd", "USDJPYrfd", "USDCHFrfd",
+           "USDCADrfd", "AUDUSDrfd", "NZDUSDrfd"]
+K_PERIOD_RANGE  = (7, 28, 7)
+SL_POINTS_RANGE = (300, 1200, 400)
+TP_POINTS_RANGE = (300, 1200, 400)
+PARABOLIC_STEP_RANGE = (0.02, 0.2, 0.02)
+PARABOLIC_MAX_RANGE  = (0.2, 0.4, 0.05)
+MA_PERIOD_RANGE      = (10, 200, 25)
 
-    # Bollinger (тестовый режим)
-    BB_PERIOD_RANGE = (20, 21, 1)      # [20]
-    BB_STD_RANGE = (2.0, 2.1, 0.1)     # [2.0]
-    VOLUME_PERIOD_RANGE = (20, 21, 1)  # [20]
+RF_LOOKBACK_RANGE = (200, 400, 100)
+RF_NBARS_RANGE = (5, 10, 5)
+RF_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
 
-    # EMA Crossover (тестовый режим)
-    EMA_FAST_RANGE = (9, 10, 1)        # [9]
-    EMA_SLOW_RANGE = (21, 22, 1)       # [21]
+LOGREG_LOOKBACK_RANGE = (200, 400, 100)
+LOGREG_NBARS_RANGE = (6, 12, 6)
+LOGREG_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
 
-    # RSI Divergence (тестовый режим)
-    RSI_DIV_PERIOD_RANGE = (14, 15, 1)     # [14]
-    RSI_DIV_LOOKBACK_RANGE = (5, 6, 1)     # [5]
-    RSI_DIV_THRESHOLD_RANGE = (0.5, 0.6, 0.1)  # [0.5]
+# MACD Cross (только MACD crossover)
+MACD_CROSS_FAST_RANGE   = (10, 14, 2)
+MACD_CROSS_SLOW_RANGE   = (24, 28, 2)
+MACD_CROSS_SIGNAL_RANGE = (7, 11, 2)
 
-    # Ichimoku (тестовый режим)
-    TENKAN_RANGE = (9, 10, 1)          # [9]
-    KIJUN_RANGE = (26, 27, 1)          # [26]
-    SENKOU_B_RANGE = (52, 53, 1)       # [52]
-    DISPLACEMENT_RANGE = (26, 27, 1)   # [26]
+# RSI Reversal (только RSI)
+RSI_REV_PERIOD_RANGE     = (12, 16, 2)
+RSI_REV_OVERSOLD_RANGE   = (25, 35, 5)
+RSI_REV_OVERBOUGHT_RANGE = (65, 75, 5)
 
-    # Risk management для TEST_MODE
-    MAX_TOTAL_POSITIONS = 5
-    MAX_POSITIONS_PER_SYMBOL = 2
-    DAILY_LOSS_LIMIT_PCT = 5.0
-    EQUITY_STOP_PCT = 15.0
-    REALTIME_QUOTA_RECALC = False
-    MIN_SL_DISTANCE_POINTS = 10
-    MAX_SL_DISTANCE_POINTS = 500
+# Bollinger
+BB_PERIOD_RANGE = (15, 25, 5)
+BB_STD_RANGE = (1.5, 2.5, 0.5)
+VOLUME_PERIOD_RANGE = (15, 25, 5)
 
-    BACKTEST_DAYS = 14
-    POLL_INTERVAL = 2
-else:
-    # –– Боевой режим на кладовке ––
-    TEST_STRATEGY = None  # None = все стратегии
+# EMA Crossover
+EMA_FAST_RANGE = (8, 12, 1)
+EMA_SLOW_RANGE = (18, 24, 3)
 
-    SYMBOLS = ["EURUSDrfd", "GBPUSDrfd", "USDJPYrfd", "USDCHFrfd",
-               "USDCADrfd", "AUDUSDrfd", "NZDUSDrfd"]
-    K_PERIOD_RANGE  = (7, 28, 7)
-    SL_POINTS_RANGE = (300, 1200, 400)
-    TP_POINTS_RANGE = (300, 1200, 400)
-    PARABOLIC_STEP_RANGE = (0.02, 0.2, 0.02)
-    PARABOLIC_MAX_RANGE  = (0.2, 0.4, 0.05)
-    MA_PERIOD_RANGE      = (10, 200, 25)
+# RSI Divergence
+RSI_DIV_PERIOD_RANGE = (12, 16, 2)
+RSI_DIV_LOOKBACK_RANGE = (4, 7, 1)
+RSI_DIV_THRESHOLD_RANGE = (0.4, 0.6, 0.1)
 
-    RF_LOOKBACK_RANGE = (200, 400, 100)
-    RF_NBARS_RANGE = (5, 10, 5)
-    RF_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
+# Ichimoku
+TENKAN_RANGE = (7, 12, 4)
+KIJUN_RANGE = (22, 30, 4)
+SENKOU_B_RANGE = (45, 55, 5)
+DISPLACEMENT_RANGE = (22, 30, 4)
 
-    LOGREG_LOOKBACK_RANGE = (200, 400, 100)
-    LOGREG_NBARS_RANGE = (6, 12, 6)
-    LOGREG_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
+# Z-score reversion
+ZSCORE_SMA_PERIOD_RANGE = (20, 50, 10)
+ZSCORE_THRESHOLD_RANGE = (1.5, 2.5, 0.5)
+ZSCORE_VOL_PERIOD_RANGE = (15, 25, 5)
 
-    # MACD Cross (только MACD crossover)
-    MACD_CROSS_FAST_RANGE   = (10, 14, 2)
-    MACD_CROSS_SLOW_RANGE   = (24, 28, 2)
-    MACD_CROSS_SIGNAL_RANGE = (7, 11, 2)
+# Autocorrelation momentum
+AUTOCORR_LAG_RANGE = (1, 5, 2)
+AUTOCORR_THRESHOLD_RANGE = (0.2, 0.4, 0.1)
+AUTOCORR_VOL_PERIOD_RANGE = (15, 25, 5)
 
-    # RSI Reversal (только RSI)
-    RSI_REV_PERIOD_RANGE     = (12, 16, 2)
-    RSI_REV_OVERSOLD_RANGE   = (25, 35, 5)
-    RSI_REV_OVERBOUGHT_RANGE = (65, 75, 5)
+# Hurst regime filter
+HURST_WINDOW_RANGE = (20, 60, 10)
+HURST_TREND_THRESHOLD_RANGE = (0.5, 0.7, 0.1)
+HURST_VOL_PERIOD_RANGE = (20, 50, 10)
 
-    # Bollinger
-    BB_PERIOD_RANGE = (15, 25, 5)
-    BB_STD_RANGE = (1.5, 2.5, 0.5)
-    VOLUME_PERIOD_RANGE = (15, 25, 5)
+# Linear Regression Channel
+LRC_PERIOD_RANGE = (20, 50, 10)
+LRC_STD_THRESHOLD_RANGE = (1.5, 2.5, 0.5)
+LRC_VOL_PERIOD_RANGE = (15, 25, 5)
 
-    # EMA Crossover
-    EMA_FAST_RANGE = (8, 12, 1)
-    EMA_SLOW_RANGE = (18, 24, 3)
+# Percentile reversion
+PCT_PERIOD_RANGE = (20, 50, 10)
+PCT_LOW_RANGE = (3, 8, 2)
+PCT_HIGH_RANGE = (92, 97, 2)
+PCT_VOL_PERIOD_RANGE = (15, 25, 5)
 
-    # RSI Divergence
-    RSI_DIV_PERIOD_RANGE = (12, 16, 2)
-    RSI_DIV_LOOKBACK_RANGE = (4, 7, 1)
-    RSI_DIV_THRESHOLD_RANGE = (0.4, 0.6, 0.1)
+# Runs Test trend
+RUNS_WINDOW_RANGE = (20, 50, 10)
+RUNS_THRESHOLD_RANGE = (1.5, 2.0, 0.2)
+RUNS_VOL_PERIOD_RANGE = (15, 25, 5)
 
-    # Ichimoku
-    TENKAN_RANGE = (7, 12, 4)
-    KIJUN_RANGE = (22, 30, 4)
-    SENKOU_B_RANGE = (45, 55, 5)
-    DISPLACEMENT_RANGE = (22, 30, 4)
+# Cointegration pairs
+COINT_WINDOW_RANGE = (20, 60, 10)
+COINT_THRESHOLD_RANGE = (1.5, 2.5, 0.5)
+COINT_BETA_PEROID_RANGE = (20, 50, 10)
 
-    BACKTEST_DAYS = 30
-    POLL_INTERVAL = 5
+# Rolling Sharpe filter
+SHARPE_WINDOW_RANGE = (20, 60, 10)
+SHARPE_THRESHOLD_RANGE = (0.3, 0.7, 0.1)
+SHARPE_VOL_PERIOD_RANGE = (15, 25, 5)
+
+# Skewness extreme
+SKEW_WINDOW_RANGE = (20, 50, 10)
+SKEW_THRESHOLD_RANGE = (0.8, 1.2, 0.2)
+SKEW_VOL_PERIOD_RANGE = (15, 25, 5)
+
+# Bayesian trend update
+BAYES_WINDOW_RANGE = (20, 50, 10)
+BAYES_THRESHOLD_RANGE = (0.6, 0.7, 0.05)
+BAYES_PRIOR_RANGE = (0.4, 0.6, 0.1)
+
+# Kurtosis spike
+KURT_WINDOW_RANGE = (20, 60, 10)
+KURT_THRESHOLD_RANGE = (3.0, 6.0, 1.0)
+KURT_VOL_PERIOD_RANGE = (15, 25, 5)
+
+# Chi-square distribution
+CHISQ_WINDOW_RANGE = (20, 50, 10)
+CHISQ_ENTRY_RANGE = (0.03, 0.07, 0.02)
+CHISQ_EXIT_RANGE = (0.15, 0.25, 0.05)
+CHISQ_VOL_PERIOD_RANGE = (15, 25, 5)
+
+BACKTEST_DAYS = 30
+POLL_INTERVAL = 5
 
 MAX_RISK_PCT = 0.05
 MIN_LOT = 0.01
@@ -293,6 +330,57 @@ KIJUN_LIST        = int_range(*KIJUN_RANGE)
 SENKOU_B_LIST     = int_range(*SENKOU_B_RANGE)
 DISPLACEMENT_LIST = int_range(*DISPLACEMENT_RANGE)
 
+# STANDALONE стратегии
+ZSCORE_SMA_PERIOD_LIST  = int_range(*ZSCORE_SMA_PERIOD_RANGE)
+ZSCORE_THRESHOLD_LIST   = float_range(*ZSCORE_THRESHOLD_RANGE)
+ZSCORE_VOL_PERIOD_LIST  = int_range(*ZSCORE_VOL_PERIOD_RANGE)
+
+AUTOCORR_LAG_LIST       = int_range(*AUTOCORR_LAG_RANGE)
+AUTOCORR_THRESHOLD_LIST = float_range(*AUTOCORR_THRESHOLD_RANGE)
+AUTOCORR_VOL_PERIOD_LIST = int_range(*AUTOCORR_VOL_PERIOD_RANGE)
+
+HURST_WINDOW_LIST       = int_range(*HURST_WINDOW_RANGE)
+HURST_TREND_THRESHOLD_LIST = float_range(*HURST_TREND_THRESHOLD_RANGE)
+HURST_VOL_PERIOD_LIST   = int_range(*HURST_VOL_PERIOD_RANGE)
+
+LRC_PERIOD_LIST         = int_range(*LRC_PERIOD_RANGE)
+LRC_STD_THRESHOLD_LIST  = float_range(*LRC_STD_THRESHOLD_RANGE)
+LRC_VOL_PERIOD_LIST     = int_range(*LRC_VOL_PERIOD_RANGE)
+
+PCT_PERIOD_LIST         = int_range(*PCT_PERIOD_RANGE)
+PCT_LOW_LIST            = int_range(*PCT_LOW_RANGE)
+PCT_HIGH_LIST           = int_range(*PCT_HIGH_RANGE)
+PCT_VOL_PERIOD_LIST     = int_range(*PCT_VOL_PERIOD_RANGE)
+
+RUNS_WINDOW_LIST        = int_range(*RUNS_WINDOW_RANGE)
+RUNS_THRESHOLD_LIST     = float_range(*RUNS_THRESHOLD_RANGE)
+RUNS_VOL_PERIOD_LIST    = int_range(*RUNS_VOL_PERIOD_RANGE)
+
+COINT_WINDOW_LIST       = int_range(*COINT_WINDOW_RANGE)
+COINT_THRESHOLD_LIST    = float_range(*COINT_THRESHOLD_RANGE)
+COINT_BETA_PERIOD_LIST  = int_range(*COINT_BETA_PEROID_RANGE)
+
+SHARPE_WINDOW_LIST      = int_range(*SHARPE_WINDOW_RANGE)
+SHARPE_THRESHOLD_LIST   = float_range(*SHARPE_THRESHOLD_RANGE)
+SHARPE_VOL_PERIOD_LIST  = int_range(*SHARPE_VOL_PERIOD_RANGE)
+
+SKEW_WINDOW_LIST        = int_range(*SKEW_WINDOW_RANGE)
+SKEW_THRESHOLD_LIST     = float_range(*SKEW_THRESHOLD_RANGE)
+SKEW_VOL_PERIOD_LIST    = int_range(*SKEW_VOL_PERIOD_RANGE)
+
+BAYES_WINDOW_LIST       = int_range(*BAYES_WINDOW_RANGE)
+BAYES_THRESHOLD_LIST    = float_range(*BAYES_THRESHOLD_RANGE)
+BAYES_PRIOR_LIST        = float_range(*BAYES_PRIOR_RANGE)
+
+KURT_WINDOW_LIST        = int_range(*KURT_WINDOW_RANGE)
+KURT_THRESHOLD_LIST     = float_range(*KURT_THRESHOLD_RANGE)
+KURT_VOL_PERIOD_LIST    = int_range(*KURT_VOL_PERIOD_RANGE)
+
+CHISQ_WINDOW_LIST       = int_range(*CHISQ_WINDOW_RANGE)
+CHISQ_ENTRY_LIST        = float_range(*CHISQ_ENTRY_RANGE)
+CHISQ_EXIT_LIST         = float_range(*CHISQ_EXIT_RANGE)
+CHISQ_VOL_PERIOD_LIST   = int_range(*CHISQ_VOL_PERIOD_RANGE)
+
 # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
 def _combo(*args):
     """Произведение длин списков."""
@@ -314,78 +402,26 @@ integration_budgets_dict = {
     'EMA':            _combo(len(EMA_FAST_LIST), len(EMA_SLOW_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
     'RSI-Div':        _combo(len(RSI_DIV_PERIOD_LIST), len(RSI_DIV_LOOKBACK_LIST), len(RSI_DIV_THRESHOLD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
     'Ichimoku':       _combo(len(TENKAN_LIST), len(KIJUN_LIST), len(SENKOU_B_LIST), len(DISPLACEMENT_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Zscore':         _combo(len(ZSCORE_SMA_PERIOD_LIST), len(ZSCORE_THRESHOLD_LIST), len(ZSCORE_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Autocorr':       _combo(len(AUTOCORR_LAG_LIST), len(AUTOCORR_THRESHOLD_LIST), len(AUTOCORR_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Hurst':          _combo(len(HURST_WINDOW_LIST), len(HURST_TREND_THRESHOLD_LIST), len(HURST_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'LRC':            _combo(len(LRC_PERIOD_LIST), len(LRC_STD_THRESHOLD_LIST), len(LRC_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Percentile':     _combo(len(PCT_PERIOD_LIST), len(PCT_LOW_LIST), len(PCT_HIGH_LIST), len(PCT_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Runs':           _combo(len(RUNS_WINDOW_LIST), len(RUNS_THRESHOLD_LIST), len(RUNS_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Coint':          _combo(len(COINT_WINDOW_LIST), len(COINT_THRESHOLD_LIST), len(COINT_BETA_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Sharpe':         _combo(len(SHARPE_WINDOW_LIST), len(SHARPE_THRESHOLD_LIST), len(SHARPE_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Skewness':       _combo(len(SKEW_WINDOW_LIST), len(SKEW_THRESHOLD_LIST), len(SKEW_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Bayesian':       _combo(len(BAYES_WINDOW_LIST), len(BAYES_THRESHOLD_LIST), len(BAYES_PRIOR_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'Kurtosis':       _combo(len(KURT_WINDOW_LIST), len(KURT_THRESHOLD_LIST), len(KURT_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
+    'ChiSq':          _combo(len(CHISQ_WINDOW_LIST), len(CHISQ_ENTRY_LIST), len(CHISQ_EXIT_LIST), len(CHISQ_VOL_PERIOD_LIST), len(SL_POINTS_LIST), len(TP_POINTS_LIST)),
 }
-
-# Проверка бюджета при интеграции (один раз при загрузке main.py)
-budget_results = check_integration_budget(integration_budgets_dict, SYMBOLS)
-
-
-# ── Фильтр стратегий для тестового режима ──
-def filter_params_for_test():
-    """Возвращает только параметры выбранной стратегии, если TEST_STRATEGY задан."""
-    if TEST_STRATEGY is None:
-        return {}
-
-    param_map = {
-        'stoch':  {'K_PERIODS': K_PERIODS, 'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'parabolic': {'PARABOLIC_STEPS': PARABOLIC_STEPS, 'PARABOLIC_MAXS': PARABOLIC_MAXS,
-                      'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'ma':     {'MA_PERIODS': MA_PERIODS, 'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'rf':     {'RF_LOOKBACKS': RF_LOOKBACKS, 'RF_NBARS': RF_NBARS, 'RF_THRESHOLDS': RF_THRESHOLDS,
-                   'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'logreg': {'LOGREG_LOOKBACKS': LOGREG_LOOKBACKS, 'LOGREG_NBARS': LOGREG_NBARS,
-                   'LOGREG_THRESHOLDS': LOGREG_THRESHOLDS,
-                   'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'macd_cross': {'MACD_CROSS_FAST_LIST': MACD_CROSS_FAST_LIST,
-                       'MACD_CROSS_SLOW_LIST': MACD_CROSS_SLOW_LIST,
-                       'MACD_CROSS_SIGNAL_LIST': MACD_CROSS_SIGNAL_LIST,
-                       'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'rsi_rev': {'RSI_REV_PERIOD_LIST': RSI_REV_PERIOD_LIST,
-                    'RSI_REV_OVERSOLD_LIST': RSI_REV_OVERSOLD_LIST,
-                    'RSI_REV_OVERBOUGHT_LIST': RSI_REV_OVERBOUGHT_LIST,
-                    'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'bollinger': {'BB_PERIOD_LIST': BB_PERIOD_LIST, 'BB_STD_LIST': BB_STD_LIST,
-                      'VOLUME_PERIOD_LIST': VOLUME_PERIOD_LIST,
-                      'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'ema_cross': {'EMA_FAST_LIST': EMA_FAST_LIST, 'EMA_SLOW_LIST': EMA_SLOW_LIST,
-                      'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'rsi_div': {'RSI_DIV_PERIOD_LIST': RSI_DIV_PERIOD_LIST,
-                    'RSI_DIV_LOOKBACK_LIST': RSI_DIV_LOOKBACK_LIST,
-                    'RSI_DIV_THRESHOLD_LIST': RSI_DIV_THRESHOLD_LIST,
-                    'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-        'ichimoku': {'TENKAN_LIST': TENKAN_LIST, 'KIJUN_LIST': KIJUN_LIST,
-                     'SENKOU_B_LIST': SENKOU_B_LIST, 'DISPLACEMENT_LIST': DISPLACEMENT_LIST,
-                     'SL_POINTS_LIST': SL_POINTS_LIST, 'TP_POINTS_LIST': TP_POINTS_LIST},
-    }
-    return param_map.get(TEST_STRATEGY, {})
-
-TEST_PARAMS = filter_params_for_test()
-
-
-# ═══ ЗАПРЕТ СДЕЛОК В ТЕСТЕ ═══
-if TEST_MODE:
-    _real_send_order = send_order
-    _real_close_order = close_order
-
-    def send_order(*args, **kwargs):
-        sym = args[0] if args else kwargs.get('symbol', '?')
-        direction = args[1] if len(args) > 1 else kwargs.get('direction', '?')
-        lot = args[2] if len(args) > 2 else kwargs.get('lot', '?')
-        print(f"  [TEST] send_order: {sym} {direction} lot={lot} → НЕТ")
-        return None
-
-    def close_order(*args, **kwargs):
-        ticket = args[0] if args else kwargs.get('ticket', '?')
-        print(f"  [TEST] close_order: ticket={ticket} → НЕТ")
-        return None
 
 
 if __name__ == '__main__':
-    print(f"Хост: {CURRENT_HOST} → режим: {'TEST' if TEST_MODE else 'LIVE'}")
-    if TEST_MODE:
-        print(f"  ⚡ Тестовый режим: все стратегии, минимальный перебор")
-    else:
-        print(f"  Боевой режим: все стратегии, полный перебор")
+    # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
+    budget_results = check_integration_budget(integration_budgets_dict, SYMBOLS)
+
+    print("Боевой режим: все стратегии, полный перебор")
 
     # ═══ ПОДКЛЮЧЕНИЕ ═══
     terminal_on('demo')
@@ -451,9 +487,21 @@ if __name__ == '__main__':
         EMA_FAST_LIST, EMA_SLOW_LIST,
         RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
         TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
+        ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+        AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+        HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+        LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+        PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+        RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+        COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+        SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+        SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+        BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+        KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+        CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
         BACKTEST_DAYS, 9999,
-        test_strategy=TEST_STRATEGY,
-        test_mode=TEST_MODE,
+        test_strategy=None,
+        test_mode=False,
         force_recalc=FORCE_RECALC
     )
 
@@ -535,9 +583,21 @@ if __name__ == '__main__':
                     EMA_FAST_LIST, EMA_SLOW_LIST,
                     RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
                     TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
+                    ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+                    AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+                    HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+                    LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+                    PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+                    RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+                    COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+                    SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+                    SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+                    BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+                    KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+                    CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
                     BACKTEST_DAYS, 9999,
-                    test_strategy=TEST_STRATEGY,
-                    test_mode=TEST_MODE,
+                    test_strategy=None,
+                    test_mode=False,
                     force_recalc=FORCE_RECALC
                 )
 
@@ -699,6 +759,18 @@ if __name__ == '__main__':
                         calc_ema_crossover, check_exit_ema_crossover, check_entry_ema_crossover,
                         calc_rsi_divergence, check_exit_rsi_divergence, check_entry_rsi_divergence,
                         calc_ichimoku, check_exit_ichimoku, check_entry_ichimoku,
+                        calc_zscore, check_exit_zscore, check_entry_zscore,
+                        calc_autocorrelation, check_exit_autocorr, check_entry_autocorr,
+                        calc_hurst, check_exit_hurst, check_entry_hurst,
+                        calc_lr_channel, check_exit_lrc, check_entry_lrc,
+                        calc_percentile, check_exit_percentile, check_entry_percentile,
+                        calc_runs_test, check_exit_runs, check_entry_runs,
+                        calc_cointegration, check_exit_coint, check_entry_coint,
+                        calc_rolling_sharpe, check_exit_sharpe, check_entry_sharpe,
+                        calc_skewness, check_exit_skewness, check_entry_skewness,
+                        calc_bayesian_trend, check_exit_bayesian, check_entry_bayesian,
+                        calc_kurtosis, check_exit_kurtosis, check_entry_kurtosis,
+                        calc_chi_square, check_exit_chi_square, check_entry_chi_square,
                         risk_params=risk_params,
                         position_limits=position_limits,
                     )

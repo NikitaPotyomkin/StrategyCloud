@@ -688,6 +688,18 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          check_entry_rsi_divergence_fn=None,
                          calc_ichimoku_fn=None, check_exit_ichimoku_fn=None,
                          check_entry_ichimoku_fn=None,
+                         calc_zscore_fn=None, check_exit_zscore_fn=None, check_entry_zscore_fn=None,
+                         calc_autocorrelation_fn=None, check_exit_autocorr_fn=None, check_entry_autocorr_fn=None,
+                         calc_hurst_fn=None, check_exit_hurst_fn=None, check_entry_hurst_fn=None,
+                         calc_lr_channel_fn=None, check_exit_lrc_fn=None, check_entry_lrc_fn=None,
+                         calc_percentile_fn=None, check_exit_percentile_fn=None, check_entry_percentile_fn=None,
+                         calc_runs_test_fn=None, check_exit_runs_fn=None, check_entry_runs_fn=None,
+                         calc_cointegration_fn=None, check_exit_coint_fn=None, check_entry_coint_fn=None,
+                         calc_rolling_sharpe_fn=None, check_exit_sharpe_fn=None, check_entry_sharpe_fn=None,
+                         calc_skewness_fn=None, check_exit_skewness_fn=None, check_entry_skewness_fn=None,
+                         calc_bayesian_trend_fn=None, check_exit_bayesian_fn=None, check_entry_bayesian_fn=None,
+                         calc_kurtosis_fn=None, check_exit_kurtosis_fn=None, check_entry_kurtosis_fn=None,
+                         calc_chi_square_fn=None, check_exit_chi_square_fn=None, check_entry_chi_square_fn=None,
                          risk_params=None, position_limits=None):
     """Проверяет сигналы для активных стратегий на закрытом баре.
     
