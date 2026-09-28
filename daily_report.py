@@ -16,6 +16,7 @@
 import os
 import csv
 import datetime
+import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
 
@@ -381,3 +382,127 @@ def generate_missing_reports(start_date, end_date):
         print(f"  ✅ Нет пропущенных отчётов")
     
     return generated
+
+
+def get_dashboard_data(days_back=30):
+    """Единственная точка входа для дэшборда — собирает все данные из MT5.
+
+    Args:
+        days_back: сколько дней истории сделок загружать.
+
+    Returns:
+        dict с ключами:
+        - 'balance': float — текущий баланс
+        - 'equity': float — текущая equity
+        - 'quota': float — квота риска (balance * 0.05)
+        - 'updated': str — время обновления (ISO format)
+        - 'trades_df': DataFrame — все сделки за период
+        - 'active_strategies': list — активные стратегии с позициями
+        - 'total_trades': int — кол-во сделок за период
+        - 'total_profit': float — суммарный PnL за период
+    """
+    # 1. Подключение к MT5
+    mt5.shutdown()
+    if not mt5.initialize():
+        print(f"  ⚠️  MT5 init failed: {mt5.last_error()}")
+        return None
+
+    try:
+        # 2. Баланс и equity
+        acc = mt5.account_info()
+        if acc is None:
+            print("  ⚠️  Не удалось получить информацию о счёте")
+            return None
+
+        balance = acc.balance
+        equity = acc.equity
+        quota = balance * 0.05  # MAX_RISK_PCT = 0.05
+
+        # 3. История сделок
+        date_to = datetime.datetime.now()
+        date_from = date_to - datetime.timedelta(days=days_back)
+
+        deals = mt5.history_deals_get(date_from, date_to)
+        if deals is None or len(deals) == 0:
+            trades_df = pd.DataFrame()
+        else:
+            trades_df = pd.DataFrame([d._asdict() for d in deals])
+
+
+
+
+
+            # Фильтр: только торговые сделки
+            type_map = {
+                mt5.DEAL_TYPE_BUY: 'buy',
+                mt5.DEAL_TYPE_SELL: 'sell',
+            }
+            trades_df['type'] = trades_df['type'].map(type_map)
+            trades_df = trades_df[trades_df['type'].isin(['buy', 'sell'])]
+
+            # Исключаем балансовые операции
+            trades_df = trades_df[trades_df['entry'] != mt5.DEAL_ENTRY_OUT_BY]
+
+            # PnL нетто
+            trades_df['profit_net'] = trades_df['profit'] + trades_df['commission'] + trades_df['swap']
+
+            # Timestamp
+            trades_df['timestamp'] = pd.to_datetime(trades_df['time'], unit='s')
+
+            # Сортировка
+            trades_df = trades_df.sort_values('timestamp').reset_index(drop=True)
+
+        # 4. Активные стратегии (из реестра + текущие позиции)
+        registry = _load_registry()
+        positions = mt5.positions_get()
+
+        active_strategies = []
+        if positions:
+            for pos in positions:
+                magic = pos.magic
+                record = registry.get(magic)
+
+                if record:
+                    stype = record['type']
+                    param_key = record['param_key']
+                    parabolic_max = record.get('parabolic_max', '')
+                else:
+                    stype = 'unknown'
+                    param_key = '-'
+                    parabolic_max = ''
+
+                active_strategies.append({
+                    'symbol': pos.symbol,
+                    'type': stype,
+                    'param_key': param_key,
+                    'parabolic_max': parabolic_max if parabolic_max else None,
+                    'magic': magic,
+                    'has_position': True,
+                    'lot': pos.volume,
+                    'entry_price': pos.price_open,
+                    'sl_points': None,
+                    'tp_points': None,
+                    'score': 0,
+                    'profit': 0,
+                    'profit_factor': 0,
+                    'win_rate': 0,
+                    'n_trades': 0,
+                })
+
+        # 5. Итоги
+        total_trades = len(trades_df)
+        total_profit = float(trades_df['profit_net'].sum()) if not trades_df.empty else 0.0
+
+        return {
+            'balance': balance,
+            'equity': equity,
+            'quota': quota,
+            'updated': datetime.datetime.now().isoformat(),
+            'trades_df': trades_df,
+            'active_strategies': active_strategies,
+            'total_trades': total_trades,
+            'total_profit': total_profit,
+        }
+
+    finally:
+        mt5.shutdown()

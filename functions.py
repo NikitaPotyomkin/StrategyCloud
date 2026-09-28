@@ -195,7 +195,7 @@ def _backtest_lrc(df, period, std_threshold, vol_period, sl_points, tp_points,
     """Backtest для Linear Regression Channel."""
     from strategies.linear_regression_channel import backtest as backtest_lrc
     return backtest_lrc(df, period, std_threshold, sl_points, tp_points, point,
-                        tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                        tick_value, tick_size, sim_lot=0.01,
                         spread_points=spread_points)
 
 
@@ -204,7 +204,7 @@ def _backtest_percentile(df, period, pct_low, pct_high, vol_period, sl_points, t
     """Backtest для Percentile reversion."""
     from strategies.percentile_reversion import backtest as backtest_percentile
     return backtest_percentile(df, period, pct_low, pct_high, sl_points, tp_points, point,
-                               tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                               tick_value, tick_size, sim_lot=0.01,
                                spread_points=spread_points)
 
 
@@ -213,7 +213,7 @@ def _backtest_runs(df, window, threshold, vol_period, sl_points, tp_points,
     """Backtest для Runs Test trend."""
     from strategies.runs_test_trend import backtest as backtest_runs
     return backtest_runs(df, window, threshold, sl_points, tp_points, point,
-                         tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                         tick_value, tick_size, sim_lot=0.01,
                          spread_points=spread_points)
 
 
@@ -221,8 +221,8 @@ def _backtest_coint(df, window, threshold, beta_period, sl_points, tp_points,
                     point, tick_value, tick_size, spread_points=0):
     """Backtest для Cointegration pairs."""
     from strategies.cointegration_pairs import backtest as backtest_coint
-    return backtest_coint(df, window, threshold, sl_points, tp_points, point,
-                          tick_value, tick_size, beta_period=beta_period, sim_lot=0.01,
+    return backtest_coint(df, window, threshold, 0.0, sl_points, tp_points, point,
+                          tick_value, tick_size, sim_lot=0.01,
                           spread_points=spread_points)
 
 
@@ -231,7 +231,7 @@ def _backtest_sharpe(df, window, threshold, vol_period, sl_points, tp_points,
     """Backtest для Rolling Sharpe filter."""
     from strategies.rolling_sharpe_filter import backtest as backtest_sharpe
     return backtest_sharpe(df, window, threshold, sl_points, tp_points, point,
-                           tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                           tick_value, tick_size, sim_lot=0.01,
                            spread_points=spread_points)
 
 
@@ -240,7 +240,7 @@ def _backtest_skewness(df, window, threshold, vol_period, sl_points, tp_points,
     """Backtest для Skewness extreme."""
     from strategies.skewness_extreme import backtest as backtest_skewness
     return backtest_skewness(df, window, threshold, sl_points, tp_points, point,
-                             tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                             tick_value, tick_size, sim_lot=0.01,
                              spread_points=spread_points)
 
 
@@ -257,7 +257,7 @@ def _backtest_kurtosis(df, window, threshold, vol_period, sl_points, tp_points,
     """Backtest для Kurtosis spike."""
     from strategies.kurtosis_spike import backtest as backtest_kurtosis
     return backtest_kurtosis(df, window, threshold, sl_points, tp_points, point,
-                             tick_value, tick_size, vol_period=vol_period, sim_lot=0.01,
+                             tick_value, tick_size, sim_lot=0.01,
                              spread_points=spread_points)
 
 
@@ -266,7 +266,7 @@ def _backtest_chi_square(df, window, entry_threshold, exit_threshold, vol_period
     """Backtest для Chi-square distribution."""
     from strategies.chi_square_distribution import backtest as backtest_chi_square
     return backtest_chi_square(df, window, entry_threshold, exit_threshold, sl_points,
-                               tp_points, point, tick_value, tick_size, vol_period=vol_period,
+                               tp_points, point, tick_value, tick_size,
                                sim_lot=0.01, spread_points=spread_points)
 
 
@@ -1599,6 +1599,34 @@ def run_full_backtest(SYMBOLS, symbol_data, K_PERIODS, SL_POINTS_LIST, TP_POINTS
         strategies_to_run.append(f"RSI-Div: {rsi_div_per_symbol} комб.")
     if not test_strategy or test_strategy == 'ichimoku':
         strategies_to_run.append(f"Ichimoku: {ichimoku_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'macd_cross':
+        strategies_to_run.append(f"MACD-Cross: {macd_cross_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'rsi_rev':
+        strategies_to_run.append(f"RSI-Rev: {rsi_rev_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'zscore':
+        strategies_to_run.append(f"Zscore: {zscore_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'autocorr':
+        strategies_to_run.append(f"Autocorr: {autocorr_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'hurst':
+        strategies_to_run.append(f"Hurst: {hurst_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'lrc':
+        strategies_to_run.append(f"LRC: {lrc_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'percentile':
+        strategies_to_run.append(f"Percentile: {percentile_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'runs':
+        strategies_to_run.append(f"Runs: {runs_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'coint':
+        strategies_to_run.append(f"Coint: {coint_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'sharpe':
+        strategies_to_run.append(f"Sharpe: {sharpe_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'skewness':
+        strategies_to_run.append(f"Skewness: {skewness_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'bayesian':
+        strategies_to_run.append(f"Bayesian: {bayesian_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'kurtosis':
+        strategies_to_run.append(f"Kurtosis: {kurtosis_per_symbol} комб.")
+    if not test_strategy or test_strategy == 'chi_square':
+        strategies_to_run.append(f"ChiSq: {chi_square_per_symbol} комб.")
 
     print("  Стратегии на 1 символ:")
     for s in strategies_to_run:
