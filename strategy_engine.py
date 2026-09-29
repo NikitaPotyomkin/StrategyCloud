@@ -706,10 +706,10 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
             print(f"  -> Ордер не прошёл: {result.retcode}, {result.comment}")
             return None
     # Для последующих positions_get/закрытий нужен именно тикет позиции.
-    ticket = result.position if result.position else result.order
+    ticket = result.order
     if not ticket:
         print(f"  -> [WARN] {symbol}: ордер выполнен, но тикет не получен "
-              f"(position={result.position}, order={result.order}) — стратегия не зафиксирована", flush=True)
+              f"(position={result.order}, order={result.order}) — стратегия не зафиксирована", flush=True)
         return None
     print(f"  -> {direction.upper()} {symbol}: ticket={ticket}, "
           f"price={price:.{digits}f}, lot={lot:.2f}, comment={comment}")
