@@ -53,7 +53,7 @@ def check_integration_budget(budgets, SYMBOLS):
             status = " 🔴 ПРЕРЫВАНИЕ"
         elif budget > limit * 0.8:
             status = " 🟡 близко"
-        print(f"  {name:<15} {budget:>8,} / {limit:>8,} ({pct:5.1f}%){status}")
+        print(f"{name:<14} | {budget:>8,} | {pct:>5.1f}% | {status}")
 
     print(f"{'─' * 70}")
     print(f"  ИТОГО: {total:>8,} комб./символ | {total_all_symbols:>10,} комб. ({n_symbols} символов)")
@@ -402,7 +402,7 @@ def validate_stops(sl_price, tp_price, entry_price, symbol):
     stops_level = getattr(symbol_info, 'trade_stops_level', 0) or 0
     
     # Минимальное расстояние в пунктах
-    min_distance_points = stops_level // point if point > 0 else 10
+    min_distance_points = stops_level
     
     # Проверка для BUY позиции
     if sl_price < entry_price:  # BUY SL ниже

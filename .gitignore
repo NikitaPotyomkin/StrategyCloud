@@ -16,6 +16,7 @@ __pycache__/
 *.pyd
 .Python
 .txt
+checkpoints/
 
 # --- IDE (PyCharm) ---
 .idea/
@@ -28,7 +29,6 @@ __pycache__/
 # --- Любые логи (на будущее) ---
 *.log
 logs/
-checkpoints/
 gigacode_replies.md
 gigacode_tasks.md
 refactoring.txt

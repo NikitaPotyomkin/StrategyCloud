@@ -41,8 +41,6 @@ def strategy_key(symbol, param, stype='stoch', extra=None):
         # Для новых стратегий param — это строка вида "mf12_ms26_rsi14"
         return f"{symbol}_{stype}_{param}"
     return f"{symbol}_{stype}_K{param}"
-
-
 def make_magic(symbol, stype, param, extra=None):
     """Детерминированный magic-номер на основе параметров стратегии."""
     raw = f"{symbol}_{stype}_{param}_{extra}"
@@ -50,8 +48,6 @@ def make_magic(symbol, stype, param, extra=None):
     for ch in raw:
         h = (h * 31 + ord(ch)) & 0xFFFFFFFF
     return 770000 + (h % 100000)
-
-
 def _short_name(r):
     pair = get_non_usd(r['symbol'])
     stype = r.get('type', 'stoch')
@@ -127,9 +123,6 @@ def deduplicate_results(results, min_trades=10, min_score=1.0):
 
     return selected
 
-
-
-
 # ═══ РАНИРОВАНИЕ И ДЭШБОРД ═══
 def write_ranking(top_strats, all_results, JOURNAL_DIR, BACKTEST_DAYS, TOP_N, LOT_PER_STRATEGY):
     # --- CSV ---
@@ -201,8 +194,6 @@ def write_ranking(top_strats, all_results, JOURNAL_DIR, BACKTEST_DAYS, TOP_N, LO
 
     with open(txt_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
-
-
 def write_active_state(active, active_strategies, balance, max_risk_pct, journal_dir):
     """Сохраняет текущее состояние активных стратегий для Streamlit-дэшборда."""
     state = {
@@ -243,8 +234,6 @@ def _registry_path():
     """Путь к файлу реестра стратегий."""
     base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, 'journals', 'strategy_registry.csv')
-
-
 def _ensure_registry():
     """Создать файл реестра с заголовком, если не существует."""
     path = _registry_path()
@@ -254,8 +243,6 @@ def _ensure_registry():
             writer = csv.writer(f)
             writer.writerow(['magic', 'symbol', 'type', 'param_key', 'parabolic_max',
                              'activated_at', 'deactivated_at', 'conflict'])
-
-
 def _register_strategy(magic, symbol, stype, param_key, parabolic_max, activated_at):
     """Добавить/обновить запись в реестре."""
     path = _registry_path()
@@ -282,8 +269,6 @@ def _register_strategy(magic, symbol, stype, param_key, parabolic_max, activated
             writer.writerow([magic, symbol, stype, param_key,
                              f"{parabolic_max:.2f}" if parabolic_max is not None else '',
                              activated_at, '', 0])
-
-
 def _deregister_strategy(magic, symbol, deactivated_at):
     """Пометить стратегию как деактивированную."""
     path = _registry_path()
@@ -544,14 +529,12 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                 _register_strategy(magic, r['symbol'], stype, param, extra, now.isoformat())
             except Exception as reg_exc:
                 print(f"  -> [WARN] Реестр: ошибка записи: {reg_exc!r}", flush=True)
-            print(f"  -> [{key}] Добавлен в топ-{TOP_N}, lot={strat_dict['lot']}")
 
     # Проверяем реальные позиции (могли закрыться по SL/TP у брокера)
     for key, s in active_strategies.items():
         if s['position'] is not None and not mt5.positions_get(ticket=s['position']['ticket']):
             _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
                                   _record_close, record_trade_fn)
-
 
 # ═══ РАБОТА С ОРДЕРАМИ И ПОЗИЦИЯМИ ═══
 
@@ -570,8 +553,6 @@ def get_deal_exit_price(ticket, since=None):
             if d.position_id == ticket and d.entry == mt5.DEAL_ENTRY_OUT:
                 return d.price
     return None
-
-
 def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
                   journal_df=None, JOURNAL_FILE=None):
     """Общая логика записи закрытия сделки в журнал. Возвращает profit."""
@@ -591,8 +572,6 @@ def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
     print(f"  -> [{key}] Закрыт ({reason}): profit={profit:.2f}")
     s['position'] = None
     return profit
-
-
 def _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
                           _record_close_fn, record_trade_fn):
     """Если позиции уже нет на брокере (SL/TP) — фиксируем закрытие.
@@ -610,8 +589,6 @@ def _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
         exit_price = tick.bid if s['position']['direction'] == 'long' else tick.ask
     _record_close_fn(key, s, now, exit_price, 'SL/TP', symbol_data, record_trade_fn)
     return True
-
-
 def check_account_mode():
     """True — счёт hedging.
 
@@ -628,8 +605,6 @@ def check_account_mode():
         print(f"  [WARN] Счёт {getattr(acc, 'login', '?')} (сервер {getattr(acc, 'server', '?')}) "
               f"НЕ hedging: несколько стратегий на одном символе будут сливаться!")
     return ok
-
-
 def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
                risk_params=None):
     """Отправить ордер с расширенной проверкой риск-менеджмента.
@@ -647,7 +622,7 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
     check_margin = risk_params.get('check_margin', True)
     check_stops = risk_params.get('check_stops', True)
     min_sl_dist = risk_params.get('min_sl_distance_points', 10)
-    max_sl_dist = risk_params.get('max_sl_distance_points', 500)
+    max_sl_dist = risk_params.get('max_sl_distance_points', 5000)
     
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
@@ -683,10 +658,10 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         entry_price = tick.ask if direction == 'long' else tick.bid
         sl_distance_points = abs(entry_price - sl) / info.point if info else 0
         if sl_distance_points < min_sl_dist:
-            print(f"  -> [WARN] {symbol}: SL слишком близко ({sl_distance_points:.0f} < {min_sl_dist} пуктов) — ордер пропущен")
+            print(f"  -> [WARN] {symbol}: SL слишком близко ({sl_distance_points:.0f} < {min_sl_dist} пунктов) — ордер пропущен")
             return None
         if sl_distance_points > max_sl_dist:
-            print(f"  -> [WARN] {symbol}: SL слишком далеко ({sl_distance_points:.0f} > {max_sl_dist} пуктов) — ордер пропущен")
+            print(f"  -> [WARN] {symbol}: SL слишком далеко ({sl_distance_points:.0f} > {max_sl_dist} пунктов) — ордер пропущен")
             return None
     
     # Один раз на символ предупреждаем про netting-счёт
@@ -739,8 +714,6 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
     print(f"  -> {direction.upper()} {symbol}: ticket={ticket}, "
           f"price={price:.{digits}f}, lot={lot:.2f}, comment={comment}")
     return ticket
-
-
 def close_order(symbol, ticket, direction, magic, symbol_data):
     pos_info = mt5.positions_get(ticket=ticket)
     if not pos_info:

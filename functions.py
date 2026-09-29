@@ -321,7 +321,7 @@ def terminal_on(acc):
     while i < limit:
         try:
             creds = accounts_credentials[acc]
-            print(f'Попытка подключения: {creds}')
+            print(f'Попытка подключения: {accounts_credentials['demo'][0]}')
         except KeyError:
             print('Указанный счет не найден!')
             return
@@ -1389,7 +1389,7 @@ def _backtest_symbol(args):
 
 def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                       test_strategy=None, test_mode=False, force_recalc=False,
-                      incremental=False, is_night_run=False):
+                      incremental=False, is_night_run=True):
     """Перебирает все комбинации стратегий. Возвращает (top, all_results).
 
     TOP_N — максимальное число стратегий на ОДНУ валюту.
@@ -1618,18 +1618,27 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     today = now.date()
 
-    # Ночной пересчёт считается валидным, если он стартовал сегодня между 00:00 и 04:00
-    night_reset_valid = (
-        last_night_reset is not None
-        and last_night_reset.date() == today
-        and NIGHT_WINDOW_START <= last_night_reset.hour < NIGHT_WINDOW_END
-    )
 
-    # force_full_recalc: ночной прогон всегда полный, иначе — по night_reset
+    # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
+    now = datetime.datetime.now()
+    night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
+
+    last_night_reset = None
+    if os.path.exists(night_reset_path):
+        try:
+            with open(night_reset_path, 'r', encoding='utf-8') as f:
+                night_data = json.load(f)
+            last_night_reset = datetime.datetime.fromisoformat(night_data.get('timestamp', ''))
+        except (json.JSONDecodeError, ValueError, OSError):
+            last_night_reset = None
+
+    # Ночной прогон или force_recalc — всегда полный пересчёт.
+    # Иначе: есть night_reset.json — используем чекпоинты, пересчёт не нужен.
+    # Нет night_reset.json — первый запуск, полный пересчёт.
     if is_night_run or force_recalc:
         force_full_recalc = True
     else:
-        force_full_recalc = not night_reset_valid
+        force_full_recalc = last_night_reset is None
 
     # ═══ МАРКЕР СТАРТА НОЧНОГО ПРОГОНА ═══
     # Пишем сразу, чтобы даже при падении night_reset.json фиксирует факт запуска
@@ -1683,16 +1692,19 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
         cached_fams = cached_families or {}
 
-        # Новые семейства: есть в текущем family_fp, но нет в кэше
-        missing_families = [f for f in family_fp if f not in cached_fams]
-
-        # Изменённые семейства: fingerprint не совпадает
-        changed_families = [
-            f for f, fp in family_fp.items()
-            if cached_fams.get(f) != fp and f in cached_fams
-        ]
-
-        recalc_set = set(missing_families + changed_families)
+        if cached_fams:
+            cached_fams = {
+                k: tuple(tuple(x) for x in v) if isinstance(v, list) else v
+                for k, v in cached_fams.items()
+            }
+            missing_families = [f for f in family_fp if f not in cached_fams]
+            changed_families = [
+                f for f, fp in family_fp.items()
+                if f in cached_fams and cached_fams.get(f) != fp
+            ]
+            recalc_set = set(missing_families + changed_families)
+        else:
+            recalc_set = set()
 
         if cached_bar_time == current_bar_time:
             # Данные не изменились с ночного пересчёта
@@ -1714,26 +1726,39 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 # Конфиг изменился + данные изменились — частичный пересчёт
                 partial_recalc[symbol] = (cached, recalc_set)
 
-    # ── Вывод статуса чекпойнтов ──
-    if skipped_symbols:
-        print(f"\n  📦 Загружено из чекпойнтов {len(skipped_symbols)} символов:")
-        for sym, n in skipped_symbols.items():
-            print(f"    {sym}: {n} результатов")
-
-    if reuse_stale:
-        print(f"\n  🔁 Из ночных чекпойнтов (конфиг не менялся): {len(reuse_stale)} символов")
-        for sym in reuse_stale:
-            print(f"    {sym}: {skipped_symbols.get(sym, 0)} результатов")
-
-    if partial_recalc:
-        print(f"\n  🔄 Частичный пересчёт (новые/изменённые семейства):")
-        for sym, (_cached, recalc_set) in partial_recalc.items():
-            print(f"    {sym}: считаем {', '.join(sorted(recalc_set))}")
+    # ── Вывод статуса чекпойнтов (компактный) ──
+    actions_summary = []
 
     if force_recalc and not is_night_run:
-        print(f"\n  ⚡ Принудительный пересчёт — чекпойнты игнорируются")
+        actions_summary.append("⚡ Принудительный пересчёт — чекпойнты игнорируются")
+
     if not force_full_recalc and not existing_checkpoints:
-        print(f"  ℹ Чекпойнтов нет — будет полный пересчёт")
+        actions_summary.append("ℹ Чекпойнтов нет — будет полный пересчёт")
+
+    if partial_recalc:
+        count = len(partial_recalc)
+        actions_summary.append(f"🔄 Частичный пересчёт: {count} символа(ов) с изменёнными семействами")
+        # Если хочешь видеть детали только когда их мало (например, ≤3), иначе — тишина
+        if count <= 3:
+            for sym, (_, recalc_set) in partial_recalc.items():
+                actions_summary.append(f"   • {sym}: {', '.join(sorted(recalc_set))}")
+
+    if skipped_symbols and not partial_recalc:
+        # Только если всё из кэша и ничего не пересчитываем
+        total_results = sum(skipped_symbols.values())
+        actions_summary.append(
+            f"📦 Кэш валиден: {len(skipped_symbols)} символов, {total_results:,} результатов (пересчёт не нужен)"
+        )
+
+    # Вывод: либо список действий, либо тишина (если всё ок и без шума)
+    if actions_summary:
+        print()
+        for line in actions_summary:
+            print(line)
+    else:
+        # Опционально: если вообще ничего не печатаем — можно дать одну нейтральную строку
+        # print("✅ Чекпойнты валидны, пересчёт не требуется")
+        pass
 
     # ── Сбор valid_symbols ──
     valid_symbols = []
@@ -1799,7 +1824,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     print(f"\n{'═' * 60}")
     if n_skipped > 0:
         print(f"  БЭКТЕСТ | {total_symbols} символов × {combos_per_symbol} комб. = {total_combos} всего")
-        print(f"  ⏭ Пропущено (чекпойнт): {n_skipped} символов")
+        print(f"  ⏭ Пропущено расчетов после загрузки чекпойнтов: {n_skipped} символов")
     else:
         print(f"  БЭКТЕСТ | {total_symbols} символов × {combos_per_symbol} комб. = {total_combos} всего")
     print(f"{'═' * 60}")
@@ -1899,7 +1924,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 for strat_name in strats:
                     print(f"    {symbol_done} | {strat_name} ✓")
     else:
-        print(f"\n  Последовательный режим: {total_symbols} символов\n")
+        print(f"\n  На пересчет пойдет: {total_symbols} символов\n")
         for args in symbol_args:
             item = _run_symbol_safe(args)
             results_list.append(item)
@@ -1939,7 +1964,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     total_elapsed = time.time() - global_start
     print(f"\n{'─' * 60}")
-    print(f"  Всего результатов: {len(all_results)}")
+    print(f"  Всего посчитанных комбинаций из кэша или заново: {len(all_results)}")
     print(f"  ⏱  Бэктест завершён за {total_elapsed:.0f}с ({total_elapsed / 60:.1f} мин)")
 
     # ── Дедупликация и сортировка ──

@@ -4,12 +4,19 @@ import os
 import csv
 import time
 import socket
+import json
 import warnings
+from collections import defaultdict
+
 warnings.filterwarnings('ignore')
 
-from functions import terminal_on, run_full_backtest
+from functions import terminal_on, run_full_backtest, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports
-from risk_manager import calc_metrics, composite_score, distribute_lots, check_integration_budget, MAX_COMBOS_PER_STRATEGY
+from risk_manager import (
+    calc_metrics, composite_score, distribute_lots, check_integration_budget,
+    check_daily_loss_limit, check_equity_stop, realtime_quota_recalc,
+    MAX_COMBOS_PER_STRATEGY,
+)
 from strategy_engine import (
     write_ranking, sync_active_strategies, check_active_signals,
     send_order, close_order, get_deal_exit_price,
@@ -30,7 +37,6 @@ from strategies.moving_average import (
     calc_moving_average, backtest as backtest_ma,
     check_entry as check_entry_ma, check_exit as check_exit_ma,
 )
-
 from strategies.macd_cross import (
     calc_macd_cross, backtest_macd_cross,
     check_entry as check_entry_macd_cross, check_exit as check_exit_macd_cross,
@@ -127,7 +133,27 @@ COLUMNS = ['symbol', 'param_key', 'sl_points', 'tp_points',
            'exit_reason', 'ticket']
 
 
+# ═══ Утилита: запись night_reset.json (первый прогон + каждый ночной перерасчёт) ═══
+def _write_night_reset(night_reset_path, start_time, symbols_count, results_count, ts=None):
+    """Записывает night_reset.json — и при первом прогоне, и каждую ночь."""
+    if ts is None:
+        ts = datetime.now()
+    fake_timestamp = ts.replace(hour=3, minute=0, second=0, microsecond=0)
+    with open(night_reset_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'started_at': start_time.isoformat(),
+            'timestamp': fake_timestamp.isoformat(),
+            'status': 'completed',
+            'symbols': symbols_count,
+            'total_results': results_count,
+        }, f, ensure_ascii=False, indent=2)
+    print(f"\n  ✅ night_reset.json записан (03:00) — старт: {start_time}")
+
+
 if __name__ == '__main__':
+    start_time = datetime.now()
+    print(f"🚀 ЗАПУСК СИСТЕМЫ: {start_time.strftime('%H:%M:%S')}")
+
     # ═══ КОНФИГУРАЦИЯ (единый источник — config.py) ═══
     from config import build_default_configs
     app = build_default_configs()
@@ -135,9 +161,8 @@ if __name__ == '__main__':
     bt_cfg = app.backtest_config
     risk_cfg = app.risk_params
 
-    # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ (из strategy_params — единый источник config.py) ═══
+    # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
     def _combo(*args):
-        """Произведение длин списков."""
         result = 1
         for a in args:
             result *= a
@@ -159,15 +184,15 @@ if __name__ == '__main__':
         'Zscore':         _combo(len(sp.zscore_sma_period_list), len(sp.zscore_threshold_list), len(sp.zscore_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
         'Autocorr':       _combo(len(sp.autocorr_lag_list), len(sp.autocorr_threshold_list), len(sp.autocorr_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
         'Hurst':          _combo(len(sp.hurst_window_list), len(sp.hurst_trend_threshold_list), len(sp.hurst_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'LRC':            _combo(len(sp.lrc_period_list), len(sp.lrc_std_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Percentile':     _combo(len(sp.pct_period_list), len(sp.pct_low_list), len(sp.pct_high_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Runs':           _combo(len(sp.runs_window_list), len(sp.runs_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Coint':          _combo(len(sp.coint_window_list), len(sp.coint_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Sharpe':         _combo(len(sp.sharpe_window_list), len(sp.sharpe_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Skewness':       _combo(len(sp.skew_window_list), len(sp.skew_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'LRC':            _combo(len(sp.lrc_period_list), len(sp.lrc_std_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Percentile':     _combo(len(sp.pct_period_list), len(sp.pct_low_list), len(sp.pct_high_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Runs':           _combo(len(sp.runs_window_list), len(sp.runs_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Coint':          _combo(len(sp.coint_window_list), len(sp.coint_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Sharpe':         _combo(len(sp.sharpe_window_list), len(sp.sharpe_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Skewness':       _combo(len(sp.skew_window_list), len(sp.skew_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
         'Bayesian':       _combo(len(sp.bayes_window_list), len(sp.bayes_threshold_list), len(sp.bayes_prior_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Kurtosis':       _combo(len(sp.kurt_window_list), len(sp.kurt_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
-        'ChiSq':          _combo(len(sp.chisq_window_list), len(sp.chisq_entry_list), len(sp.chisq_exit_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Kurtosis':       _combo(len(sp.kurt_window_list), len(sp.kurt_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'ChiSq':          _combo(len(sp.chisq_window_list), len(sp.chisq_entry_list), len(sp.chisq_exit_list), len(sp.sl_points_list), len(sp.tp_points_list)),
     }
 
     budget_results = check_integration_budget(integration_budgets_dict, app.symbols)
@@ -180,36 +205,54 @@ if __name__ == '__main__':
 
     # ═══ ЗАГРУЗКА ИСТОРИИ ═══
     print("Загрузка истории...")
+
+    loaded_symbols = []
+    failed_symbols = []
+
     for sym in bt_cfg.symbols:
         h1 = load_h1(sym)
-        if h1 is not None:
-            mt5.symbol_select(sym, True)
-            info = mt5.symbol_info(sym)
-            if info is None:
-                print(f"  ⚠ {sym}: symbol_info вернул None — бэктест/live по символу пропущен", flush=True)
-            symbol_data[sym] = {
-                'df_h1': h1,
-                'current_hour': (h1.index[-1] + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0),
-                'forming_bar': None,
-                'info': info,
-            }
-            print(f"  {sym}: {len(h1)} баров H1")
-        else:
-            print(f"  {sym}: нет данных")
+        if h1 is None or len(h1) < 30:
+            failed_symbols.append(sym)
+            continue
+
+        # symbol_select нужен только если дальше будет работа через MT5 API
+        mt5.symbol_select(sym, True)
+        info = mt5.symbol_info(sym)
+
+        if info is None:
+            print(f"  ⚠ {sym}: symbol_info вернул None — бэктест/live по символу пропущен", flush=True)
+            failed_symbols.append(sym)
+            continue
+
+        symbol_data[sym] = {
+            'df_h1': h1,
+            'current_hour': (h1.index[-1] + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0),
+            'forming_bar': None,
+            'info': info,
+        }
+        loaded_symbols.append(sym)
+
+    # ИТОГОВАЯ СВОДКА (вместо кучи одинаковых строк)
+    if loaded_symbols:
+        print(f"✅ Загружено: {len(loaded_symbols)} символов ({', '.join(loaded_symbols)})")
+    else:
+        print("❌ Нет загруженных символов — бэктест не запустится")
+
+    if failed_symbols:
+        print(f"⚠️ Пропущено: {len(failed_symbols)} символов из-за отсутствия данных или ошибок:")
+        for sym in failed_symbols:
+            print(f"   • {sym}")
 
     # ═══ ЖУРНАЛ ═══
     journal_df = load_journal(JOURNAL_FILE, COLUMNS)
-
 
     # ═══ АКТИВНЫЕ СТРАТЕГИИ ═══
     active_strategies = {}
 
     # ═══ ГЕНЕРАЦИЯ ПРОПУЩЕННЫХ ОТЧЁТОВ ═══
     print("\nПроверка пропущенных daily отчётов...")
-    # Ищем первый день с реестром и генерируем всё до вчера
     registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'journals', 'strategy_registry.csv')
     if os.path.exists(registry_path):
-        # Берём дату первой записи из реестра
         with open(registry_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
@@ -232,25 +275,31 @@ if __name__ == '__main__':
     else:
         print("  ⚠️  Реестр не найден — отчёты будут генерироваться с первого дня")
 
-
     # ═══ ПЕРВЫЙ РАСЧЁТ ═══
     print("\nБэктест (первый расчёт)...")
 
-    # force_recalc=True — игнорирует чекпоинты и пересчитывает всё с нуля
-    # (дефолт берётся из config.BacktestConfig.force_recalc; можно выставить True вручную)
     FORCE_RECALC = bt_cfg.force_recalc
+    night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
+    is_first_run = not os.path.exists(night_reset_path)
 
-    # Первый бэктест защищён: при ошибке (в т.ч. после многочасового расчёта)
-    # печатаем причину и корректно выходим — чекпойнты готовых символов
-    # сохраняются, повторный запуск продолжит с них.
+    if is_first_run:
+        print("  🌙 night_reset.json не найден — первый прогон, полный пересчёт")
+    else:
+        print("  ✅ night_reset.json найден — используем чекпоинты")
+
     try:
         all_top, all_results = run_full_backtest(
-        bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
-        test_strategy=None,
-        test_mode=False,
-        force_recalc=FORCE_RECALC,
-        incremental=True
-    )
+            bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
+            test_strategy=None,
+            test_mode=False,
+            force_recalc=FORCE_RECALC,
+            incremental=True,
+            is_night_run=is_first_run
+        )
+
+        # После первого прогона записываем night_reset.json
+        if is_first_run:
+            _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results))
 
     except Exception as exc:
         print(f"\n[КРИТИЧНО] Первый бэктест не завершился: {exc!r}", flush=True)
@@ -272,14 +321,11 @@ if __name__ == '__main__':
         print(f"Счёт: {acc.login} | Сервер: {acc.server} | Валюта: {acc.currency} | Режим: {mode_name}")
     print(f"Баланс: {balance:.0f} руб | Квота риска: {balance * risk_cfg.max_risk_pct:.0f} руб | Порог score >= {risk_cfg.min_score}")
 
-
-    # deduplicate_results уже вызвана внутри run_full_backtest
     deduped_results = all_results
     print(f"После дедупликации: {len(deduped_results)} комбинаций")
 
     active = distribute_lots(deduped_results, symbol_data, balance,
                              risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score)
-
 
     print(f"Активировано {len(active)} стратегий из {len(deduped_results)} комбинаций")
 
@@ -301,11 +347,9 @@ if __name__ == '__main__':
 
     write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
-    print(f"\nЗапуск цикла. Ctrl+C для остановки.\n")
-
+    print(f"\nЗапуск цикла. Ctrl+F2 для остановки.\n")
 
     # ═══ ГЛАВНЫЙ ЦИКЛ ═══
-    # Стартовый бэктест выше считается «сегодняшним» — ночной перерасчёт начнётся с 3:00.
     last_full_backtest_date = datetime.now().date()
     last_mode_check = datetime.now().date()
     last_state_write = datetime.now()
@@ -315,8 +359,9 @@ if __name__ == '__main__':
     last_conn_warn_time = datetime.min
     last_balance_refresh = datetime.now()
     last_quota_recalc = datetime.now()
-    initial_equity = None  # Для equity stop (пункт 6)
-    daily_start_balance = None  # Для daily stop-loss (пункт 6)
+    initial_equity = None
+    daily_start_balance = None
+    daily_start_date = None
 
     try:
         while True:
@@ -327,34 +372,26 @@ if __name__ == '__main__':
                 last_mode_check = now.date()
                 print(f"\n[{now}] Новый день")
 
-            # Ночной перерасчёт: один раз в сутки, начиная с 3:00.
-            # Если машина спала в 3:00 — пересчёт выполнится при первом проходе после 3:00.
+            # Ночной перерасчёт: один раз в сутки, начиная с 3:00
             if now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
-                last_full_backtest_date = now.date()
+
                 print(f"\n[{now.strftime('%H:%M:%S')}] Ночной перерасчёт...")
 
-                # Ошибка ночного перерасчёта НЕ останавливает процесс:
-                # старый набор стратегий остаётся активным, повторим завтра в 3:00.
                 try:
-                    # Ночной пересчёт: force_recalc=False, чтобы functions.py
-                    # решил сам по night_reset.json — если пересчёт был сегодня,
-                    # использует кэш + новые стратегии
                     _, all_results = run_full_backtest(
-                    bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
-                    test_strategy=None,
-                    test_mode=False,
-                    force_recalc=False
-                )
-
+                        bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
+                        test_strategy=None,
+                        test_mode=False,
+                        force_recalc=False,
+                        is_night_run=True
+                    )
                 except Exception as exc:
                     print(f"\n[WARN] Ночной перерасчёт не удался: {exc!r} — "
                           f"оставляем текущие стратегии, повторим завтра в 3:00.", flush=True)
                     continue
-
-                # Обновляем баланс перед ночным перерасчётом
+                last_full_backtest_date = now.date()
                 acc = mt5.account_info()
                 balance = acc.balance if acc else 1_000_000
-                # deduplicate_results уже вызвана внутри run_full_backtest
                 deduped_results = all_results
                 active = distribute_lots(deduped_results, symbol_data, balance,
                                          risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score)
@@ -366,11 +403,13 @@ if __name__ == '__main__':
                                        close_order, get_deal_exit_price, record_trade,
                                        strategy_key, make_magic, bt_cfg.magic_base, len(active))
                 write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
-                
-                # ── Генерация daily report за предыдущие сутки ──
+
+                # --- обновляем night_reset.json после ночного перерасчёта ---
+                _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results), ts=now)
+
                 yesterday = now.date() - timedelta(days=1)
                 report = generate_daily_report(yesterday)
-                
+
                 print(f"  Готово: {len(all_results)} комбинаций, {len(active)} активных")
 
             # Периодическое обновление баланса (раз в минуту)
@@ -379,28 +418,25 @@ if __name__ == '__main__':
                 if acc is not None:
                     balance = acc.balance
                     equity = acc.equity
-                    
-                    # Инициализация initial_equity при старте
+
                     if initial_equity is None:
                         initial_equity = equity
                         print(f"  [INIT] Initial equity: {equity:.2f}")
-                    
-                    # Сброс daily_start_balance в начале нового дня
-                    if daily_start_balance is None or now.date() != last_mode_check:
+
+                    if daily_start_balance is None or now.date() != daily_start_date:
                         daily_start_balance = balance
+                        daily_start_date = now.date()
                         print(f"  [INIT] Daily start balance: {balance:.2f}")
-                    
+
                     last_balance_refresh = now
-                    
-                    # ── Проверка 1: Daily stop-loss (пункт 6) ──
+
+                    # ── Проверка 1: Daily stop-loss ──
                     if daily_start_balance is not None:
-                        from risk_manager import check_daily_loss_limit
                         dl_ok, dl_pct, dl_reason = check_daily_loss_limit(
                             daily_start_balance, equity, risk_cfg.daily_loss_limit_pct
                         )
                         if not dl_ok:
                             print(f"\n  [STOP] Daily loss limit: {dl_reason} — остановка торговли!")
-                            # Закрываем все позиции
                             for key, s in list(active_strategies.items()):
                                 if s['position'] is not None:
                                     print(f"  -> Закрытие {key} по daily stop-loss")
@@ -410,14 +446,12 @@ if __name__ == '__main__':
                                         _record_close(key, s, now, exit_price, 'daily_stop', symbol_data,
                                                      record_trade, journal_df, JOURNAL_FILE)
                             continue
-                    
-                    # ── Проверка 2: Equity stop (пункт 6) ──
+
+                    # ── Проверка 2: Equity stop ──
                     if initial_equity is not None:
-                        from risk_manager import check_equity_stop
                         eq_ok, eq_dd, eq_reason = check_equity_stop(equity, initial_equity, risk_cfg.equity_stop_pct)
                         if not eq_ok:
                             print(f"\n  [STOP] Equity stop: {eq_reason} — аварийная остановка!")
-                            # Закрываем все позиции и выходим
                             for key, s in list(active_strategies.items()):
                                 if s['position'] is not None:
                                     print(f"  -> Закрытие {key} по equity stop")
@@ -427,10 +461,9 @@ if __name__ == '__main__':
                                         _record_close(key, s, now, exit_price, 'equity_stop', symbol_data,
                                                      record_trade, journal_df, JOURNAL_FILE)
                             raise RuntimeError(f"Equity stop triggered: {eq_reason}")
-                    
-                    # ── Проверка 3: Realtime quota recalc (пункт 4) ──
+
+                    # ── Проверка 3: Realtime quota recalc ──
                     if risk_cfg.realtime_quota_recalc and (now - last_quota_recalc).total_seconds() >= risk_cfg.quota_recalc_interval_sec:
-                        from risk_manager import realtime_quota_recalc
                         active_positions = []
                         for s in active_strategies.values():
                             if s['position'] is not None:
@@ -525,7 +558,7 @@ if __name__ == '__main__':
                 journal_df = load_journal(JOURNAL_FILE, COLUMNS)
                 print(f"\n[{now}] Новый журнал: {JOURNAL_FILE}", flush=True)
 
-            # Периодическое сохранение журнала — страховка на случай падения процесса
+            # Периодическое сохранение журнала
             if (now - last_journal_write).total_seconds() >= bt_cfg.journal_save_every_sec:
                 save_journal(journal_df, JOURNAL_FILE)
                 last_journal_write = now
@@ -535,31 +568,28 @@ if __name__ == '__main__':
             bar_time = '??'
             if bt_cfg.symbols and bt_cfg.symbols[0] in symbol_data:
                 bar_time = symbol_data[bt_cfg.symbols[0]]['current_hour'].strftime('%H:%M')
-            
-            # Агрегация: символ -> тип -> количество стратегий
-            from collections import defaultdict
+
             stats = defaultdict(lambda: defaultdict(int))
             for key, s in active_strategies.items():
                 sym = s['symbol']
                 stype = s.get('type', 'stoch')
                 stats[sym][stype] += 1
-            
-            # Формирование компактной строки
+
             sym_stats = []
             for sym in bt_cfg.symbols:
                 if sym in stats:
                     type_counts = [f"{t[0].upper()}({c})" for t, c in sorted(stats[sym].items())]
                     sym_stats.append(f"{get_non_usd(sym)}:{','.join(type_counts)}")
-            
+
             status_str = ' | '.join(sym_stats) if sym_stats else 'нет активных'
-            print(f"\r[{now.strftime('%H:%M:%S')}] бар {bar_time} | "
-                  f"активных {len(active_strategies)} | позиций {active_pos} | "
-                  f"{status_str} | ждём...", end='', flush=True)
+            # print(f"\r[{now.strftime('%H:%M:%S')}] бар {bar_time} | "
+            #       f"активных {len(active_strategies)} | позиций {active_pos} | "
+            #       f"{status_str} | ждём...", end='', flush=True)
 
             time.sleep(bt_cfg.poll_interval)
 
     except KeyboardInterrupt:
-        print("\nОстановка по Ctrl+C...")
+        print("\nОстановка по Ctrl+F2...")
 
     except Exception as exc:
         print(f"\n[КРИТИЧНО] Аварийная остановка: {exc!r}", flush=True)
