@@ -26,6 +26,11 @@ HEDGING_MODE = getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 'hedging')
 _NETTING_WARNED = set()
 _MISSING_INFO_WARNED = set()
 
+# Максимальная длина comment ордера. Эмпирически терминал отклоняет comment
+# длиннее 28 символов (last_error=(-2, 'Invalid "comment" argument')).
+# Берём 27 с запасом; полная идентификация стратегии остаётся в magic.
+MAX_COMMENT_LEN = 27
+
 
 def get_non_usd(symbol):
     """Убрать USD из символа: EURUSDrfd -> EUR, USDJPYrfd -> JPY."""
@@ -620,6 +625,12 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
     if risk_params is None:
         risk_params = {}
 
+    # Терминал отклоняет comment длиннее ~28 символов (см. MAX_COMMENT_LEN):
+    # обрезаем один раз до отправки, полная идентификация стратегии в magic.
+    comment = str(comment).strip()
+    if len(comment) > MAX_COMMENT_LEN:
+        comment = comment[:MAX_COMMENT_LEN]
+
     existing_positions = mt5.positions_get(symbol=symbol)
     if existing_positions:
         for p in existing_positions:
@@ -692,6 +703,13 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
     }
     result = mt5.order_send(request)
     if result is None:
+        err = mt5.last_error()
+        # Отрицательный код last_error — терминал отклонил сам запрос
+        # (например, 'Invalid "comment" argument'): повтор не поможет.
+        if err is not None and err[0] < 0:
+            print(f"  -> [WARN] {symbol} {direction} magic={magic}: ордер отклонён — "
+                  f"last_error={err}, comment={comment!r}", flush=True)
+            return None
         # Терминал может не ответить при серии быстрых ордеров на одном баре:
         # одна тихая повторная попытка (без шума) перед финальным предупреждением.
         time.sleep(0.5)
