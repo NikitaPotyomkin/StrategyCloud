@@ -618,6 +618,12 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
     """
     if risk_params is None:
         risk_params = {}
+
+    existing = mt5.positions_get(symbol=symbol, magic=magic)
+    if existing:
+        print(f"  -> [SKIP] {symbol} magic={magic}: уже открыта позиция "
+              f"ticket={existing[0].ticket} — ордер отменён")
+        return None
     
     check_margin = risk_params.get('check_margin', True)
     check_stops = risk_params.get('check_stops', True)
