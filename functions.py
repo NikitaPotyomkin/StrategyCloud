@@ -620,7 +620,7 @@ def _run_symbol_safe(args):
 def _backtest_symbol(args):
     """Бэктест одного символа (для multiprocessing)."""
     (symbol_idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
-     
+
      PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
      LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
      MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
@@ -642,29 +642,24 @@ def _backtest_symbol(args):
      KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
      CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
      BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
-            
+
      family_fp, recalc_families) = args
 
     # Инкрементальный пересчёт: считаем только указанные семейства.
-    # _FamilyFilter подменяет test_strategy так, что существующие guard'ы
-    # 'if not test_strategy or test_strategy == X' пропускают остальные.
     if recalc_families is not None:
         test_strategy = _FamilyFilter(recalc_families)
 
     # Восстановить объект "info" из примитивного словаря
     info = _reconstruct_symbol_info(symbol, info_dict)
 
-    # Локальные backtest-функции (импортируются напрямую)
     from strategy_engine import calc_metrics, composite_score, deduplicate_results
 
-    # Предрасчёт размеров
+    # ── Предрасчёт размеров (все 23 стратегии) ──
     stoch_per_symbol = len(K_PERIODS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     parab_per_symbol = len(PARABOLIC_STEPS) * len(PARABOLIC_MAXS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     ma_per_symbol = len(MA_PERIODS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     rf_per_symbol = len(RF_LOOKBACKS) * len(RF_NBARS) * len(RF_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
-
-    # Новые стратегии
     macd_cross_per_symbol = (len(MACD_CROSS_FAST_LIST) * len(MACD_CROSS_SLOW_LIST) *
                              len(MACD_CROSS_SIGNAL_LIST) *
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
@@ -675,33 +670,49 @@ def _backtest_symbol(args):
     ema_cross_per_symbol = len(EMA_FAST_LIST) * len(EMA_SLOW_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     rsi_div_per_symbol = len(RSI_DIV_PERIOD_LIST) * len(RSI_DIV_LOOKBACK_LIST) * len(RSI_DIV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     ichimoku_per_symbol = len(TENKAN_LIST) * len(KIJUN_LIST) * len(SENKOU_B_LIST) * len(DISPLACEMENT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    zscore_per_symbol = len(ZSCORE_SMA_PERIOD_LIST) * len(ZSCORE_THRESHOLD_LIST) * len(ZSCORE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    autocorr_per_symbol = len(AUTOCORR_LAG_LIST) * len(AUTOCORR_THRESHOLD_LIST) * len(AUTOCORR_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    hurst_per_symbol = len(HURST_WINDOW_LIST) * len(HURST_TREND_THRESHOLD_LIST) * len(HURST_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    lrc_per_symbol = len(LRC_PERIOD_LIST) * len(LRC_STD_THRESHOLD_LIST) * len(LRC_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    percentile_per_symbol = len(PCT_PERIOD_LIST) * len(PCT_LOW_LIST) * len(PCT_HIGH_LIST) * len(PCT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    runs_per_symbol = len(RUNS_WINDOW_LIST) * len(RUNS_THRESHOLD_LIST) * len(RUNS_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    coint_per_symbol = len(COINT_WINDOW_LIST) * len(COINT_THRESHOLD_LIST) * len(COINT_BETA_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    sharpe_per_symbol = len(SHARPE_WINDOW_LIST) * len(SHARPE_THRESHOLD_LIST) * len(SHARPE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    skewness_per_symbol = len(SKEW_WINDOW_LIST) * len(SKEW_THRESHOLD_LIST) * len(SKEW_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    bayesian_per_symbol = len(BAYES_WINDOW_LIST) * len(BAYES_THRESHOLD_LIST) * len(BAYES_PRIOR_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    kurtosis_per_symbol = len(KURT_WINDOW_LIST) * len(KURT_THRESHOLD_LIST) * len(KURT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    chi_square_per_symbol = len(CHISQ_WINDOW_LIST) * len(CHISQ_ENTRY_LIST) * len(CHISQ_EXIT_LIST) * len(CHISQ_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
-    if test_strategy == 'stoch':
-        active_combos = stoch_per_symbol
-    elif test_strategy == 'parabolic':
-        active_combos = parab_per_symbol
-    elif test_strategy == 'ma':
-        active_combos = ma_per_symbol
-    elif test_strategy == 'rf':
-        active_combos = rf_per_symbol
-    elif test_strategy == 'logreg':
-        active_combos = logreg_per_symbol
-    elif test_strategy == 'macd_cross':
-        active_combos = macd_cross_per_symbol
-    elif test_strategy == 'rsi_rev':
-        active_combos = rsi_rev_per_symbol
-    elif test_strategy == 'bollinger':
-        active_combos = bollinger_per_symbol
-    elif test_strategy == 'ema_cross':
-        active_combos = ema_cross_per_symbol
-    elif test_strategy == 'rsi_div':
-        active_combos = rsi_div_per_symbol
-    elif test_strategy == 'ichimoku':
-        active_combos = ichimoku_per_symbol
+    _strategy_map = {
+        'stoch': stoch_per_symbol,
+        'parabolic': parab_per_symbol,
+        'ma': ma_per_symbol,
+        'rf': rf_per_symbol,
+        'logreg': logreg_per_symbol,
+        'macd_cross': macd_cross_per_symbol,
+        'rsi_rev': rsi_rev_per_symbol,
+        'bollinger': bollinger_per_symbol,
+        'ema_cross': ema_cross_per_symbol,
+        'rsi_div': rsi_div_per_symbol,
+        'ichimoku': ichimoku_per_symbol,
+        'zscore': zscore_per_symbol,
+        'autocorr': autocorr_per_symbol,
+        'hurst': hurst_per_symbol,
+        'lrc': lrc_per_symbol,
+        'percentile': percentile_per_symbol,
+        'runs': runs_per_symbol,
+        'coint': coint_per_symbol,
+        'sharpe': sharpe_per_symbol,
+        'skewness': skewness_per_symbol,
+        'bayesian': bayesian_per_symbol,
+        'kurtosis': kurtosis_per_symbol,
+        'chi_square': chi_square_per_symbol,
+    }
+
+    if test_strategy in _strategy_map:
+        active_combos = _strategy_map[test_strategy]
     else:
-        active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol +
-                         macd_cross_per_symbol + rsi_rev_per_symbol + bollinger_per_symbol +
-                         ema_cross_per_symbol + rsi_div_per_symbol + ichimoku_per_symbol)
+        active_combos = sum(_strategy_map.values())
 
     status = "старт" if symbol_idx < 4 else "в очереди"
     print(f"  [{symbol_idx + 1}/{total_symbols}] {symbol}: {status} ({active_combos} комб.)", flush=True)
@@ -710,9 +721,7 @@ def _backtest_symbol(args):
     combos_done = 0
     completed_strategies = []
 
-    # ── Обёртка для безопасного бэктеста ──
     def _safe_backtest(strategy_name, bt_fn, *args, **kwargs):
-        """Безопасный вызов бэктеста — ловит ошибки, не прерывая весь процесс."""
         nonlocal combos_done
         try:
             return bt_fn(*args, **kwargs)
@@ -722,7 +731,7 @@ def _backtest_symbol(args):
 
     # ── Стохастик ──
     if not test_strategy or test_strategy == 'stoch':
-        for i, (k, sl, tp) in enumerate(product(K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST), start=1):
+        for k, sl, tp in product(K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST):
             profit, n_trades, trade_profits = _safe_backtest(
                 'Stochastic', _backtest_stoch,
                 df_window, k, sl, tp,
@@ -748,9 +757,8 @@ def _backtest_symbol(args):
 
     # ── Параболик ──
     if not test_strategy or test_strategy == 'parabolic':
-        for i, (step, max_val, sl, tp) in enumerate(
-            product(PARABOLIC_STEPS, PARABOLIC_MAXS, SL_POINTS_LIST, TP_POINTS_LIST),
-            start=1
+        for step, max_val, sl, tp in product(
+            PARABOLIC_STEPS, PARABOLIC_MAXS, SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Parabolic', _backtest_parabolic,
                 df_window, step, max_val, sl, tp,
@@ -776,7 +784,7 @@ def _backtest_symbol(args):
 
     # ── Moving Average ──
     if not test_strategy or test_strategy == 'ma':
-        for i, (ma_period, sl, tp) in enumerate(product(MA_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST), start=1):
+        for ma_period, sl, tp in product(MA_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST):
             profit, n_trades, trade_profits = _safe_backtest('MA', _backtest_ma,
                 df_window, ma_period, sl, tp,
                 info.point, info.trade_tick_value, info.trade_tick_size,
@@ -801,9 +809,8 @@ def _backtest_symbol(args):
 
     # ── Random Forest ──
     if not test_strategy or test_strategy == 'rf':
-        for i, (lookback, n_bars, threshold, sl, tp) in enumerate(
-            product(RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST),
-            start=1
+        for lookback, n_bars, threshold, sl, tp in product(
+            RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('RF', _backtest_rf,
                 df_window, lookback, n_bars, threshold, sl, tp,
@@ -830,9 +837,8 @@ def _backtest_symbol(args):
 
     # ── Logistic Regression ──
     if not test_strategy or test_strategy == 'logreg':
-        for i, (lookback, n_bars, threshold, sl, tp) in enumerate(
-            product(LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST),
-            start=1
+        for lookback, n_bars, threshold, sl, tp in product(
+            LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('LogReg', _backtest_logreg,
                 df_window, lookback, n_bars, threshold, sl, tp,
@@ -857,12 +863,11 @@ def _backtest_symbol(args):
             combos_done += 1
         completed_strategies.append('LogReg')
 
-
     # ── MACD Cross ──
     if not test_strategy or test_strategy == 'macd_cross':
-        for i, (mf, ms, msig, sl, tp) in enumerate(
-            product(MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for mf, ms, msig, sl, tp in product(
+            MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('MACD-Cross', _backtest_macd_cross,
                 df_window, mf, ms, msig, sl, tp,
@@ -889,9 +894,9 @@ def _backtest_symbol(args):
 
     # ── RSI Reversal ──
     if not test_strategy or test_strategy == 'rsi_rev':
-        for i, (rp, ros, rob, sl, tp) in enumerate(
-            product(RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for rp, ros, rob, sl, tp in product(
+            RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('RSI-Rev', _backtest_rsi_reversal,
                 df_window, rp, ros, rob, sl, tp,
@@ -918,9 +923,9 @@ def _backtest_symbol(args):
 
     # ── Bollinger Breakout ──
     if not test_strategy or test_strategy == 'bollinger':
-        for i, (bp, bs, vp, sl, tp) in enumerate(
-            product(BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for bp, bs, vp, sl, tp in product(
+            BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Bollinger', _backtest_bollinger,
                 df_window, bp, bs, vp, sl, tp,
@@ -947,8 +952,8 @@ def _backtest_symbol(args):
 
     # ── EMA Crossover ──
     if not test_strategy or test_strategy == 'ema_cross':
-        for i, (ef, es, sl, tp) in enumerate(
-            product(EMA_FAST_LIST, EMA_SLOW_LIST, SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for ef, es, sl, tp in product(
+            EMA_FAST_LIST, EMA_SLOW_LIST, SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('EMA', _backtest_ema_crossover,
                 df_window, ef, es, sl, tp,
@@ -975,9 +980,9 @@ def _backtest_symbol(args):
 
     # ── RSI Divergence ──
     if not test_strategy or test_strategy == 'rsi_div':
-        for i, (rp, lb, th, sl, tp) in enumerate(
-            product(RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for rp, lb, th, sl, tp in product(
+            RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('RSI-Div', _backtest_rsi_divergence,
                 df_window, rp, lb, th, sl, tp,
@@ -1004,9 +1009,9 @@ def _backtest_symbol(args):
 
     # ── Ichimoku Cloud ──
     if not test_strategy or test_strategy == 'ichimoku':
-        for i, (ten, kij, senk, disp, sl, tp) in enumerate(
-            product(TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for ten, kij, senk, disp, sl, tp in product(
+            TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Ichimoku', _backtest_ichimoku,
                 df_window, ten, kij, senk, disp, sl, tp,
@@ -1033,9 +1038,9 @@ def _backtest_symbol(args):
 
     # ── Z-score reversion ──
     if not test_strategy or test_strategy == 'zscore':
-        for i, (sma_p, z_th, vol_p, sl, tp) in enumerate(
-            product(ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for sma_p, z_th, vol_p, sl, tp in product(
+            ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Zscore', _backtest_zscore,
                 df_window, sma_p, z_th, vol_p, sl, tp,
@@ -1046,7 +1051,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'zscore',
-                'param_key': f"sma{sma_p}_z{z_th:.1f}",
+                'param_key': f"sma{sma_p}_z{z_th:.1f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1062,9 +1067,9 @@ def _backtest_symbol(args):
 
     # ── Autocorrelation momentum ──
     if not test_strategy or test_strategy == 'autocorr':
-        for i, (acf_lag, acf_th, vol_p, sl, tp) in enumerate(
-            product(AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for acf_lag, acf_th, vol_p, sl, tp in product(
+            AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Autocorr', _backtest_autocorr,
                 df_window, acf_lag, acf_th, vol_p, sl, tp,
@@ -1075,7 +1080,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'autocorr',
-                'param_key': f"lag{acf_lag}_th{acf_th:.2f}",
+                'param_key': f"lag{acf_lag}_th{acf_th:.2f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1091,9 +1096,9 @@ def _backtest_symbol(args):
 
     # ── Hurst regime filter ──
     if not test_strategy or test_strategy == 'hurst':
-        for i, (win, trend_th, vol_p, sl, tp) in enumerate(
-            product(HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, trend_th, vol_p, sl, tp in product(
+            HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Hurst', _backtest_hurst,
                 df_window, win, trend_th, vol_p, sl, tp,
@@ -1104,7 +1109,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'hurst',
-                'param_key': f"win{win}_th{trend_th:.2f}",
+                'param_key': f"win{win}_th{trend_th:.2f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1120,9 +1125,9 @@ def _backtest_symbol(args):
 
     # ── Linear Regression Channel ──
     if not test_strategy or test_strategy == 'lrc':
-        for i, (period, std_th, vol_p, sl, tp) in enumerate(
-            product(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for period, std_th, vol_p, sl, tp in product(
+            LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('LRC', _backtest_lrc,
                 df_window, period, std_th, vol_p, sl, tp,
@@ -1133,7 +1138,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'lrc',
-                'param_key': f"per{period}_std{std_th:.1f}",
+                'param_key': f"per{period}_std{std_th:.1f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1149,9 +1154,9 @@ def _backtest_symbol(args):
 
     # ── Percentile reversion ──
     if not test_strategy or test_strategy == 'percentile':
-        for i, (per, pct_l, pct_h, vol_p, sl, tp) in enumerate(
-            product(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for per, pct_l, pct_h, vol_p, sl, tp in product(
+            PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Percentile', _backtest_percentile,
                 df_window, per, pct_l, pct_h, vol_p, sl, tp,
@@ -1162,7 +1167,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'percentile',
-                'param_key': f"per{per}_l{pct_l}_h{pct_h}",
+                'param_key': f"per{per}_l{pct_l}_h{pct_h}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1178,9 +1183,9 @@ def _backtest_symbol(args):
 
     # ── Runs Test trend ──
     if not test_strategy or test_strategy == 'runs':
-        for i, (win, runs_th, vol_p, sl, tp) in enumerate(
-            product(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, runs_th, vol_p, sl, tp in product(
+            RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Runs', _backtest_runs,
                 df_window, win, runs_th, vol_p, sl, tp,
@@ -1191,7 +1196,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'runs',
-                'param_key': f"win{win}_th{runs_th:.1f}",
+                'param_key': f"win{win}_th{runs_th:.1f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1207,9 +1212,9 @@ def _backtest_symbol(args):
 
     # ── Cointegration pairs ──
     if not test_strategy or test_strategy == 'coint':
-        for i, (win, coint_th, beta_p, sl, tp) in enumerate(
-            product(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, coint_th, beta_p, sl, tp in product(
+            COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Coint', _backtest_coint,
                 df_window, win, coint_th, beta_p, sl, tp,
@@ -1220,7 +1225,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'coint',
-                'param_key': f"win{win}_th{coint_th:.1f}",
+                'param_key': f"win{win}_th{coint_th:.1f}_b{beta_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1236,9 +1241,9 @@ def _backtest_symbol(args):
 
     # ── Rolling Sharpe filter ──
     if not test_strategy or test_strategy == 'sharpe':
-        for i, (win, sharpe_th, vol_p, sl, tp) in enumerate(
-            product(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, sharpe_th, vol_p, sl, tp in product(
+            SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Sharpe', _backtest_sharpe,
                 df_window, win, sharpe_th, vol_p, sl, tp,
@@ -1249,7 +1254,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'sharpe',
-                'param_key': f"win{win}_th{sharpe_th:.2f}",
+                'param_key': f"win{win}_th{sharpe_th:.2f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1265,9 +1270,9 @@ def _backtest_symbol(args):
 
     # ── Skewness extreme ──
     if not test_strategy or test_strategy == 'skewness':
-        for i, (win, skew_th, vol_p, sl, tp) in enumerate(
-            product(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, skew_th, vol_p, sl, tp in product(
+            SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Skewness', _backtest_skewness,
                 df_window, win, skew_th, vol_p, sl, tp,
@@ -1278,7 +1283,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'skewness',
-                'param_key': f"win{win}_th{skew_th:.1f}",
+                'param_key': f"win{win}_th{skew_th:.1f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1294,9 +1299,9 @@ def _backtest_symbol(args):
 
     # ── Bayesian trend update ──
     if not test_strategy or test_strategy == 'bayesian':
-        for i, (win, bay_th, prior, sl, tp) in enumerate(
-            product(BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, bay_th, prior, sl, tp in product(
+            BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Bayesian', _backtest_bayesian,
                 df_window, win, bay_th, prior, sl, tp,
@@ -1323,9 +1328,9 @@ def _backtest_symbol(args):
 
     # ── Kurtosis spike ──
     if not test_strategy or test_strategy == 'kurtosis':
-        for i, (win, kurt_th, vol_p, sl, tp) in enumerate(
-            product(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, kurt_th, vol_p, sl, tp in product(
+            KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('Kurtosis', _backtest_kurtosis,
                 df_window, win, kurt_th, vol_p, sl, tp,
@@ -1336,7 +1341,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'kurtosis',
-                'param_key': f"win{win}_th{kurt_th:.1f}",
+                'param_key': f"win{win}_th{kurt_th:.1f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1352,9 +1357,9 @@ def _backtest_symbol(args):
 
     # ── Chi-square distribution ──
     if not test_strategy or test_strategy == 'chi_square':
-        for i, (win, entry_th, exit_th, vol_p, sl, tp) in enumerate(
-            product(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, (1,),
-                    SL_POINTS_LIST, TP_POINTS_LIST), start=1
+        for win, entry_th, exit_th, vol_p, sl, tp in product(
+            CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('ChiSq', _backtest_chi_square,
                 df_window, win, entry_th, exit_th, vol_p, sl, tp,
@@ -1365,7 +1370,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'chi_square',
-                'param_key': f"win{win}_e{entry_th:.2f}_x{exit_th:.2f}",
+                'param_key': f"win{win}_e{entry_th:.2f}_x{exit_th:.2f}_v{vol_p}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1832,55 +1837,55 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # ── Какие стратегии считаются ──
     strategies_to_run = []
     if not test_strategy or test_strategy == 'stoch':
-        strategies_to_run.append(f"Stoch: {stoch_per_symbol} комб.")
+        strategies_to_run.append(("Stoch", stoch_per_symbol))
     if not test_strategy or test_strategy == 'parabolic':
-        strategies_to_run.append(f"Parabolic: {parab_per_symbol} комб.")
+        strategies_to_run.append(("Parabolic", parab_per_symbol))
     if not test_strategy or test_strategy == 'ma':
-        strategies_to_run.append(f"MA: {ma_per_symbol} комб.")
+        strategies_to_run.append(("MA", ma_per_symbol))
     if not test_strategy or test_strategy == 'rf':
-        strategies_to_run.append(f"RF: {rf_per_symbol} комб.")
+        strategies_to_run.append(("RF", rf_per_symbol))
     if not test_strategy or test_strategy == 'logreg':
-        strategies_to_run.append(f"LogReg: {logreg_per_symbol} комб.")
+        strategies_to_run.append(("LogReg", logreg_per_symbol))
     if not test_strategy or test_strategy == 'bollinger':
-        strategies_to_run.append(f"Bollinger: {bollinger_per_symbol} комб.")
+        strategies_to_run.append(("Bollinger", bollinger_per_symbol))
     if not test_strategy or test_strategy == 'ema_cross':
-        strategies_to_run.append(f"EMA: {ema_cross_per_symbol} комб.")
+        strategies_to_run.append(("EMA", ema_cross_per_symbol))
     if not test_strategy or test_strategy == 'rsi_div':
-        strategies_to_run.append(f"RSI-Div: {rsi_div_per_symbol} комб.")
+        strategies_to_run.append(("RSI-Div", rsi_div_per_symbol))
     if not test_strategy or test_strategy == 'ichimoku':
-        strategies_to_run.append(f"Ichimoku: {ichimoku_per_symbol} комб.")
+        strategies_to_run.append(("Ichimoku", ichimoku_per_symbol))
     if not test_strategy or test_strategy == 'macd_cross':
-        strategies_to_run.append(f"MACD-Cross: {macd_cross_per_symbol} комб.")
+        strategies_to_run.append(("MACD-Cross", macd_cross_per_symbol))
     if not test_strategy or test_strategy == 'rsi_rev':
-        strategies_to_run.append(f"RSI-Rev: {rsi_rev_per_symbol} комб.")
+        strategies_to_run.append(("RSI-Rev", rsi_rev_per_symbol))
     if not test_strategy or test_strategy == 'zscore':
-        strategies_to_run.append(f"Zscore: {zscore_per_symbol} комб.")
+        strategies_to_run.append(("Zscore", zscore_per_symbol))
     if not test_strategy or test_strategy == 'autocorr':
-        strategies_to_run.append(f"Autocorr: {autocorr_per_symbol} комб.")
+        strategies_to_run.append(("Autocorr", autocorr_per_symbol))
     if not test_strategy or test_strategy == 'hurst':
-        strategies_to_run.append(f"Hurst: {hurst_per_symbol} комб.")
+        strategies_to_run.append(("Hurst", hurst_per_symbol))
     if not test_strategy or test_strategy == 'lrc':
-        strategies_to_run.append(f"LRC: {lrc_per_symbol} комб.")
+        strategies_to_run.append(("LRC", lrc_per_symbol))
     if not test_strategy or test_strategy == 'percentile':
-        strategies_to_run.append(f"Percentile: {percentile_per_symbol} комб.")
+        strategies_to_run.append(("Percentile", percentile_per_symbol))
     if not test_strategy or test_strategy == 'runs':
-        strategies_to_run.append(f"Runs: {runs_per_symbol} комб.")
+        strategies_to_run.append(("Runs", runs_per_symbol))
     if not test_strategy or test_strategy == 'coint':
-        strategies_to_run.append(f"Coint: {coint_per_symbol} комб.")
+        strategies_to_run.append(("Coint", coint_per_symbol))
     if not test_strategy or test_strategy == 'sharpe':
-        strategies_to_run.append(f"Sharpe: {sharpe_per_symbol} комб.")
+        strategies_to_run.append(("Sharpe", sharpe_per_symbol))
     if not test_strategy or test_strategy == 'skewness':
-        strategies_to_run.append(f"Skewness: {skewness_per_symbol} комб.")
+        strategies_to_run.append(("Skewness", skewness_per_symbol))
     if not test_strategy or test_strategy == 'bayesian':
-        strategies_to_run.append(f"Bayesian: {bayesian_per_symbol} комб.")
+        strategies_to_run.append(("Bayesian", bayesian_per_symbol))
     if not test_strategy or test_strategy == 'kurtosis':
-        strategies_to_run.append(f"Kurtosis: {kurtosis_per_symbol} комб.")
+        strategies_to_run.append(("Kurtosis", kurtosis_per_symbol))
     if not test_strategy or test_strategy == 'chi_square':
-        strategies_to_run.append(f"ChiSq: {chi_square_per_symbol} комб.")
+        strategies_to_run.append(("ChiSq", chi_square_per_symbol))
 
     print("  Стратегии на 1 символ:")
-    for s in strategies_to_run:
-        print(f"    {s}")
+    for name, count in sorted(strategies_to_run, key=lambda x: x[1], reverse=True):
+        print(f"    {name}: {count} комб.")
 
     if test_strategy:
         print(f"  ⚡ Только: '{test_strategy}'")
@@ -1978,7 +1983,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         symbol_strats = [r for r in all_results if r['symbol'] == symbol]
         top_results.extend(symbol_strats[:TOP_N])
 
-    print(f"  Активных стратегий: {len(top_results)} ({TOP_N} на символ × {len(SYMBOLS)} символов)")
+    print(f"  Активных стратегий: {len(top_results)} ({TOP_N} лимит × {len(SYMBOLS)} символов)")
     print(f"{'─' * 60}\n")
 
     # ── Сохранение чекпойнтов для свежесчитанных символов ──
