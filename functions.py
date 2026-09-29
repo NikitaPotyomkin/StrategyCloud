@@ -343,13 +343,13 @@ def get_equity():
     """Получить данные о текущем портфеле."""
     account_info = mt5.account_info()
     if account_info is not None:
-        account_info_dict = account_info._asdict()
-        df = pd.DataFrame(list(account_info_dict.items()), columns=['property', 'value'])
-        balance = df["value"].iloc[10]
-        msg = f'баланс: {balance}'
+        balance = account_info.balance
+        equity = account_info.equity
+        msg = f'баланс: {balance:.2f} | equity: {equity:.2f}'
     else:
         msg = 'Нет данных о счете!'
     return msg
+
 
 
 # ═══ ТОРГОВЫЕ ОПЕРАЦИИ (СТАРЫЕ) ═══
@@ -369,208 +369,6 @@ def determine_parameters(order_open_pos, symbol):
 
     return close_price, order_close_pos, price
 
-
-def send_order(lot, order_open_pos, symbol, price, basis):
-    """Формирует ордер на открытие (старая версия)."""
-    now = datetime.datetime.now().strftime('%H:%M')
-    print(f'{now} открытие ордера {symbol}, {lot} lot')
-    deviation = 12
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": lot,
-        "type": order_open_pos,
-        "price": price,
-        "deviation": deviation,
-        "magic": 234000,
-        "comment": basis,
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK,
-    }
-    i = 0
-    while i < 1:
-        result = mt5.order_send(request)
-        time.sleep(1)
-        i += 1
-    return result
-
-
-def close_order(lot, type_, symbol, close_price, ticket):
-    """Формирует ордер на закрытие (старая версия)."""
-    if type_ == 'mt5.ORDER_TYPE_SELL':
-        type_ = mt5.ORDER_TYPE_SELL
-    elif type_ == 'mt5.ORDER_TYPE_BUY':
-        type_ = mt5.ORDER_TYPE_BUY
-    lot = float(lot)
-    msg = f'закрытие позиции: {symbol} {str(lot)} лот'
-    send_telegram(msg, True)
-    price = close_price
-    deviation = 15
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": lot,
-        "type": type_,
-        "price": price,
-        "deviation": deviation,
-        "magic": 234000,
-        "position": ticket,
-        "comment": "closing",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK
-    }
-    i, result = 0, None
-    while result is None or 'No prices' in str(result):
-        result = mt5.order_send(request)
-        time.sleep(1)
-        i += 1
-        if i == 10:
-            print(f'{curr_time()}: не получается закрыть тикет {ticket}. Проверьте кнопку разрешения торговли в терминале!')
-            break
-    return result
-
-
-def create_order(symbol, order_type, lot, basis, adv_id, spread):
-    """Инициирует создание ордера на сделку (старая версия)."""
-    if order_type == mt5.ORDER_TYPE_SELL:
-        msg = f'{curr_time()} {symbol} перекуплен в зоне {basis}, продаем (спред {spread})'
-        send_telegram(msg, True)
-    if order_type == mt5.ORDER_TYPE_BUY:
-        msg = f'{curr_time()} {symbol} перепродан в зоне {basis}, покупаем (спред {spread})'
-        send_telegram(msg, True)
-    order_open_pos = order_type
-    values = determine_parameters(order_open_pos, symbol)
-    result = send_order(lot, order_open_pos, symbol, values[2], 'p' + str(adv_id) + " " + basis)
-    if result is None:
-        print('      ошибка открытия ордера')
-    else:
-        print('      ticket: ' + str(result.order))
-
-
-# ═══ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ═══
-def check_close_status(type_, symbol, op, pct_50, curr_price, volume, ticket):
-    """Проверить статус закрытия позиции."""
-    action, h = '', get_time_item(3)
-    if 'JPY' in symbol:
-        delta = 0.015
-    else:
-        delta = 0.00015
-
-    if h < 23:
-        op, pct_50 = op[symbol], pct_50[symbol]['p50']
-        if type_ == 0:
-            target_finres = round(op - pct_50, 5) - delta
-            if curr_price > target_finres:
-                action = f"{str(ticket)} {symbol} SELL {volume} BY MARKET"
-            else:
-                action = "HOLD"
-        elif type_ == 1:
-            target_finres = round(op + pct_50, 5) + delta
-            if curr_price < target_finres:
-                action = f"{str(ticket)} {symbol} BUY {volume} BY MARKET"
-            else:
-                action = "HOLD"
-    else:
-        if type_ == 0:
-            action = f"{str(ticket)} {symbol} SELL {volume} BY MARKET"
-        elif type_ == 1:
-            action = f"{str(ticket)} {symbol} BUY {volume} BY MARKET"
-    return action
-
-
-def check_spread(symbol, bid, ask, spread_lims):
-    """Проверить размер спреда."""
-    spread_x = 1000
-    if 'JPY' in symbol:
-        spread_x, round_x = 1000, 3
-    else:
-        spread_x, round_x = spread_x * 100, 5
-    spread = int(round(float(ask) - float(bid), round_x) * spread_x)
-    lim = spread_lims[symbol]
-    flag = spread <= lim
-    return flag, spread
-
-
-def split_volume(lot):
-    """Разделить объём на части."""
-    t = get_time_item(3)
-    part_lot = round((float(lot) / (24 - int(t))), 2)
-    return part_lot
-
-
-def calc_lot(equity_percentage):
-    """Рассчитать лот на основе процента от капитала."""
-    acc_info = mt5.account_info()
-    if acc_info is None:
-        return 0.0
-    account_info_dict = acc_info._asdict()
-    df = pd.DataFrame(list(account_info_dict.items()), columns=['property', 'value'])
-    balance = df["value"].iloc[10]
-    lot = round((balance * equity_percentage / 100) / 1000, 2)
-    return lot
-
-
-def calc_close_delta(value, symbol):
-    """Рассчитать дельту для закрытия."""
-    if symbol == 'USDJPYrfd':
-        delta = value / 1000
-    else:
-        delta = value / 100000
-    return delta
-
-
-def find_lot_size():
-    """Загрузить размеры лотов из файла."""
-    lot_d = {}
-    with open(("trade_instructions\\lot_size.txt"), 'r') as f:
-        lines = f.readlines()
-        i = 0
-        for line in lines:
-            if i > 0:
-                line = line.replace('\n', '').split(',')
-                symbol, lot = line[0], float(line[1])
-                lot_d[symbol] = lot
-            i += 1
-    return lot_d
-
-
-def rec_unrs_profit(time_, profit):
-    """Записать непрогнозируемый профит."""
-    with open("detected_profits.txt", 'a') as f:
-        substr = str(time_) + ',' + str(profit) + '\n'
-        f.write(substr)
-
-
-def update_lims(d):
-    """Проверить, нужно ли обновить лимиты на сегодня."""
-    td = str(datetime.date.today())
-    if td in d:
-        return True
-    else:
-        print(f"{curr_time()} Обновление ценовых параметров")
-        return False
-
-
-# ═══ TELEGRAM ═══
-def send_telegram(text: str, display_in_terminal: bool):
-    """Отправить сообщение в Telegram (заглушка)."""
-    if display_in_terminal:
-        print(text)
-    try:
-        token = "5463006761:AAHtkpDczyJhwbgiInkxhIaE_4DPtR3BqyQ"
-        channel_id = "-1001772302469"
-        # r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-        #                   data={"chat_id": channel_id, "text": text})
-        print('отправляем сообщение в тг (заглушка)')
-    except Exception:
-        print('tg error')
-
-
-def show_start_msgs(advisor_id, now):
-    """Вывести стартовые сообщения."""
-    print(f'Запускаем алгоритм... Проверьте кнопку разрешения торговли в терминале')
-    msg = f'Advisor ID = {advisor_id}. Время запуска (мск.время): ' + now.strftime("%d-%m-%Y %H:%M")
-    send_telegram(msg, True)
 
 
 # ═══ БЭКТЕСТ ═══
@@ -1983,7 +1781,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         symbol_strats = [r for r in all_results if r['symbol'] == symbol]
         top_results.extend(symbol_strats[:TOP_N])
 
-    print(f"  Активных стратегий: {len(top_results)} ({TOP_N} лимит × {len(SYMBOLS)} символов)")
+    print(f"  Активных стратегий: {len(top_results)}")
     print(f"{'─' * 60}\n")
 
     # ── Сохранение чекпойнтов для свежесчитанных символов ──

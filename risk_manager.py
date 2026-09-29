@@ -6,25 +6,20 @@ import datetime
 
 
 # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
-# Лимит комбинаций на КАЖДУЮ стратегию (на 1 символ).
-# Один лимит для всех — если стратегия превысила, сокращаем её списки параметров.
 MAX_COMBOS_PER_STRATEGY = 20_000
 
 
-def _combo(n1, n2=1, n3=1, n4=1):
+def _combo(n1, n2=1, n3=1, n4=1, n5=1, n6=1):
     """Произведение длин списков."""
-    return n1 * n2 * n3 * n4
+    return n1 * n2 * n3 * n4 * n5 * n6
 
 
 def check_integration_budget(budgets, SYMBOLS):
     """Проверить бюджет при интеграции новых стратегий.
 
-    Вызывается один раз при загрузке main.py, ДО запуска бэктеста.
-    Каждая стратегия ограничена одинаковым лимитом MAX_COMBOS_PER_STRATEGY.
-
     Args:
         budgets: dict {strategy_name: combos} комбинаций на 1 символ
-        SYMBOLS: список символов для расчёта общего бюджета
+        SYMBOLS: список символов
 
     Returns:
         dict {strategy_name: (budget, limit, violated)}
@@ -70,7 +65,6 @@ def check_integration_budget(budgets, SYMBOLS):
 
 
 # ═══ КОНСТАНТЫ ОЦЕНКИ ═══
-# Веса composite_score (см. функцию ниже).
 SCORE_WEIGHTS = {
     'profit': 0.35,
     'profit_factor': 0.25,
@@ -78,14 +72,8 @@ SCORE_WEIGHTS = {
     'sharpe': 0.15,
     'recovery': 0.10,
 }
-# Делитель profit при нормировке. Для рублёвых счетов с крупными профитами
-# значение по умолчанию может быть мало: profit начнёт доминировать в скоре.
-# Подбирай по медиане profit за окно бэктеста (см. composite_score).
 DEFAULT_PROFIT_SCALE = 1000.0
-
-# Лот по умолчанию, если в записи стратегии нет 'lot'.
 DEFAULT_LOT = 0.01
-
 
 _WARNED_MISSING_INFO = set()
 
@@ -97,7 +85,6 @@ def _warn_missing_info(symbol, where):
 
 
 def json_default(obj):
-    """default= для json.dump: numpy-скаляры -> float/int (страховка от TypeError)."""
     if isinstance(obj, np.floating):
         return float(obj)
     if isinstance(obj, np.integer):
@@ -105,13 +92,74 @@ def json_default(obj):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
+# ═══ ДЕНЕЖНЫЕ РАСЧЁТЫ ЧЕРЕЗ MT5 API ═══
+
+def _sl_money_per_lot(symbol, info, sl_points):
+    """Риск на 1 лот при срабатывании SL — через order_calc_profit.
+
+    Возвращает абсолютную величину убытка в валюте счёта.
+    Фоллбэк — старый метод через tick_value/tick_size.
+    """
+    if sl_points <= 0:
+        return 0.0
+    point = getattr(info, 'point', None) or 0
+    if point <= 0:
+        return 0.0
+
+    # Основной путь: order_calc_profit
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is not None:
+        ask = tick.ask
+        sl_price = ask - sl_points * point
+        profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, 1.0, ask, sl_price)
+        if profit is not None:
+            return abs(profit)
+
+    # Фоллбэк: старый метод
+    tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
+    tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None)
+    if tick_size and tick_value:
+        return sl_points * point * tick_value / tick_size
+
+    return 0.0
+
+
+def _calc_position_pnl(symbol, lot, entry_price, exit_price, direction, info=None):
+    """P&L позиции через order_calc_profit.
+
+    Args:
+        symbol: Символ
+        lot: Объём
+        entry_price: Цена входа
+        exit_price: Цена выхода
+        direction: 'long' или 'short'
+        info: symbol_info (опционально, для фолбэка)
+
+    Returns:
+        float — профит/убыток в валюте счёта
+    """
+    order_type = mt5.ORDER_TYPE_BUY if direction == 'long' else mt5.ORDER_TYPE_SELL
+    profit = mt5.order_calc_profit(order_type, symbol, lot, entry_price, exit_price)
+    if profit is not None:
+        return profit
+
+    # Фоллбэк: старый метод
+    if info is None:
+        info = mt5.symbol_info(symbol)
+    if info is None:
+        return 0.0
+    tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
+    tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None)
+    if not tick_size or not tick_value:
+        return 0.0
+    diff = (exit_price - entry_price) if direction == 'long' else (entry_price - exit_price)
+    return (diff / tick_size) * tick_value * lot
+
+
 # ═══ МЕТРИКИ И СКОРИНГ ═══
 
 def calc_metrics(trade_profits):
-    """
-    Считает метрики по списку профитов сделок.
-    Возвращает dict с метриками.
-    """
+    """Считает метрики по списку профитов сделок."""
     if not trade_profits or len(trade_profits) == 0:
         return {
             'profit': 0, 'n_trades': 0, 'profit_factor': 0,
@@ -123,30 +171,23 @@ def calc_metrics(trade_profits):
     total_profit = profits.sum()
     n = len(profits)
 
-    # Profit Factor
     gross_profit = profits[profits > 0].sum()
     gross_loss = abs(profits[profits < 0].sum())
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else 999.0
 
-    # Max Drawdown (по кривой equity)
     equity = np.cumsum(profits)
     running_max = np.maximum.accumulate(equity)
     drawdowns = running_max - equity
     max_drawdown = drawdowns.max() if len(drawdowns) > 0 else 0
 
-    # Win Rate
     win_rate = (profits > 0).sum() / n * 100
 
-    # Sharpe (упрощённый, без risk-free rate)
     if profits.std() > 0:
         sharpe = profits.mean() / profits.std()
     else:
         sharpe = 0
 
-    # Avg Trade
     avg_trade = total_profit / n
-
-    # Recovery Factor
     recovery = total_profit / max_drawdown if max_drawdown > 0 else 999.0
 
     return {
@@ -162,25 +203,10 @@ def calc_metrics(trade_profits):
 
 
 def composite_score(metrics, weights=None, profit_scale=DEFAULT_PROFIT_SCALE):
-    """
-    Композитный скор на основе взвешенной суммы нормированных метрик.
-
-    Веса по умолчанию:
-      profit       — 0.35  (главный драйвер)
-      profit_factor— 0.25  (качество прибыли)
-      win_rate     — 0.15  (стабильность)
-      sharpe       — 0.15  (ровность кривой)
-      recovery     — 0.10  (восстановление после просадки)
-
-    Нормировка — константами: profit/1000, PF/2, WinRate/100, Sharpe/3, Recov/5.
-    ВНИМАНИЕ: константы эмпирические. При крупных профитах (рублёвый счёт)
-    profit доминирует независимо от весов — нормируй profit по медиане
-    результатов окна бэктеста, а не по 1000.
-    """
+    """Композитный скор на основе взвешенной суммы нормированных метрик."""
     if weights is None:
         weights = SCORE_WEIGHTS
 
-    # Нормировка: приводим к сопоставимому масштабу
     normalized = {
         'profit': metrics['profit'] / profit_scale,
         'profit_factor': min(metrics['profit_factor'], 5) / 2,
@@ -197,7 +223,11 @@ def composite_score(metrics, weights=None, profit_scale=DEFAULT_PROFIT_SCALE):
 
 def distribute_lots(ranked_results, symbol_data, balance,
                     max_risk_pct=0.05, min_lot=0.01, min_score=0.8):
-    """Распределяет лоты пропорционально score в рамках квоты риска."""
+    """Распределяет лоты пропорционально score в рамках квоты риска.
+
+    Использует _normalize_volume для округления лотов по шагу брокера
+    и _sl_money_per_lot для расчёта риска SL через order_calc_profit.
+    """
     quota = balance * max_risk_pct
 
     candidates = []
@@ -208,9 +238,7 @@ def distribute_lots(ranked_results, symbol_data, balance,
         if info is None:
             _warn_missing_info(r['symbol'], 'distribute_lots')
             continue
-        sl_money = (r['sl_points'] * getattr(info, 'point', 0)
-                    * (getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0)
-                    / (getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None) or 1))
+        sl_money = _sl_money_per_lot(r['symbol'], info, r['sl_points'])
         if sl_money <= 0:
             continue
         candidates.append({**r, 'sl_money': sl_money})
@@ -226,7 +254,13 @@ def distribute_lots(ranked_results, symbol_data, balance,
     for c in candidates:
         trial = active + [c]
         denom = sum(x['sl_money'] * x['score'] for x in trial)
-        lot = quota * c['score'] / denom
+        raw_lot = quota * c['score'] / denom
+        info = symbol_data.get(c['symbol'], {}).get('info')
+        if info is not None:
+            vol = _normalize_volume(raw_lot, info)
+            lot = max(vol, min_lot) if vol is not None else min_lot
+        else:
+            lot = max(math.floor(raw_lot * 100) / 100, min_lot)
         if lot < min_lot:
             break
         active.append(c)
@@ -234,14 +268,18 @@ def distribute_lots(ranked_results, symbol_data, balance,
     if not active:
         return []
 
-    # Лоты пропорционально score, округляем до шага (0.01)
+    # Лоты пропорционально score, округляем через _normalize_volume
     denom = sum(x['sl_money'] * x['score'] for x in active)
     for x in active:
+        info = symbol_data.get(x['symbol'], {}).get('info')
         raw = quota * x['score'] / denom
-        x['lot'] = max(math.floor(raw * 100) / 100, min_lot)
+        if info is not None:
+            vol = _normalize_volume(raw, info)
+            x['lot'] = max(vol, min_lot) if vol is not None else min_lot
+        else:
+            x['lot'] = max(math.floor(raw * 100) / 100, min_lot)
 
-    # Проверка: не превысили ли квоту (min_lot может дать перекос) —
-    # масштабируем итеративно, пока суммарный риск ≤ квоты.
+    # Масштабируем итеративно, пока суммарный риск ≤ квоты
     for _ in range(20):
         total_risk = sum(x['lot'] * x['sl_money'] for x in active)
         if total_risk <= quota:
@@ -249,9 +287,14 @@ def distribute_lots(ranked_results, symbol_data, balance,
         scale = quota / total_risk
         any_floor = False
         for x in active:
-            scaled = math.floor(x['lot'] * scale * 100) / 100
-            if scaled < min_lot:
-                scaled = min_lot
+            info = symbol_data.get(x['symbol'], {}).get('info')
+            scaled_raw = x['lot'] * scale
+            if info is not None:
+                vol = _normalize_volume(scaled_raw, info)
+                scaled = max(vol, min_lot) if vol is not None else min_lot
+            else:
+                scaled = max(math.floor(scaled_raw * 100) / 100, min_lot)
+            if scaled <= min_lot:
                 any_floor = True
             x['lot'] = scaled
         if not any_floor:
@@ -260,58 +303,38 @@ def distribute_lots(ranked_results, symbol_data, balance,
     return active
 
 
+
 # ═══ УТИЛИТЫ ПОЗИЦИЙ ═══
 
 def get_positions(symbol=None, magic=None):
-    """Получить все позиции MT5 с фильтрацией по символу и magic.
-    
-    Возвращает список объектов mt5.PositionInfo.
-    """
+    """Получить все позиции MT5 с фильтрацией."""
     if symbol is not None:
         positions = mt5.positions_get(symbol=symbol)
     else:
         positions = mt5.positions_get()
-    
+
     if positions is None:
         return []
-    
+
     result = list(positions)
-    
     if magic is not None:
         result = [p for p in result if p.magic == magic]
-    
     return result
 
 
 def positions_total(symbol=None, magic=None):
-    """Подсчитать количество позиций MT5.
-    
-    Args:
-        symbol: Символ или None для всех символов
-        magic: Magic number или None для всех маджиков
-    
-    Returns:
-        int — количество позиций
-    """
+    """Подсчитать количество позиций MT5."""
     return len(get_positions(symbol=symbol, magic=magic))
 
 
 def get_position_by_ticket(ticket):
-    """Получить позицию по тикету.
-    
-    Returns:
-        mt5.PositionInfo или None
-    """
+    """Получить позицию по тикету."""
     positions = mt5.positions_get(ticket=ticket)
     return positions[0] if positions else None
 
 
 def get_symbol_positions(symbol):
-    """Получить все позиции по символу, сгруппированные по direction.
-    
-    Returns:
-        dict: {'long': [...], 'short': [...]}
-    """
+    """Получить все позиции по символу, сгруппированные по direction."""
     positions = get_positions(symbol=symbol)
     result = {'long': [], 'short': []}
     for p in positions:
@@ -324,228 +347,198 @@ def get_symbol_positions(symbol):
 
 def check_margin_available(lot, symbol, price, sl_points=0):
     """Проверить, достаточно ли free margin для открытия позиции.
-    
+
     Args:
-        lot: Объём позиции
+        lot: Объём
         symbol: Символ
         price: Цена входа
-        sl_points: SL в пунктах (опционально)
-    
+        sl_points: SL в пунктах (не используется для маржи, оставлен для совместимости)
+
     Returns:
         tuple: (достаточно: bool, margin_required: float, margin_free: float)
     """
     account = mt5.account_info()
     if account is None:
         return False, 0.0, 0.0
-    
+
     free_margin = account.margin_free
-    
-    # Рассчитать требуемую маржу
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        return False, 0.0, free_margin
-    
-    # Маржа = объём × цена × размер контракта
-    tick_value = getattr(symbol_info, 'trade_tick_value', None) or getattr(symbol_info, 'tick_value', None) or 0.0
-    tick_size = getattr(symbol_info, 'trade_tick_size', None) or getattr(symbol_info, 'tick_size', None)
-    margin_required = lot * price * tick_value / tick_size if tick_size else lot * price
-    
-    # Добавить буфер на SL (если указан)
-    if sl_points > 0:
-        point = getattr(symbol_info, 'point', None) or 0
-        sl_money = sl_points * point * lot * tick_value / tick_size if tick_size else 0.0
-        margin_required += sl_money
-    
-    # Проверить с запасом 20%
+
+    # Маржа через MT5 API
+    margin_required = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol, lot, price)
+    if margin_required is None:
+        # Грубый фолбээк
+        margin_required = lot * price
+
+    # Буфер 20%
     margin_required *= 1.2
-    
+
     return free_margin >= margin_required, margin_required, free_margin
 
 
 def get_stops_levels(symbol):
-    """Получить уровни stops/freeze для символа.
-    
-    Returns:
-        dict: {'stops_level': int, 'freeze_level': int, 'mode': str}
-    """
+    """Получить уровни stops/freeze и режим маржи для символа."""
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
         return {'stops_level': 0, 'freeze_level': 0, 'mode': 'unknown'}
-    
+
     stops_level = getattr(symbol_info, 'trade_stops_level', 0) or 0
     freeze_level = getattr(symbol_info, 'trade_freeze_level', 0) or 0
-    
+
+    account = mt5.account_info()
+    if account is not None:
+        margin_mode = account.margin_mode
+        # margin_mode: 0=netting, 1=hedging (в Python API — числа)
+        mode = 'hedging' if margin_mode == 1 else 'netting'
+    else:
+        mode = 'unknown'
+
     return {
         'stops_level': stops_level,
         'freeze_level': freeze_level,
-        'mode': 'hedging' if getattr(symbol_info, 'exchange', False) else 'netting'
+        'mode': mode
     }
+
 
 
 def validate_stops(sl_price, tp_price, entry_price, symbol):
     """Проверить, что SL/TP допустимы брокером.
-    
-    Args:
-        sl_price: Цена SL
-        tp_price: Цена TP
-        entry_price: Цена входа
-        symbol: Символ
-    
+
     Returns:
         tuple: (valid: bool, reason: str, min_distance_points: int)
     """
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
         return False, 'symbol_info not found', 0
-    
+
     point = getattr(symbol_info, 'point', None) or 0
     stops_level = getattr(symbol_info, 'trade_stops_level', 0) or 0
-    
-    # Минимальное расстояние в пунктах
     min_distance_points = stops_level
-    
-    # Проверка для BUY позиции
-    if sl_price < entry_price:  # BUY SL ниже
+
+    # BUY
+    if sl_price < entry_price:
         sl_distance = (entry_price - sl_price) / point
         if sl_distance < min_distance_points:
             return False, f'SL слишком близко: {sl_distance:.0f} < {min_distance_points}', min_distance_points
-    
-    if tp_price > entry_price:  # BUY TP выше
+
+    if tp_price > entry_price:
         tp_distance = (tp_price - entry_price) / point
         if tp_distance < min_distance_points:
             return False, f'TP слишком близко: {tp_distance:.0f} < {min_distance_points}', min_distance_points
-    
-    # Проверка для SELL позиции
-    if sl_price > entry_price:  # SELL SL выше
+
+    # SELL
+    if sl_price > entry_price:
         sl_distance = (sl_price - entry_price) / point
         if sl_distance < min_distance_points:
             return False, f'SL слишком близко: {sl_distance:.0f} < {min_distance_points}', min_distance_points
-    
-    if tp_price < entry_price:  # SELL TP ниже
+
+    if tp_price < entry_price:
         tp_distance = (entry_price - tp_price) / point
         if tp_distance < min_distance_points:
             return False, f'TP слишком близко: {tp_distance:.0f} < {min_distance_points}', min_distance_points
-    
+
     return True, 'OK', min_distance_points
 
 
 def check_position_limits(current_positions, max_total_positions, max_per_symbol):
     """Проверить лимиты на количество позиций.
-    
+
     Args:
-        current_positions: dict {symbol: count} — текущие позиции по символам
+        current_positions: dict {symbol: count}
         max_total_positions: Максимальное общее число позиций
         max_per_symbol: Максимум позиций на один символ
-    
+
     Returns:
         tuple: (allowed: bool, reason: str, details: dict)
     """
     total = sum(current_positions.values())
-    
+
     if total >= max_total_positions:
         return False, f'Достигнут лимит общих позиций: {total}/{max_total_positions}', {
             'total': total, 'max': max_total_positions
         }
-    
+
     for sym, count in current_positions.items():
         if count >= max_per_symbol:
             return False, f'Достигнут лимит для {sym}: {count}/{max_per_symbol}', {
                 'symbol': sym, 'count': count, 'max': max_per_symbol
             }
-    
+
     return True, 'OK', {'total': total, 'max': max_total_positions, 'positions': dict(current_positions)}
 
 
 def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0):
     """Проверить daily stop-loss по убытку.
-    
-    Args:
-        initial_balance: Баланс на начало дня
-        current_equity: Текущая equity
-        daily_loss_pct: Максимальный убыток в % от баланса
-    
+
     Returns:
         tuple: (allowed: bool, daily_loss_pct: float, reason: str)
     """
     account = mt5.account_info()
     if account is None:
         return False, 0.0, 'account_info not available'
-    
+
     balance = account.balance
-    # Используем переданный current_equity (свежий из main.py), а не перечитываем
     equity = current_equity if current_equity is not None else account.equity
-    
-    # Если initial_balance не передан, используем balance
+
     if initial_balance is None:
         initial_balance = balance
-    
+
     if initial_balance <= 0:
         return True, 0.0, 'initial_balance invalid (<=0)'
+
     daily_loss = ((initial_balance - equity) / initial_balance) * 100
-    
+
     if daily_loss >= daily_loss_pct:
         return False, daily_loss, f'Daily loss {daily_loss:.2f}% >= {daily_loss_pct}%'
-    
+
     return True, daily_loss, f'OK: daily loss {daily_loss:.2f}% < {daily_loss_pct}%'
 
 
 def check_equity_stop(current_equity, initial_equity, equity_stop_pct=10.0):
     """Проверить equity stop — глобальный стоп при просадке.
-    
-    Args:
-        current_equity: Текущая equity
-        initial_equity: Начальная equity (старт бота)
-        equity_stop_pct: Максимальная просадка в %
-    
+
     Returns:
         tuple: (allowed: bool, drawdown_pct: float, reason: str)
     """
     if initial_equity <= 0:
         return True, 0.0, 'initial_equity invalid'
-    
+
     drawdown = ((initial_equity - current_equity) / initial_equity) * 100
-    
+
     if drawdown >= equity_stop_pct:
         return False, drawdown, f'Equity drawdown {drawdown:.2f}% >= {equity_stop_pct}%'
-    
+
     return True, drawdown, f'OK: drawdown {drawdown:.2f}% < {equity_stop_pct}%'
 
 
 def realtime_quota_recalc(balance, current_positions, max_risk_pct=0.05):
     """Пересчёт квоты в реальном времени.
-    
-    Проверяет, не превышена ли квота риска при изменении баланса.
-    
+
     Args:
         balance: Текущий баланс
-        current_positions: Список активных позиций с полями 'lot', 'sl_points', 'symbol'
+        current_positions: Список активных позиций с 'lot', 'sl_points', 'symbol'
         max_risk_pct: Максимальный риск в % от баланса
-    
+
     Returns:
-        tuple: (quota_ok: bool, current_risk: float, quota: float)
+        tuple: (quota_ok: bool, current_risk_pct: float, quota: float)
     """
     quota = balance * max_risk_pct
-    
-    # Рассчитать текущий риск
+
     total_risk = 0
     for pos in current_positions:
         info = mt5.symbol_info(pos['symbol'])
         if info is None:
             _warn_missing_info(pos['symbol'], 'realtime_quota_recalc')
             continue
-        tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0.0
-        tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
         sl = pos.get('sl_points') or 0
-        point = getattr(info, 'point', None) or 0
-        sl_money = sl * point * pos.get('lot', 0) * tick_value / tick_size if tick_size else 0.0
+        sl_money = _sl_money_per_lot(pos['symbol'], info, sl) * pos.get('lot', 0)
         total_risk += sl_money
-    
+
     current_risk_pct = (total_risk / balance * 100) if balance > 0 else 0
-    
+
     return total_risk <= quota, current_risk_pct, quota
 
 
-# ═══ УТИЛИТЫ ПОЗИЦИЙ ═══
+# ═══ УТИЛИТЫ ОБЪЁМА ═══
 
 def _normalize_volume(lot, info):
     """Округляет лот вниз до шага объёма; None — если вне [volume_min, volume_max]."""
@@ -563,14 +556,15 @@ def _normalize_volume(lot, info):
 
 
 def _position_profit(s, exit_price, symbol_data):
-    """P&L позиции s при закрытии по exit_price (в валюте счёта)."""
-    info = symbol_data.get(s['symbol'], {}).get('info')
-    if info is None:
+    """P&L позиции при закрытии по exit_price (в валюте счёта)."""
+    pos = s.get('position')
+    if pos is None:
         return 0.0
-    tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
-    tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None)
-    if not tick_size:
-        return 0.0
-    diff = (exit_price - s['position']['entry_price']) if s['position']['direction'] == 'long' \
-        else (s['position']['entry_price'] - exit_price)
-    return (diff / tick_size) * (tick_value or 0.0) * s['position']['lot']
+
+    symbol = s['symbol']
+    lot = pos['lot']
+    entry_price = pos['entry_price']
+    direction = pos['direction']
+
+    info = symbol_data.get(symbol, {}).get('info')
+    return _calc_position_pnl(symbol, lot, entry_price, exit_price, direction, info)

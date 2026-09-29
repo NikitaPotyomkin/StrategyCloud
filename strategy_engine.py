@@ -19,7 +19,7 @@ from config import RiskParams
 
 
 # Режим счёта, необходимый для нескольких стратегий на одном символе.
-HEDGING_MODE = getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 2)
+HEDGING_MODE = getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 'hedging')
 
 # Символы, для которых уже выводилось предупреждение о netting-счёте.
 _NETTING_WARNED = set()
