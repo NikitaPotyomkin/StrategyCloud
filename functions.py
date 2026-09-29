@@ -342,7 +342,7 @@ def get_equity():
     """Получить данные о текущем портфеле."""
     account_info = mt5.account_info()
     if account_info is not None:
-        account_info_dict = mt5.account_info()._asdict()
+        account_info_dict = account_info._asdict()
         df = pd.DataFrame(list(account_info_dict.items()), columns=['property', 'value'])
         balance = df["value"].iloc[10]
         msg = f'баланс: {balance}'
@@ -499,7 +499,10 @@ def split_volume(lot):
 
 def calc_lot(equity_percentage):
     """Рассчитать лот на основе процента от капитала."""
-    account_info_dict = mt5.account_info()._asdict()
+    acc_info = mt5.account_info()
+    if acc_info is None:
+        return 0.0
+    account_info_dict = acc_info._asdict()
     df = pd.DataFrame(list(account_info_dict.items()), columns=['property', 'value'])
     balance = df["value"].iloc[10]
     lot = round((balance * equity_percentage / 100) / 1000, 2)
@@ -1443,6 +1446,15 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     all_results = []
     global_start = time.time()
+    # Статистика прошлого прогона — для оценки времени при старте.
+    last_run_path = os.path.join(_checkpoint_dir(), 'last_run.json')
+    last_run = None
+    if os.path.exists(last_run_path):
+        try:
+            with open(last_run_path, 'r', encoding='utf-8') as f:
+                last_run = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            last_run = None
 
     # Предрасчёт размеров
     stoch_per_symbol = len(K_PERIODS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
@@ -1475,23 +1487,23 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     hurst_per_symbol = (len(HURST_WINDOW_LIST) * len(HURST_TREND_THRESHOLD_LIST) *
                         len(HURST_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     lrc_per_symbol = (len(LRC_PERIOD_LIST) * len(LRC_STD_THRESHOLD_LIST) *
-                      len(LRC_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                       len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     percentile_per_symbol = (len(PCT_PERIOD_LIST) * len(PCT_LOW_LIST) * len(PCT_HIGH_LIST) *
-                             len(PCT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     runs_per_symbol = (len(RUNS_WINDOW_LIST) * len(RUNS_THRESHOLD_LIST) *
-                       len(RUNS_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                        len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     coint_per_symbol = (len(COINT_WINDOW_LIST) * len(COINT_THRESHOLD_LIST) *
-                        len(COINT_BETA_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                         len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     sharpe_per_symbol = (len(SHARPE_WINDOW_LIST) * len(SHARPE_THRESHOLD_LIST) *
-                         len(SHARPE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                          len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     skewness_per_symbol = (len(SKEW_WINDOW_LIST) * len(SKEW_THRESHOLD_LIST) *
-                           len(SKEW_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     bayesian_per_symbol = (len(BAYES_WINDOW_LIST) * len(BAYES_THRESHOLD_LIST) *
                            len(BAYES_PRIOR_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     kurtosis_per_symbol = (len(KURT_WINDOW_LIST) * len(KURT_THRESHOLD_LIST) *
-                           len(KURT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     chi_square_per_symbol = (len(CHISQ_WINDOW_LIST) * len(CHISQ_ENTRY_LIST) *
-                             len(CHISQ_EXIT_LIST) * len(CHISQ_VOL_PERIOD_LIST) *
+                             len(CHISQ_EXIT_LIST) * 
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
     # Фильтр по test_strategy
@@ -1589,6 +1601,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     if force_recalc:
         print(f"\n  ⚡ Принудительный пересчёт — чекпоинты игнорируются")
+    if not force_recalc and not existing_checkpoints:
+        print(f"  ℹ Чекпойнтов нет — будет полный пересчёт")
 
     # ── Сначала собрать valid_symbols ──
     valid_symbols = []
@@ -1617,10 +1631,10 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         info = sd['info']
         # Извлечь только примитивные поля (SymbolInfo нельзя pickle)
         info_dict = {
-            'point': info.point,
+            'point': getattr(info, 'point', None) or 0,
             'trade_tick_value': getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0,
             'trade_tick_size': getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None) or 0,
-            'spread': info.spread,
+            'spread': getattr(info, 'spread', None) or 0,
         }
         df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
         symbol_args.append((
@@ -1720,6 +1734,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     print(f"\n  Символы ({total_symbols}): {', '.join(valid_symbols)}")
     print(f"  Окно данных: {BACKTEST_DAYS} дн. × 24 ч = {BACKTEST_DAYS * 24} баров")
+    if total_combos > 0:
+        if last_run and last_run.get('combos') and last_run.get('elapsed_sec'):
+            est_sec = max(1, int(last_run['elapsed_sec'] * (total_combos / max(1, last_run['combos']))))
+            est_note = f"по прошлому прогону ({last_run['elapsed_sec']:.0f}с на {last_run['combos']} комб.)"
+        else:
+            est_sec = max(1, int(total_combos / (4 * 30)))
+            est_note = "грубая (~30 комб/с на процесс, 4 процесса)"
+        print(f"  ⏱  Оценка времени: ~{est_sec / 60:.0f} мин ({est_sec / 3600:.1f} ч) — {est_note}")
+    elif total_symbols == 0:
+        print(f"  ✅ Всё готово из чекпойнтов — расчёт не нужен")
     print(f"{'═' * 60}")
 
     n_processes = min(4, max(1, os.cpu_count() or 1))
@@ -1745,7 +1769,13 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 symbol_done, results, combos_done, active_c, strats = item
                 elapsed = time.time() - global_start
                 print(f"\n  ✓ [{done}/{total_symbols}] {symbol_done} готово "
-                      f"({combos_done} комб., {elapsed:.0f}с с начала)")
+                      f"({combos_done} комб., {elapsed:.0f}с с начала)"
+                      f"⏳ {done / total_symbols * 100:.0f}% | ETA ~{(total_symbols - done) * elapsed / max(done, 1) / 60:.1f} мин")
+                
+                    
+                    
+                    
+                          
                 for strat_name in strats:
                     print(f"    {symbol_done} | {strat_name} ✓")
     else:
@@ -1757,7 +1787,18 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             symbol_done, results, combos_done, active_c, strats = item
             elapsed = time.time() - global_start
             print(f"\n  ✓ [{done}/{total_symbols}] {symbol_done} готово "
-                  f"({combos_done} комб., {elapsed:.0f}с с начала)")
+                  f"({combos_done} комб., {elapsed:.0f}с с начала)"
+                      f"⏳ {done / total_symbols * 100:.0f}% | ETA ~{(total_symbols - done) * elapsed / max(done, 1) / 60:.1f} мин")
+                
+                    
+                    
+                    
+                          
+                
+                    
+                    
+                    
+                          
             for strat_name in strats:
                 print(f"    {symbol_done} | {strat_name} ✓")
 
@@ -1787,6 +1828,19 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     print(f"{'─' * 60}\n")
 
     # ── Чекпоинты НЕ удаляем — они ускоряют запуск, загружаясь при следующем старте ──
+
+    # ── Статистика прогона: для оценки времени при следующем старте ──
+    try:
+        with open(last_run_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'combos': total_combos,
+                'symbols': total_symbols,
+                'elapsed_sec': round(total_elapsed, 1),
+                'finished_at': datetime.datetime.now().isoformat(),
+                'skipped_from_checkpoint': len(skipped_symbols),
+            }, f, ensure_ascii=False, indent=2)
+    except (OSError, TypeError):
+        pass
 
     return top_results, all_results
 

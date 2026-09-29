@@ -87,6 +87,15 @@ DEFAULT_PROFIT_SCALE = 1000.0
 DEFAULT_LOT = 0.01
 
 
+_WARNED_MISSING_INFO = set()
+
+
+def _warn_missing_info(symbol, where):
+    if symbol not in _WARNED_MISSING_INFO:
+        _WARNED_MISSING_INFO.add(symbol)
+        print(f"  ⚠ {symbol}: symbol_info недоступен ({where}) — пропуск", flush=True)
+
+
 def json_default(obj):
     """default= для json.dump: numpy-скаляры -> float/int (страховка от TypeError)."""
     if isinstance(obj, np.floating):
@@ -197,6 +206,7 @@ def distribute_lots(ranked_results, symbol_data, balance,
             continue
         info = symbol_data.get(r['symbol'], {}).get('info')
         if info is None:
+            _warn_missing_info(r['symbol'], 'distribute_lots')
             continue
         sl_money = (r['sl_points'] * getattr(info, 'point', 0)
                     * (getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0)
@@ -342,7 +352,7 @@ def check_margin_available(lot, symbol, price, sl_points=0):
     
     # Добавить буфер на SL (если указан)
     if sl_points > 0:
-        point = symbol_info.point
+        point = getattr(symbol_info, 'point', None) or 0
         sl_money = sl_points * point * lot * tick_value / tick_size if tick_size else 0.0
         margin_required += sl_money
     
@@ -388,7 +398,7 @@ def validate_stops(sl_price, tp_price, entry_price, symbol):
     if symbol_info is None:
         return False, 'symbol_info not found', 0
     
-    point = symbol_info.point
+    point = getattr(symbol_info, 'point', None) or 0
     stops_level = getattr(symbol_info, 'trade_stops_level', 0) or 0
     
     # Минимальное расстояние в пунктах
@@ -521,10 +531,13 @@ def realtime_quota_recalc(balance, current_positions, max_risk_pct=0.05):
     for pos in current_positions:
         info = mt5.symbol_info(pos['symbol'])
         if info is None:
+            _warn_missing_info(pos['symbol'], 'realtime_quota_recalc')
             continue
         tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0.0
         tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
-        sl_money = pos['sl_points'] * info.point * pos['lot'] * tick_value / tick_size if tick_size else 0.0
+        sl = pos.get('sl_points') or 0
+        point = getattr(info, 'point', None) or 0
+        sl_money = sl * point * pos.get('lot', 0) * tick_value / tick_size if tick_size else 0.0
         total_risk += sl_money
     
     current_risk_pct = (total_risk / balance * 100) if balance > 0 else 0

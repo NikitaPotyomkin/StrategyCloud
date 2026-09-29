@@ -159,15 +159,15 @@ if __name__ == '__main__':
         'Zscore':         _combo(len(sp.zscore_sma_period_list), len(sp.zscore_threshold_list), len(sp.zscore_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
         'Autocorr':       _combo(len(sp.autocorr_lag_list), len(sp.autocorr_threshold_list), len(sp.autocorr_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
         'Hurst':          _combo(len(sp.hurst_window_list), len(sp.hurst_trend_threshold_list), len(sp.hurst_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'LRC':            _combo(len(sp.lrc_period_list), len(sp.lrc_std_threshold_list), len(sp.lrc_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Percentile':     _combo(len(sp.pct_period_list), len(sp.pct_low_list), len(sp.pct_high_list), len(sp.pct_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Runs':           _combo(len(sp.runs_window_list), len(sp.runs_threshold_list), len(sp.runs_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Coint':          _combo(len(sp.coint_window_list), len(sp.coint_threshold_list), len(sp.coint_beta_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Sharpe':         _combo(len(sp.sharpe_window_list), len(sp.sharpe_threshold_list), len(sp.sharpe_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Skewness':       _combo(len(sp.skew_window_list), len(sp.skew_threshold_list), len(sp.skew_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'LRC':            _combo(len(sp.lrc_period_list), len(sp.lrc_std_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Percentile':     _combo(len(sp.pct_period_list), len(sp.pct_low_list), len(sp.pct_high_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Runs':           _combo(len(sp.runs_window_list), len(sp.runs_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Coint':          _combo(len(sp.coint_window_list), len(sp.coint_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Sharpe':         _combo(len(sp.sharpe_window_list), len(sp.sharpe_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Skewness':       _combo(len(sp.skew_window_list), len(sp.skew_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
         'Bayesian':       _combo(len(sp.bayes_window_list), len(sp.bayes_threshold_list), len(sp.bayes_prior_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'Kurtosis':       _combo(len(sp.kurt_window_list), len(sp.kurt_threshold_list), len(sp.kurt_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-        'ChiSq':          _combo(len(sp.chisq_window_list), len(sp.chisq_entry_list), len(sp.chisq_exit_list), len(sp.chisq_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Kurtosis':       _combo(len(sp.kurt_window_list), len(sp.kurt_threshold_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
+        'ChiSq':          _combo(len(sp.chisq_window_list), len(sp.chisq_entry_list), len(sp.chisq_exit_list),  len(sp.sl_points_list), len(sp.tp_points_list)),
     }
 
     budget_results = check_integration_budget(integration_budgets_dict, app.symbols)
@@ -185,6 +185,8 @@ if __name__ == '__main__':
         if h1 is not None:
             mt5.symbol_select(sym, True)
             info = mt5.symbol_info(sym)
+            if info is None:
+                print(f"  ⚠ {sym}: symbol_info вернул None — бэктест/live по символу пропущен", flush=True)
             symbol_data[sym] = {
                 'df_h1': h1,
                 'current_hour': (h1.index[-1] + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0),

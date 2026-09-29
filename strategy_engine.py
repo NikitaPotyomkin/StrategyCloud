@@ -23,6 +23,7 @@ HEDGING_MODE = getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 2)
 
 # Символы, для которых уже выводилось предупреждение о netting-счёте.
 _NETTING_WARNED = set()
+_MISSING_INFO_WARNED = set()
 
 
 def get_non_usd(symbol):
@@ -658,7 +659,7 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         if lot is None:
             print(f"  -> {symbol}: объём вне [min, max] или шаг некорректен — отказ")
             return None
-    digits = info.digits if info is not None else 5
+    digits = getattr(info, 'digits', None) or 5
     
     # ── Проверка 1: Free margin (пункт 2) ──
     if check_margin:
@@ -771,7 +772,8 @@ def close_order(symbol, ticket, direction, magic, symbol_data):
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             print(f"  -> Закрытие не прошло: {result.retcode}, {result.comment}")
             return None
-    digits = symbol_data[symbol]['info'].digits
+    info = symbol_data.get(symbol, {}).get('info')
+    digits = getattr(info, 'digits', None) or 5
     print(f"  -> Закрыт {symbol} ticket={ticket}, price={price:.{digits}f}")
     return price
 
@@ -856,12 +858,17 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
         try:
             if s['symbol'] not in symbol_data:
                 continue
-            sd = symbol_data[s['symbol']]
+            sd = symbol_data.get(s['symbol'])
+            if sd is None or sd.get('df_h1') is None or sd.get('info') is None:
+                    if key not in _MISSING_INFO_WARNED:
+                        _MISSING_INFO_WARNED.add(key)
+                        print(f"  -> [{key}] Пропуск: нет df_h1/info по {s['symbol']} — стратегия не рассчитывается", flush=True)
+                continue
             df = sd['df_h1']
 
             stype = s.get('type', 'stoch')
             info = sd['info']
-            digits = info.digits
+            digits = getattr(info, 'digits', None) or 5
 
             if stype == 'stoch':
                 df = calc_stochastic_fn(df, s['param_key'])
