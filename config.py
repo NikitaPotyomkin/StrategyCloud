@@ -244,7 +244,7 @@ class RiskParams:
     realtime_quota_recalc: bool = True
     quota_recalc_interval_sec: int = 300
     min_sl_distance_points: int = 10
-    max_sl_distance_points: int = 500
+    max_sl_distance_points: int = 5000
     max_risk_pct: float = 0.05
     min_lot: float = 0.01
     min_score: float = 1.0
