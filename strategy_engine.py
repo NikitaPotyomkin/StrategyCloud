@@ -697,8 +697,11 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         time.sleep(0.5)
         result = mt5.order_send(request)
     if result is None:
+        err = mt5.last_error()
         print(f"  -> [WARN] {symbol} {direction} magic={magic}: order_send вернул None "
-                      f"после 2 попыток — терминал не отвечает, ордер пропущен ({comment})")
+              f"после 2 попыток — терминал не отвечает, ордер пропущен ({comment}), "
+              f"last_error={err}", flush=True)
+        return None
         return None
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         # Предупреждение о причинах отказа
