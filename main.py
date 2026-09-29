@@ -248,7 +248,8 @@ if __name__ == '__main__':
         bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
         test_strategy=None,
         test_mode=False,
-        force_recalc=FORCE_RECALC
+        force_recalc=FORCE_RECALC,
+        incremental=True
     )
 
     except Exception as exc:

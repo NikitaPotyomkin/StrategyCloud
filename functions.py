@@ -34,12 +34,12 @@ def load_checkpoint(symbol):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data.get('results', []), data.get('last_bar_time')
+        return data.get('results', []), data.get('last_bar_time'), data.get('families')
     except (json.JSONDecodeError, KeyError):
         return None, None
 
 
-def save_checkpoint(symbol, results, last_bar_time=None):
+def save_checkpoint(symbol, results, last_bar_time=None, families=None):
     """Сохранить результаты для символа в чекпойнт."""
     path = _checkpoint_file(symbol)
     data = {
@@ -47,6 +47,7 @@ def save_checkpoint(symbol, results, last_bar_time=None):
         'timestamp': datetime.datetime.now().isoformat(),
         'n_results': len(results),
         'last_bar_time': last_bar_time,
+        'families': families,
         'results': results
     }
     with open(path, 'w', encoding='utf-8') as f:
@@ -573,6 +574,24 @@ def show_start_msgs(advisor_id, now):
 
 
 # ═══ БЭКТЕСТ ═══
+class _FamilyFilter:
+    """Псевдо-test_strategy для инкрементального пересчёта: == имя -> True,
+    если семейство в разрешённом списке. Позволяет переиспользовать
+    существующие guard'ы 'if not test_strategy or test_strategy == X' без
+    правок каждого блока."""
+    def __init__(self, names):
+        self.names = set(names)
+
+    def __eq__(self, other):
+        return other in self.names
+
+    def __bool__(self):
+        return True
+
+    def __repr__(self):
+        return f"_FamilyFilter({sorted(self.names)})"
+
+
 def _reconstruct_symbol_info(symbol, info_dict):
     """Восстановить объект с полями, которые нужны для бэктеста."""
     class _SymbolInfo:
@@ -622,7 +641,15 @@ def _backtest_symbol(args):
      BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
      KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
      CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
-     BACKTEST_DAYS, test_strategy, test_mode, total_symbols) = args
+     BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
+            
+     family_fp, recalc_families) = args
+
+    # Инкрементальный пересчёт: считаем только указанные семейства.
+    # _FamilyFilter подменяет test_strategy так, что существующие guard'ы
+    # 'if not test_strategy or test_strategy == X' пропускают остальные.
+    if recalc_families is not None:
+        test_strategy = _FamilyFilter(recalc_families)
 
     # Восстановить объект "info" из примитивного словаря
     info = _reconstruct_symbol_info(symbol, info_dict)
@@ -1354,14 +1381,15 @@ def _backtest_symbol(args):
 
     # ── Сохраняем чекпойнт после каждого символа ──
     last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
-    save_checkpoint(symbol, results, last_bar_time=last_bar_time)
+    save_checkpoint(symbol, results, last_bar_time=last_bar_time, families=family_fp)
 
     return symbol, results, combos_done, active_combos, completed_strategies
 
 
 
 def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
-    test_strategy=None, test_mode=False, force_recalc=False):
+    test_strategy=None, test_mode=False, force_recalc=False,
+    incremental=False):
     """Перебирает все комбинации stoch, parabolic, ma, rf, logreg. Возвращает (top, all).
 
     TOP_N — максимальное число стратегий на ОДНУ валюту.
@@ -1563,9 +1591,41 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     combos_per_symbol = active_combos
 
+    # Отпечаток конфигурации по семействам: для инкрементального пересчёта.
+    def _fp(*lsts):
+        return tuple(tuple(l) for l in lsts)
+
+    family_fp = {
+        'stoch': _fp(K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST),
+        'parabolic': _fp(PARABOLIC_STEPS, PARABOLIC_MAXS, SL_POINTS_LIST, TP_POINTS_LIST),
+        'ma': _fp(MA_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST),
+        'rf': _fp(RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST),
+        'logreg': _fp(LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS, SL_POINTS_LIST, TP_POINTS_LIST),
+        'macd_cross': _fp(MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'rsi_rev': _fp(RSI_REV_PERIOD_LIST, RSI_REV_OVERSOLD_LIST, RSI_REV_OVERBOUGHT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'bollinger': _fp(BB_PERIOD_LIST, BB_STD_LIST, VOLUME_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'ema_cross': _fp(EMA_FAST_LIST, EMA_SLOW_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'rsi_div': _fp(RSI_DIV_PERIOD_LIST, RSI_DIV_LOOKBACK_LIST, RSI_DIV_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'ichimoku': _fp(TENKAN_LIST, KIJUN_LIST, SENKOU_B_LIST, DISPLACEMENT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'zscore': _fp(ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'autocorr': _fp(AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'hurst': _fp(HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'lrc': _fp(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'percentile': _fp(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'runs': _fp(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'coint': _fp(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'sharpe': _fp(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'skewness': _fp(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'bayesian': _fp(BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'kurtosis': _fp(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'chi_square': _fp(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+    }
+
     # ── Загружаем готовые чекпойнты ──
     existing_checkpoints = list_checkpoints()
     skipped_symbols = {}
+    partial_recalc = {}
+    reuse_stale = []
     removed_stale = []
     for symbol in SYMBOLS:
         if force_recalc:
@@ -1573,7 +1633,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             remove_checkpoint(symbol)
             continue
         if symbol in existing_checkpoints:
-            cached, cached_bar_time = load_checkpoint(symbol)
+            cached, cached_bar_time, cached_families = load_checkpoint(symbol)
             if cached is not None and symbol in symbol_data:
                 df = symbol_data[symbol]['df_h1']
                 current_bar_time = df.index[-1].isoformat()
@@ -1581,10 +1641,21 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                     # Данные не изменились — пропускаем
                     all_results.extend(cached)
                     skipped_symbols[symbol] = len(cached)
+                elif incremental:
+                    cached_fams = cached_families or {}
+                    recalc_set = {f for f, fp in family_fp.items()
+                                  if cached_fams.get(f) != fp}
+                    if not recalc_set:
+                        all_results.extend(cached)
+                        skipped_symbols[symbol] = len(cached)
+                        reuse_stale.append(symbol)
+                    else:
+                        partial_recalc[symbol] = (cached, recalc_set)
                 else:
-                    # Данные обновились — удаляем чекпоинт и пересчитываем
                     remove_checkpoint(symbol)
                     removed_stale.append(symbol)
+                    
+                    
             else:
                 all_results.extend(cached)
                 skipped_symbols[symbol] = len(cached)
@@ -1598,6 +1669,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         print(f"\n  🔄 Обновлено {len(removed_stale)} чекпойнтов (данные обновились):")
         for sym in removed_stale:
             print(f"    {sym}")
+
+    if reuse_stale:
+        print(f"\n  🔁 Из ночных чекпойнтов (конфиг не менялся): {len(reuse_stale)} символов")
+        for sym in reuse_stale:
+            print(f"    {sym}: {skipped_symbols.get(sym, 0)} результатов")
+
+    if partial_recalc:
+        print(f"\n  🔄 Частичный пересчёт (новые/изменённые семейства):")
+        for sym, (_cached, recalc_set) in partial_recalc.items():
+            print(f"    {sym}: считаем {', '.join(sorted(recalc_set))}")
 
     if force_recalc:
         print(f"\n  ⚡ Принудительный пересчёт — чекпоинты игнорируются")
@@ -1660,7 +1741,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
             KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
             CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
-            BACKTEST_DAYS, test_strategy, test_mode, total_symbols
+            BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
+            family_fp, partial_recalc.get(symbol, (None, None))[1]
         ))
     total_combos = combos_per_symbol * total_symbols
     n_skipped = len(skipped_symbols)
@@ -1804,9 +1886,27 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     # ── Собрать результаты ──
     all_results = []
+    new_by_symbol = {}
     for item in results_list:
         symbol, results, combos_done, active_combos, completed_strategies = item
-        all_results.extend(results)
+        new_by_symbol.setdefault(symbol, []).extend(results)
+
+    # ── Мерж частичного пересчёта: ночной кэш (без изменённых семейств) + свежие результаты ──
+    for symbol, (cached, recalc_set) in partial_recalc.items():
+        kept = [r for r in cached
+                if r.get('type') not in recalc_set and r.get('type') in family_fp]
+        merged = kept + new_by_symbol.get(symbol, [])
+        all_results.extend(merged)
+        try:
+            save_checkpoint(symbol, merged,
+                            last_bar_time=symbol_data[symbol]['df_h1'].index[-1].isoformat(),
+                            families=family_fp)
+        except (OSError, TypeError):
+            pass
+
+    for symbol in new_by_symbol:
+        if symbol not in partial_recalc:
+            all_results.extend(new_by_symbol[symbol])
 
     total_elapsed = time.time() - global_start
     print(f"\n{'─' * 60}")

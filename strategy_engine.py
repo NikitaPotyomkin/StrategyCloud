@@ -860,9 +860,9 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 continue
             sd = symbol_data.get(s['symbol'])
             if sd is None or sd.get('df_h1') is None or sd.get('info') is None:
-                    if key not in _MISSING_INFO_WARNED:
-                        _MISSING_INFO_WARNED.add(key)
-                        print(f"  -> [{key}] Пропуск: нет df_h1/info по {s['symbol']} — стратегия не рассчитывается", flush=True)
+                if key not in _MISSING_INFO_WARNED:
+                    _MISSING_INFO_WARNED.add(key)
+                    print(f"  -> [{key}] Пропуск: нет df_h1/info по {s['symbol']} — стратегия не рассчитывается", flush=True)
                 continue
             df = sd['df_h1']
 
