@@ -336,11 +336,14 @@ if __name__ == '__main__':
                 # Ошибка ночного перерасчёта НЕ останавливает процесс:
                 # старый набор стратегий остаётся активным, повторим завтра в 3:00.
                 try:
+                    # Ночной пересчёт: force_recalc=False, чтобы functions.py
+                    # решил сам по night_reset.json — если пересчёт был сегодня,
+                    # использует кэш + новые стратегии
                     _, all_results = run_full_backtest(
                     bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
                     test_strategy=None,
                     test_mode=False,
-                    force_recalc=FORCE_RECALC
+                    force_recalc=False
                 )
 
                 except Exception as exc:

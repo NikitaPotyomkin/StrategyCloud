@@ -1388,16 +1388,22 @@ def _backtest_symbol(args):
 
 
 def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
-    test_strategy=None, test_mode=False, force_recalc=False,
-    incremental=False):
-    """Перебирает все комбинации stoch, parabolic, ma, rf, logreg. Возвращает (top, all).
+                      test_strategy=None, test_mode=False, force_recalc=False,
+                      incremental=False, is_night_run=False):
+    """Перебирает все комбинации стратегий. Возвращает (top, all_results).
 
     TOP_N — максимальное число стратегий на ОДНУ валюту.
     test_strategy — если задан, тестирует только одну стратегию.
     test_mode — если True, выводит спец-сообщение для тестового режима.
-    force_recalc — если True, игнорирует чекпоинты и пересчитывает всё с нуля.
+    force_recalc — если True, игнорирует чекпойнты и пересчитывает всё с нуля.
+    is_night_run — если True, это ночной прогон: полный пересчёт + запись night_reset.json.
     """
-    # ── Распаковка контейнеров (рефакторинг: единый источник — config.py) ──
+
+    # ── Ночное окно: старт прогона между 00:00 и 04:00 ──
+    NIGHT_WINDOW_START = 0
+    NIGHT_WINDOW_END = 4
+
+    # ── Распаковка контейнеров ──
     SYMBOLS = list(symbols)
     K_PERIODS = strategy_params.k_periods
     SL_POINTS_LIST = strategy_params.sl_points_list
@@ -1474,7 +1480,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     all_results = []
     global_start = time.time()
-    # Статистика прошлого прогона — для оценки времени при старте.
+
+    # ── Статистика прошлого прогона ──
     last_run_path = os.path.join(_checkpoint_dir(), 'last_run.json')
     last_run = None
     if os.path.exists(last_run_path):
@@ -1484,14 +1491,13 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         except (json.JSONDecodeError, OSError):
             last_run = None
 
-    # Предрасчёт размеров
+    # ── Предрасчёт размеров комбинаций на 1 символ ──
     stoch_per_symbol = len(K_PERIODS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     parab_per_symbol = len(PARABOLIC_STEPS) * len(PARABOLIC_MAXS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     ma_per_symbol = len(MA_PERIODS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     rf_per_symbol = len(RF_LOOKBACKS) * len(RF_NBARS) * len(RF_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     logreg_per_symbol = len(LOGREG_LOOKBACKS) * len(LOGREG_NBARS) * len(LOGREG_THRESHOLDS) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
-    # Новые стратегии
     macd_cross_per_symbol = (len(MACD_CROSS_FAST_LIST) * len(MACD_CROSS_SLOW_LIST) *
                              len(MACD_CROSS_SIGNAL_LIST) *
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
@@ -1507,7 +1513,6 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     ichimoku_per_symbol = (len(TENKAN_LIST) * len(KIJUN_LIST) * len(SENKOU_B_LIST) *
                            len(DISPLACEMENT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
-    # STANDALONE стратегии
     zscore_per_symbol = (len(ZSCORE_SMA_PERIOD_LIST) * len(ZSCORE_THRESHOLD_LIST) *
                          len(ZSCORE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     autocorr_per_symbol = (len(AUTOCORR_LAG_LIST) * len(AUTOCORR_THRESHOLD_LIST) *
@@ -1515,83 +1520,60 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     hurst_per_symbol = (len(HURST_WINDOW_LIST) * len(HURST_TREND_THRESHOLD_LIST) *
                         len(HURST_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     lrc_per_symbol = (len(LRC_PERIOD_LIST) * len(LRC_STD_THRESHOLD_LIST) *
-                       len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                      len(LRC_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     percentile_per_symbol = (len(PCT_PERIOD_LIST) * len(PCT_LOW_LIST) * len(PCT_HIGH_LIST) *
-                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                             len(PCT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     runs_per_symbol = (len(RUNS_WINDOW_LIST) * len(RUNS_THRESHOLD_LIST) *
-                        len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                      len(RUNS_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     coint_per_symbol = (len(COINT_WINDOW_LIST) * len(COINT_THRESHOLD_LIST) *
-                         len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                        len(COINT_BETA_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     sharpe_per_symbol = (len(SHARPE_WINDOW_LIST) * len(SHARPE_THRESHOLD_LIST) *
-                          len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                         len(SHARPE_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     skewness_per_symbol = (len(SKEW_WINDOW_LIST) * len(SKEW_THRESHOLD_LIST) *
-                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                           len(SKEW_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     bayesian_per_symbol = (len(BAYES_WINDOW_LIST) * len(BAYES_THRESHOLD_LIST) *
                            len(BAYES_PRIOR_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     kurtosis_per_symbol = (len(KURT_WINDOW_LIST) * len(KURT_THRESHOLD_LIST) *
-                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+                           len(KURT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     chi_square_per_symbol = (len(CHISQ_WINDOW_LIST) * len(CHISQ_ENTRY_LIST) *
-                             len(CHISQ_EXIT_LIST) * 
+                             len(CHISQ_EXIT_LIST) * len(CHISQ_VOL_PERIOD_LIST) *
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
-    # Фильтр по test_strategy
-    if test_strategy == 'stoch':
-        active_combos = stoch_per_symbol
-    elif test_strategy == 'parabolic':
-        active_combos = parab_per_symbol
-    elif test_strategy == 'ma':
-        active_combos = ma_per_symbol
-    elif test_strategy == 'rf':
-        active_combos = rf_per_symbol
-    elif test_strategy == 'logreg':
-        active_combos = logreg_per_symbol
-    elif test_strategy == 'macd_cross':
-        active_combos = macd_cross_per_symbol
-    elif test_strategy == 'rsi_rev':
-        active_combos = rsi_rev_per_symbol
-    elif test_strategy == 'bollinger':
-        active_combos = bollinger_per_symbol
-    elif test_strategy == 'ema_cross':
-        active_combos = ema_cross_per_symbol
-    elif test_strategy == 'rsi_div':
-        active_combos = rsi_div_per_symbol
-    elif test_strategy == 'ichimoku':
-        active_combos = ichimoku_per_symbol
-    elif test_strategy == 'zscore':
-        active_combos = zscore_per_symbol
-    elif test_strategy == 'autocorr':
-        active_combos = autocorr_per_symbol
-    elif test_strategy == 'hurst':
-        active_combos = hurst_per_symbol
-    elif test_strategy == 'lrc':
-        active_combos = lrc_per_symbol
-    elif test_strategy == 'percentile':
-        active_combos = percentile_per_symbol
-    elif test_strategy == 'runs':
-        active_combos = runs_per_symbol
-    elif test_strategy == 'coint':
-        active_combos = coint_per_symbol
-    elif test_strategy == 'sharpe':
-        active_combos = sharpe_per_symbol
-    elif test_strategy == 'skewness':
-        active_combos = skewness_per_symbol
-    elif test_strategy == 'bayesian':
-        active_combos = bayesian_per_symbol
-    elif test_strategy == 'kurtosis':
-        active_combos = kurtosis_per_symbol
-    elif test_strategy == 'chi_square':
-        active_combos = chi_square_per_symbol
+    # ── Карта: test_strategy → кол-во комбинаций ──
+    strat_combo_map = {
+        'stoch': stoch_per_symbol,
+        'parabolic': parab_per_symbol,
+        'ma': ma_per_symbol,
+        'rf': rf_per_symbol,
+        'logreg': logreg_per_symbol,
+        'macd_cross': macd_cross_per_symbol,
+        'rsi_rev': rsi_rev_per_symbol,
+        'bollinger': bollinger_per_symbol,
+        'ema_cross': ema_cross_per_symbol,
+        'rsi_div': rsi_div_per_symbol,
+        'ichimoku': ichimoku_per_symbol,
+        'zscore': zscore_per_symbol,
+        'autocorr': autocorr_per_symbol,
+        'hurst': hurst_per_symbol,
+        'lrc': lrc_per_symbol,
+        'percentile': percentile_per_symbol,
+        'runs': runs_per_symbol,
+        'coint': coint_per_symbol,
+        'sharpe': sharpe_per_symbol,
+        'skewness': skewness_per_symbol,
+        'bayesian': bayesian_per_symbol,
+        'kurtosis': kurtosis_per_symbol,
+        'chi_square': chi_square_per_symbol,
+    }
+
+    if test_strategy and test_strategy in strat_combo_map:
+        active_combos = strat_combo_map[test_strategy]
     else:
-        active_combos = (stoch_per_symbol + parab_per_symbol + ma_per_symbol + rf_per_symbol + logreg_per_symbol +
-                         macd_cross_per_symbol + rsi_rev_per_symbol + bollinger_per_symbol + ema_cross_per_symbol +
-                         rsi_div_per_symbol + ichimoku_per_symbol + zscore_per_symbol + autocorr_per_symbol +
-                         hurst_per_symbol + lrc_per_symbol + percentile_per_symbol + runs_per_symbol +
-                         coint_per_symbol + sharpe_per_symbol + skewness_per_symbol + bayesian_per_symbol +
-                         kurtosis_per_symbol + chi_square_per_symbol)
+        active_combos = sum(strat_combo_map.values())
 
     combos_per_symbol = active_combos
 
-    # Отпечаток конфигурации по семействам: для инкрементального пересчёта.
+    # ── Отпечатки семейств для инкрементального пересчёта ──
     def _fp(*lsts):
         return tuple(tuple(l) for l in lsts)
 
@@ -1610,65 +1592,133 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'zscore': _fp(ZSCORE_SMA_PERIOD_LIST, ZSCORE_THRESHOLD_LIST, ZSCORE_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'autocorr': _fp(AUTOCORR_LAG_LIST, AUTOCORR_THRESHOLD_LIST, AUTOCORR_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'hurst': _fp(HURST_WINDOW_LIST, HURST_TREND_THRESHOLD_LIST, HURST_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'lrc': _fp(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'percentile': _fp(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'runs': _fp(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'coint': _fp(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'sharpe': _fp(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'skewness': _fp(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'lrc': _fp(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'percentile': _fp(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'runs': _fp(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'coint': _fp(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'sharpe': _fp(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'skewness': _fp(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'bayesian': _fp(BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'kurtosis': _fp(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
-        'chi_square': _fp(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'kurtosis': _fp(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'chi_square': _fp(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
     }
 
-    # ── Загружаем готовые чекпойнты ──
+    # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
+    now = datetime.datetime.now()
+    last_night_reset = None
+    night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
+
+    if os.path.exists(night_reset_path):
+        try:
+            with open(night_reset_path, 'r', encoding='utf-8') as f:
+                night_data = json.load(f)
+            last_night_reset = datetime.datetime.fromisoformat(night_data.get('timestamp', ''))
+        except (json.JSONDecodeError, ValueError, OSError):
+            last_night_reset = None
+
+    today = now.date()
+
+    # Ночной пересчёт считается валидным, если он стартовал сегодня между 00:00 и 04:00
+    night_reset_valid = (
+        last_night_reset is not None
+        and last_night_reset.date() == today
+        and NIGHT_WINDOW_START <= last_night_reset.hour < NIGHT_WINDOW_END
+    )
+
+    # force_full_recalc: ночной прогон всегда полный, иначе — по night_reset
+    if is_night_run or force_recalc:
+        force_full_recalc = True
+    else:
+        force_full_recalc = not night_reset_valid
+
+    # ═══ МАРКЕР СТАРТА НОЧНОГО ПРОГОНА ═══
+    # Пишем сразу, чтобы даже при падении night_reset.json фиксирует факт запуска
+    if is_night_run:
+        try:
+            with open(night_reset_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'timestamp': now.isoformat(),
+                    'status': 'started',
+                    'symbols': len(SYMBOLS),
+                }, f, ensure_ascii=False, indent=2)
+            print(f"\n  🌙 Ночной прогон стартовал: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        except (OSError, TypeError):
+            pass
+
+    if force_full_recalc:
+        if is_night_run:
+            print(f"\n  🌙 Ночной прогон — полный пересчёт всех стратегий")
+        elif force_recalc:
+            print(f"\n  ⚡ Принудительный пересчёт — чекпойнты игнорируются")
+        else:
+            print(f"\n  🌙 Ночного пересчёта сегодня ещё не было — считаем ВСЕ стратегии заново")
+    else:
+        if last_night_reset:
+            print(f"\n  ✅ Ночной пересчёт выполнен {last_night_reset.strftime('%H:%M')} — кэш + инкремент новых стратегий")
+        else:
+            print(f"\n  🌙 Нет night_reset.json — считаем ВСЕ стратегии заново")
+
+    # ═══ ЗАГРУЗКА ЧЕКПОЙНТОВ ═══
     existing_checkpoints = list_checkpoints()
     skipped_symbols = {}
     partial_recalc = {}
     reuse_stale = []
-    removed_stale = []
-    for symbol in SYMBOLS:
-        if force_recalc:
-            # Принудительный пересчёт — удаляем все чекпоинты
-            remove_checkpoint(symbol)
-            continue
-        if symbol in existing_checkpoints:
-            cached, cached_bar_time, cached_families = load_checkpoint(symbol)
-            if cached is not None and symbol in symbol_data:
-                df = symbol_data[symbol]['df_h1']
-                current_bar_time = df.index[-1].isoformat()
-                if cached_bar_time == current_bar_time:
-                    # Данные не изменились — пропускаем
-                    all_results.extend(cached)
-                    skipped_symbols[symbol] = len(cached)
-                elif incremental:
-                    cached_fams = cached_families or {}
-                    recalc_set = {f for f, fp in family_fp.items()
-                                  if cached_fams.get(f) != fp}
-                    if not recalc_set:
-                        all_results.extend(cached)
-                        skipped_symbols[symbol] = len(cached)
-                        reuse_stale.append(symbol)
-                    else:
-                        partial_recalc[symbol] = (cached, recalc_set)
-                else:
-                    remove_checkpoint(symbol)
-                    removed_stale.append(symbol)
-                    
-                    
-            else:
-                all_results.extend(cached)
-                skipped_symbols[symbol] = len(cached)
+    cached_results = []
 
+    for symbol in SYMBOLS:
+        if force_full_recalc:
+            continue
+        if symbol not in existing_checkpoints:
+            continue
+        if symbol not in symbol_data:
+            continue
+
+        cached, cached_bar_time, cached_families = load_checkpoint(symbol)
+        if cached is None:
+            continue
+
+
+        df = symbol_data[symbol]['df_h1']
+        current_bar_time = df.index[-1].isoformat()
+
+        cached_fams = cached_families or {}
+
+        # Новые семейства: есть в текущем family_fp, но нет в кэше
+        missing_families = [f for f in family_fp if f not in cached_fams]
+
+        # Изменённые семейства: fingerprint не совпадает
+        changed_families = [
+            f for f, fp in family_fp.items()
+            if cached_fams.get(f) != fp and f in cached_fams
+        ]
+
+        recalc_set = set(missing_families + changed_families)
+
+        if cached_bar_time == current_bar_time:
+            # Данные не изменились с ночного пересчёта
+            if not recalc_set:
+                # Конфиг тот же, данные те же — кэш полностью валиден
+                cached_results.extend(cached)
+                skipped_symbols[symbol] = len(cached)
+            else:
+                # Данные те же, но конфиг изменился — частичный пересчёт
+                partial_recalc[symbol] = (cached, recalc_set)
+        else:
+            # Данные изменились после ночного пересчёта
+            if not recalc_set:
+                # Конфиг не менялся — переиспользуем кэш (инкремент для новых баров)
+                cached_results.extend(cached)
+                skipped_symbols[symbol] = len(cached)
+                reuse_stale.append(symbol)
+            else:
+                # Конфиг изменился + данные изменились — частичный пересчёт
+                partial_recalc[symbol] = (cached, recalc_set)
+
+    # ── Вывод статуса чекпойнтов ──
     if skipped_symbols:
         print(f"\n  📦 Загружено из чекпойнтов {len(skipped_symbols)} символов:")
         for sym, n in skipped_symbols.items():
             print(f"    {sym}: {n} результатов")
-
-    if removed_stale:
-        print(f"\n  🔄 Обновлено {len(removed_stale)} чекпойнтов (данные обновились):")
-        for sym in removed_stale:
-            print(f"    {sym}")
 
     if reuse_stale:
         print(f"\n  🔁 Из ночных чекпойнтов (конфиг не менялся): {len(reuse_stale)} символов")
@@ -1680,15 +1730,14 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         for sym, (_cached, recalc_set) in partial_recalc.items():
             print(f"    {sym}: считаем {', '.join(sorted(recalc_set))}")
 
-    if force_recalc:
-        print(f"\n  ⚡ Принудительный пересчёт — чекпоинты игнорируются")
-    if not force_recalc and not existing_checkpoints:
+    if force_recalc and not is_night_run:
+        print(f"\n  ⚡ Принудительный пересчёт — чекпойнты игнорируются")
+    if not force_full_recalc and not existing_checkpoints:
         print(f"  ℹ Чекпойнтов нет — будет полный пересчёт")
 
-    # ── Сначала собрать valid_symbols ──
+    # ── Сбор valid_symbols ──
     valid_symbols = []
     for symbol in SYMBOLS:
-        # Пропускаем символы с готовыми чекпойнтами
         if symbol in skipped_symbols:
             continue
         if symbol not in symbol_data:
@@ -1702,7 +1751,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     total_symbols = len(valid_symbols)
 
-    # ── Теперь собрать args с правильным total_symbols ──
+    # ── Сбор аргументов для каждого символа ──
     symbol_args = []
     for idx, symbol in enumerate(valid_symbols):
         sd = symbol_data[symbol]
@@ -1710,7 +1759,6 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             print(f"  ⚠ {symbol}: нет данных (df_h1/info) — пропускаем, расчёт продолжается", flush=True)
             continue
         info = sd['info']
-        # Извлечь только примитивные поля (SymbolInfo нельзя pickle)
         info_dict = {
             'point': getattr(info, 'point', None) or 0,
             'trade_tick_value': getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0,
@@ -1720,7 +1768,6 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
         symbol_args.append((
             idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
-            
             PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
             LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
             MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
@@ -1744,6 +1791,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
             family_fp, partial_recalc.get(symbol, (None, None))[1]
         ))
+
     total_combos = combos_per_symbol * total_symbols
     n_skipped = len(skipped_symbols)
 
@@ -1756,7 +1804,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         print(f"  БЭКТЕСТ | {total_symbols} символов × {combos_per_symbol} комб. = {total_combos} всего")
     print(f"{'═' * 60}")
 
-    # Какие стратегии считаются
+    # ── Какие стратегии считаются ──
     strategies_to_run = []
     if not test_strategy or test_strategy == 'stoch':
         strategies_to_run.append(f"Stoch: {stoch_per_symbol} комб.")
@@ -1822,21 +1870,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             est_note = f"по прошлому прогону ({last_run['elapsed_sec']:.0f}с на {last_run['combos']} комб.)"
         else:
             est_sec = max(1, int(total_combos / (4 * 30)))
-            est_note = "грубая (~30 комб/с на процесс, 4 процесса)"
-        print(f"  ⏱  Оценка времени: ~{est_sec / 60:.0f} мин ({est_sec / 3600:.1f} ч) — {est_note}")
+            est_note = "грубая оценка: ~30 комбинаций в секунду на 1 процесс, всего 4 процесса"
+        print(f"  ⏱  Ориентировочно расчёт займёт ~{est_sec / 60:.0f} минут. {est_note}")
     elif total_symbols == 0:
         print(f"  ✅ Всё готово из чекпойнтов — расчёт не нужен")
     print(f"{'═' * 60}")
 
-    n_processes = min(4, max(1, os.cpu_count() or 1))
-
-    # Для 1 символа multiprocessing не нужен (spawn теряет stdout)
-    if len(symbol_args) <= 1:
-        use_multiprocessing = False
-    else:
-        use_multiprocessing = True
-
     # ── Запуск бэктеста ──
+    n_processes = min(4, max(1, os.cpu_count() or 1))
+    use_multiprocessing = len(symbol_args) > 1
+
     results_list = []
     done = 0
 
@@ -1847,17 +1890,12 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             for item in pool.imap_unordered(_run_symbol_safe, symbol_args):
                 results_list.append(item)
                 done += 1
-                # Распаковка результата
                 symbol_done, results, combos_done, active_c, strats = item
                 elapsed = time.time() - global_start
+                eta_min = (total_symbols - done) * elapsed / max(done, 1) / 60
                 print(f"\n  ✓ [{done}/{total_symbols}] {symbol_done} готово "
-                      f"({combos_done} комб., {elapsed:.0f}с с начала)"
-                      f"⏳ {done / total_symbols * 100:.0f}% | ETA ~{(total_symbols - done) * elapsed / max(done, 1) / 60:.1f} мин")
-                
-                    
-                    
-                    
-                          
+                      f"({combos_done} комб., {elapsed:.0f}с с начала) "
+                      f"⏳ {done / total_symbols * 100:.0f}% | ETA ~{eta_min:.1f} мин")
                 for strat_name in strats:
                     print(f"    {symbol_done} | {strat_name} ✓")
     else:
@@ -1868,30 +1906,21 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             done += 1
             symbol_done, results, combos_done, active_c, strats = item
             elapsed = time.time() - global_start
+            eta_min = (total_symbols - done) * elapsed / max(done, 1) / 60
             print(f"\n  ✓ [{done}/{total_symbols}] {symbol_done} готово "
-                  f"({combos_done} комб., {elapsed:.0f}с с начала)"
-                      f"⏳ {done / total_symbols * 100:.0f}% | ETA ~{(total_symbols - done) * elapsed / max(done, 1) / 60:.1f} мин")
-                
-                    
-                    
-                    
-                          
-                
-                    
-                    
-                    
-                          
+                  f"({combos_done} комб., {elapsed:.0f}с с начала) "
+                  f"⏳ {done / total_symbols * 100:.0f}% | ETA ~{eta_min:.1f} мин")
             for strat_name in strats:
                 print(f"    {symbol_done} | {strat_name} ✓")
 
-    # ── Собрать результаты ──
-    all_results = []
+    # ── Сбор результатов ──
+    all_results = list(cached_results)   # ← начинаем с кэша пропущенных
     new_by_symbol = {}
     for item in results_list:
         symbol, results, combos_done, active_combos, completed_strategies = item
         new_by_symbol.setdefault(symbol, []).extend(results)
 
-    # ── Мерж частичного пересчёта: ночной кэш (без изменённых семейств) + свежие результаты ──
+    # ── Мерж частичного пересчёта ──
     for symbol, (cached, recalc_set) in partial_recalc.items():
         kept = [r for r in cached
                 if r.get('type') not in recalc_set and r.get('type') in family_fp]
@@ -1918,18 +1947,26 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     all_results = deduplicate_results(all_results)
     all_results.sort(key=lambda x: x['score'], reverse=True)
 
-    # Топ-N стратегий на каждую валюту
+    # ── Топ-N стратегий на каждую валюту ──
     top_results = []
     for symbol in SYMBOLS:
         symbol_strats = [r for r in all_results if r['symbol'] == symbol]
         top_results.extend(symbol_strats[:TOP_N])
 
-    print(f"  Активных стратегий: {len(top_results)} ({TOP_N} на символ × {total_symbols} символов)")
+    print(f"  Активных стратегий: {len(top_results)} ({TOP_N} на символ × {len(SYMBOLS)} символов)")
     print(f"{'─' * 60}\n")
 
-    # ── Чекпоинты НЕ удаляем — они ускоряют запуск, загружаясь при следующем старте ──
+    # ── Сохранение чекпойнтов для свежесчитанных символов ──
+    for symbol in new_by_symbol:
+        if symbol not in partial_recalc:
+            try:
+                save_checkpoint(symbol, new_by_symbol[symbol],
+                                last_bar_time=symbol_data[symbol]['df_h1'].index[-1].isoformat(),
+                                families=family_fp)
+            except (OSError, TypeError):
+                pass
 
-    # ── Статистика прогона: для оценки времени при следующем старте ──
+    # ── Статистика прогона ──
     try:
         with open(last_run_path, 'w', encoding='utf-8') as f:
             json.dump({
@@ -1938,9 +1975,26 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 'elapsed_sec': round(total_elapsed, 1),
                 'finished_at': datetime.datetime.now().isoformat(),
                 'skipped_from_checkpoint': len(skipped_symbols),
+                'is_night_run': is_night_run,
             }, f, ensure_ascii=False, indent=2)
     except (OSError, TypeError):
         pass
+
+    # ═══ ОБНОВЛЕНИЕ night_reset.json (статус completed) ═══
+    if is_night_run:
+        try:
+            with open(night_reset_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'timestamp': now.isoformat(),
+                    'status': 'completed',
+                    'symbols': total_symbols,
+                    'total_results': len(all_results),
+                    'elapsed_sec': round(total_elapsed, 1),
+                }, f, ensure_ascii=False, indent=2)
+            print(f"\n  🌙 Ночной пересчёт завершён: {total_symbols} символов, {len(all_results)} стратегий")
+            print(f"  📅 Timestamp: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        except (OSError, TypeError):
+            pass
 
     return top_results, all_results
 
