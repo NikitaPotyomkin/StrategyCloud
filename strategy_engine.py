@@ -5,6 +5,7 @@ import os
 import math
 import datetime
 import numpy as np
+import time
 import MetaTrader5 as mt5
 
 from risk_manager import (
@@ -691,7 +692,13 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
     }
     result = mt5.order_send(request)
     if result is None:
-        print(f"  -> [WARN] mt5.order_send вернул None — терминал не отвечает, ордер пропущен")
+        # Терминал может не ответить при серии быстрых ордеров на одном баре:
+        # одна тихая повторная попытка (без шума) перед финальным предупреждением.
+        time.sleep(0.5)
+        result = mt5.order_send(request)
+    if result is None:
+        print(f"  -> [WARN] {symbol} {direction} magic={magic}: order_send вернул None "
+                      f"после 2 попыток — терминал не отвечает, ордер пропущен ({comment})")
         return None
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         # Предупреждение о причинах отказа
@@ -708,7 +715,8 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         request["type_filling"] = mt5.ORDER_FILLING_IOC
         result = mt5.order_send(request)
         if result is None:
-            print(f"  -> [WARN] mt5.order_send (IOC) вернул None — терминал не отвечает")
+            print(f"  -> [WARN] {symbol} {direction} magic={magic}: order_send (IOC) вернул None "
+                      f"— терминал не отвечает ({comment})")
             return None
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             print(f"  -> Ордер не прошёл: {result.retcode}, {result.comment}")
