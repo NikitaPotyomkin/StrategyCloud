@@ -9,6 +9,7 @@ import glob
 import os
 import csv
 from itertools import product
+from risk_manager import json_default
 
 
 # ═══ ЧЕКПОЙНТЫ БЭКТЕСТА ═══
@@ -49,7 +50,7 @@ def save_checkpoint(symbol, results, last_bar_time=None):
         'results': results
     }
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'), default=json_default)
 
 
 def remove_checkpoint(symbol):
@@ -582,6 +583,18 @@ def _reconstruct_symbol_info(symbol, info_dict):
                        info_dict['trade_tick_size'], info_dict['spread'])
 
 
+def _run_symbol_safe(args):
+    """Безопасный запуск бэктеста одного символа: ошибка внутри него
+    не роняет весь расчёт — воркер возвращает пустой результат."""
+    try:
+        return _backtest_symbol(args)
+    except Exception as exc:
+        symbol = args[1] if len(args) > 1 else '?'
+        print(f"\n  [ERROR] Символ {symbol} не рассчитан: {exc!r} — пропускаем",
+              flush=True)
+        return symbol, [], 0, 0, []
+
+
 def _backtest_symbol(args):
     """Бэктест одного символа (для multiprocessing)."""
     (symbol_idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
@@ -1078,7 +1091,7 @@ def _backtest_symbol(args):
     # ── Linear Regression Channel ──
     if not test_strategy or test_strategy == 'lrc':
         for i, (period, std_th, vol_p, sl, tp) in enumerate(
-            product(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, LRC_VOL_PERIOD_LIST,
+            product(LRC_PERIOD_LIST, LRC_STD_THRESHOLD_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('LRC', _backtest_lrc,
@@ -1107,7 +1120,7 @@ def _backtest_symbol(args):
     # ── Percentile reversion ──
     if not test_strategy or test_strategy == 'percentile':
         for i, (per, pct_l, pct_h, vol_p, sl, tp) in enumerate(
-            product(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, PCT_VOL_PERIOD_LIST,
+            product(PCT_PERIOD_LIST, PCT_LOW_LIST, PCT_HIGH_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('Percentile', _backtest_percentile,
@@ -1136,7 +1149,7 @@ def _backtest_symbol(args):
     # ── Runs Test trend ──
     if not test_strategy or test_strategy == 'runs':
         for i, (win, runs_th, vol_p, sl, tp) in enumerate(
-            product(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, RUNS_VOL_PERIOD_LIST,
+            product(RUNS_WINDOW_LIST, RUNS_THRESHOLD_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('Runs', _backtest_runs,
@@ -1165,7 +1178,7 @@ def _backtest_symbol(args):
     # ── Cointegration pairs ──
     if not test_strategy or test_strategy == 'coint':
         for i, (win, coint_th, beta_p, sl, tp) in enumerate(
-            product(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, COINT_BETA_PERIOD_LIST,
+            product(COINT_WINDOW_LIST, COINT_THRESHOLD_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('Coint', _backtest_coint,
@@ -1194,7 +1207,7 @@ def _backtest_symbol(args):
     # ── Rolling Sharpe filter ──
     if not test_strategy or test_strategy == 'sharpe':
         for i, (win, sharpe_th, vol_p, sl, tp) in enumerate(
-            product(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, SHARPE_VOL_PERIOD_LIST,
+            product(SHARPE_WINDOW_LIST, SHARPE_THRESHOLD_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('Sharpe', _backtest_sharpe,
@@ -1223,7 +1236,7 @@ def _backtest_symbol(args):
     # ── Skewness extreme ──
     if not test_strategy or test_strategy == 'skewness':
         for i, (win, skew_th, vol_p, sl, tp) in enumerate(
-            product(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, SKEW_VOL_PERIOD_LIST,
+            product(SKEW_WINDOW_LIST, SKEW_THRESHOLD_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('Skewness', _backtest_skewness,
@@ -1264,7 +1277,7 @@ def _backtest_symbol(args):
             score = composite_score(metrics)
             results.append({
                 'symbol': symbol, 'type': 'bayesian',
-                'param_key': f"win{win}_th{bay_th:.2f}",
+                'param_key': f"win{win}_p{prior:.2f}_th{bay_th:.2f}",
                 'parabolic_max': None,
                 'sl_points': sl, 'tp_points': tp,
                 'profit': profit, 'n_trades': n_trades,
@@ -1281,7 +1294,7 @@ def _backtest_symbol(args):
     # ── Kurtosis spike ──
     if not test_strategy or test_strategy == 'kurtosis':
         for i, (win, kurt_th, vol_p, sl, tp) in enumerate(
-            product(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
+            product(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('Kurtosis', _backtest_kurtosis,
@@ -1310,7 +1323,7 @@ def _backtest_symbol(args):
     # ── Chi-square distribution ──
     if not test_strategy or test_strategy == 'chi_square':
         for i, (win, entry_th, exit_th, vol_p, sl, tp) in enumerate(
-            product(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+            product(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, (1,),
                     SL_POINTS_LIST, TP_POINTS_LIST), start=1
         ):
             profit, n_trades, trade_profits = _safe_backtest('ChiSq', _backtest_chi_square,
@@ -1598,12 +1611,15 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     symbol_args = []
     for idx, symbol in enumerate(valid_symbols):
         sd = symbol_data[symbol]
+        if sd.get('df_h1') is None or sd.get('info') is None:
+            print(f"  ⚠ {symbol}: нет данных (df_h1/info) — пропускаем, расчёт продолжается", flush=True)
+            continue
         info = sd['info']
         # Извлечь только примитивные поля (SymbolInfo нельзя pickle)
         info_dict = {
             'point': info.point,
-            'trade_tick_value': info.trade_tick_value,
-            'trade_tick_size': info.trade_tick_size,
+            'trade_tick_value': getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0,
+            'trade_tick_size': getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None) or 0,
             'spread': info.spread,
         }
         df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
@@ -1722,7 +1738,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         print(f"\n  Multiprocessing: {n_processes} процессов\n")
         import multiprocessing as mp
         with mp.Pool(processes=n_processes) as pool:
-            for item in pool.imap_unordered(_backtest_symbol, symbol_args):
+            for item in pool.imap_unordered(_run_symbol_safe, symbol_args):
                 results_list.append(item)
                 done += 1
                 # Распаковка результата
@@ -1735,7 +1751,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     else:
         print(f"\n  Последовательный режим: {total_symbols} символов\n")
         for args in symbol_args:
-            item = _backtest_symbol(args)
+            item = _run_symbol_safe(args)
             results_list.append(item)
             done += 1
             symbol_done, results, combos_done, active_c, strats = item

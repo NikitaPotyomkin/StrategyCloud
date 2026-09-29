@@ -214,7 +214,16 @@ if __name__ == '__main__':
             if rows:
                 first_date_str = rows[0].get('activated_at', '')
                 if first_date_str:
-                    first_date = datetime.strptime(first_date_str, '%Y-%m-%dT%H:%M:%S.%f').date()
+                    first_date = None
+                    for fmt in ('%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+                        try:
+                            first_date = datetime.strptime(first_date_str, fmt).date()
+                            break
+                        except ValueError:
+                            continue
+                    if first_date is None:
+                        print("  ⚠️  Реестр: неверный формат activated_at — отчёты за прошлые дни пропущены", flush=True)
+                        first_date = date.today()
                     yesterday = date.today() - timedelta(days=1)
                     if first_date <= yesterday:
                         generate_missing_reports(first_date, yesterday)
@@ -229,12 +238,29 @@ if __name__ == '__main__':
     # (дефолт берётся из config.BacktestConfig.force_recalc; можно выставить True вручную)
     FORCE_RECALC = bt_cfg.force_recalc
 
-    all_top, all_results = run_full_backtest(
+    # Первый бэктест защищён: при ошибке (в т.ч. после многочасового расчёта)
+    # печатаем причину и корректно выходим — чекпойнты готовых символов
+    # сохраняются, повторный запуск продолжит с них.
+    try:
+        all_top, all_results = run_full_backtest(
         bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
         test_strategy=None,
         test_mode=False,
         force_recalc=FORCE_RECALC
     )
+
+    except Exception as exc:
+        print(f"\n[КРИТИЧНО] Первый бэктест не завершился: {exc!r}", flush=True)
+        print("Сохранены чекпойнты готовых символов — повторный запуск продолжит с них.", flush=True)
+        try:
+            save_journal(journal_df, JOURNAL_FILE)
+        except Exception:
+            pass
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        raise SystemExit(1) from exc
 
     acc = mt5.account_info()
     balance = acc.balance if acc else 1_000_000
@@ -304,12 +330,20 @@ if __name__ == '__main__':
                 last_full_backtest_date = now.date()
                 print(f"\n[{now.strftime('%H:%M:%S')}] Ночной перерасчёт...")
 
-                _, all_results = run_full_backtest(
+                # Ошибка ночного перерасчёта НЕ останавливает процесс:
+                # старый набор стратегий остаётся активным, повторим завтра в 3:00.
+                try:
+                    _, all_results = run_full_backtest(
                     bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
                     test_strategy=None,
                     test_mode=False,
                     force_recalc=FORCE_RECALC
                 )
+
+                except Exception as exc:
+                    print(f"\n[WARN] Ночной перерасчёт не удался: {exc!r} — "
+                          f"оставляем текущие стратегии, повторим завтра в 3:00.", flush=True)
+                    continue
 
                 # Обновляем баланс перед ночным перерасчётом
                 acc = mt5.account_info()

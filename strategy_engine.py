@@ -9,7 +9,7 @@ import MetaTrader5 as mt5
 
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots,
-    _normalize_volume, _position_profit, DEFAULT_LOT,
+    _normalize_volume, _position_profit, DEFAULT_LOT, json_default,
     get_positions, positions_total, check_margin_available,
     get_stops_levels, validate_stops, check_position_limits,
     check_daily_loss_limit, check_equity_stop, realtime_quota_recalc
@@ -234,7 +234,7 @@ def write_active_state(active, active_strategies, balance, max_risk_pct, journal
         })
     path = os.path.join(journal_dir, 'active_state.json')
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(state, f, ensure_ascii=False, indent=2, default=json_default)
 
 
 # ═══ РЕЕСТР СТРАТЕГИЙ ═══
@@ -516,6 +516,8 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                         strat_dict['window'] = int(p[3:])
                     elif p.startswith('th'):
                         strat_dict['p_entry'] = float(p[2:])
+                    elif p.startswith('p'):
+                        strat_dict['prior'] = float(p[1:])
             # Kurtosis spike-specific params
             elif stype == 'kurtosis':
                 k = param  # "win20_th3.0"
@@ -537,7 +539,10 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
             active_strategies[key] = strat_dict
             existing_magics.add(magic)
             # ── Регистрируем новую стратегию ──
-            _register_strategy(magic, r['symbol'], stype, param, extra, now.isoformat())
+            try:
+                _register_strategy(magic, r['symbol'], stype, param, extra, now.isoformat())
+            except Exception as reg_exc:
+                print(f"  -> [WARN] Реестр: ошибка записи: {reg_exc!r}", flush=True)
             print(f"  -> [{key}] Добавлен в топ-{TOP_N}, lot={strat_dict['lot']}")
 
     # Проверяем реальные позиции (могли закрыться по SL/TP у брокера)
@@ -602,7 +607,7 @@ def _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
             # Ни сделки, ни тика — откладываем до следующего цикла.
             return False
         exit_price = tick.bid if s['position']['direction'] == 'long' else tick.ask
-    _record_close_fn(key, s, now, exit_price, 'SL/TP', symbol_data)
+    _record_close_fn(key, s, now, exit_price, 'SL/TP', symbol_data, record_trade_fn)
     return True
 
 
@@ -726,6 +731,10 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
             return None
     # Для последующих positions_get/закрытий нужен именно тикет позиции.
     ticket = result.position if result.position else result.order
+    if not ticket:
+        print(f"  -> [WARN] {symbol}: ордер выполнен, но тикет не получен "
+              f"(position={result.position}, order={result.order}) — стратегия не зафиксирована", flush=True)
+        return None
     print(f"  -> {direction.upper()} {symbol}: ticket={ticket}, "
           f"price={price:.{digits}f}, lot={lot:.2f}, comment={comment}")
     return ticket
@@ -1203,22 +1212,28 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                     print(f"  -> [{key}] RSI-Rev — модуль не передан")
                     continue
                 df = calc_rsi_reversal_fn(df, s.get('rsi_period', 14), s.get('rsi_oversold', 30), s.get('rsi_overbought', 70))
+                # Прогрев как в backtest_rsi_reversal (цикл идёт с bar 201 из-за EMA200):
+                # на короткой истории не входим — иначе live расходится с бэктестом.
+                if df is None or len(df) < 202:
+                    continue
                 if df is None or len(df) < 2:
                     continue
                 prev_signal = df['signal'].iloc[-2]
                 curr_signal = df['signal'].iloc[-1]
+                curr_rsi = df['rsi'].iloc[-1]
+                curr_trend = df['trend'].iloc[-1]
                 if s['position'] is not None:
                     if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
                                              _record_close_fn, record_trade_fn):
                         continue
-                    if check_exit_rsi_reversal_fn(prev_signal, curr_signal, s['position']['direction']):
+                    if check_exit_rsi_reversal_fn(curr_rsi, s['position']['direction']):
                         exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
                                                     s['position']['direction'], s['magic'], symbol_data)
                         if exit_price is not None:
                             _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
                                              journal_df, JOURNAL_FILE)
                 if s['position'] is None:
-                    entry_dir = check_entry_rsi_reversal_fn(prev_signal, curr_signal)
+                    entry_dir = check_entry_rsi_reversal_fn(prev_signal, curr_signal, curr_trend)
                     if entry_dir:
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")

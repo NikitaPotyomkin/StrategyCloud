@@ -87,6 +87,15 @@ DEFAULT_PROFIT_SCALE = 1000.0
 DEFAULT_LOT = 0.01
 
 
+def json_default(obj):
+    """default= для json.dump: numpy-скаляры -> float/int (страховка от TypeError)."""
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 # ═══ МЕТРИКИ И СКОРИНГ ═══
 
 def calc_metrics(trade_profits):
@@ -189,8 +198,9 @@ def distribute_lots(ranked_results, symbol_data, balance,
         info = symbol_data.get(r['symbol'], {}).get('info')
         if info is None:
             continue
-        sl_money = (r['sl_points'] * info.point
-                    * info.trade_tick_value / info.trade_tick_size)
+        sl_money = (r['sl_points'] * getattr(info, 'point', 0)
+                    * (getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0)
+                    / (getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None) or 1))
         if sl_money <= 0:
             continue
         candidates.append({**r, 'sl_money': sl_money})
@@ -326,12 +336,14 @@ def check_margin_available(lot, symbol, price, sl_points=0):
         return False, 0.0, free_margin
     
     # Маржа = объём × цена × размер контракта
-    margin_required = lot * price * symbol_info.trade_tick_value / symbol_info.trade_tick_size
+    tick_value = getattr(symbol_info, 'trade_tick_value', None) or getattr(symbol_info, 'tick_value', None) or 0.0
+    tick_size = getattr(symbol_info, 'trade_tick_size', None) or getattr(symbol_info, 'tick_size', None)
+    margin_required = lot * price * tick_value / tick_size if tick_size else lot * price
     
     # Добавить буфер на SL (если указан)
     if sl_points > 0:
         point = symbol_info.point
-        sl_money = sl_points * point * lot * symbol_info.trade_tick_value / symbol_info.trade_tick_size
+        sl_money = sl_points * point * lot * tick_value / tick_size if tick_size else 0.0
         margin_required += sl_money
     
     # Проверить с запасом 20%
@@ -450,12 +462,15 @@ def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0):
         return False, 0.0, 'account_info not available'
     
     balance = account.balance
-    equity = account.equity
+    # Используем переданный current_equity (свежий из main.py), а не перечитываем
+    equity = current_equity if current_equity is not None else account.equity
     
     # Если initial_balance не передан, используем balance
     if initial_balance is None:
         initial_balance = balance
     
+    if initial_balance <= 0:
+        return True, 0.0, 'initial_balance invalid (<=0)'
     daily_loss = ((initial_balance - equity) / initial_balance) * 100
     
     if daily_loss >= daily_loss_pct:
@@ -507,7 +522,9 @@ def realtime_quota_recalc(balance, current_positions, max_risk_pct=0.05):
         info = mt5.symbol_info(pos['symbol'])
         if info is None:
             continue
-        sl_money = pos['sl_points'] * info.point * pos['lot'] * info.trade_tick_value / info.trade_tick_size
+        tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0.0
+        tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
+        sl_money = pos['sl_points'] * info.point * pos['lot'] * tick_value / tick_size if tick_size else 0.0
         total_risk += sl_money
     
     current_risk_pct = (total_risk / balance * 100) if balance > 0 else 0
@@ -521,16 +538,26 @@ def _normalize_volume(lot, info):
     """Округляет лот вниз до шага объёма; None — если вне [volume_min, volume_max]."""
     if info is None:
         return lot
-    step = info.trade_volume_step if info.trade_volume_step > 0 else DEFAULT_LOT
+    step = getattr(info, 'trade_volume_step', None) or getattr(info, 'volume_step', None)
+    if not step or step <= 0:
+        step = DEFAULT_LOT
+    vmin = getattr(info, 'trade_volume_min', None) or getattr(info, 'volume_min', None) or 0.01
+    vmax = getattr(info, 'trade_volume_max', None) or getattr(info, 'volume_max', None) or 1e9
     volume = math.floor(lot / step + 1e-9) * step
-    if volume < info.trade_volume_min - 1e-9 or volume > info.trade_volume_max + 1e-9:
+    if volume < vmin - 1e-9 or volume > vmax + 1e-9:
         return None
     return round(volume, 8)
 
 
 def _position_profit(s, exit_price, symbol_data):
     """P&L позиции s при закрытии по exit_price (в валюте счёта)."""
-    info = symbol_data[s['symbol']]['info']
+    info = symbol_data.get(s['symbol'], {}).get('info')
+    if info is None:
+        return 0.0
+    tick_size = getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None)
+    tick_value = getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None)
+    if not tick_size:
+        return 0.0
     diff = (exit_price - s['position']['entry_price']) if s['position']['direction'] == 'long' \
         else (s['position']['entry_price'] - exit_price)
-    return (diff / info.trade_tick_size) * info.trade_tick_value * s['position']['lot']
+    return (diff / tick_size) * (tick_value or 0.0) * s['position']['lot']
