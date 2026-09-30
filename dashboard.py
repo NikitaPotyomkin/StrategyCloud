@@ -11,7 +11,6 @@ except ImportError:
 
 try:
     import plotly.graph_objects as go
-    import plotly.colors as pc
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
@@ -35,9 +34,13 @@ def make_gradient_colors(values, positive_hex='#26A69A', negative_hex='#EF5350')
     abs_vals = [abs(v) for v in values]
     max_abs = max(abs_vals) if max(abs_vals) > 0 else 1
 
-    pos_base = pc.hex_to_rgb(positive_hex)
+    def hex_to_rgb(h):
+        h = h.lstrip('#')
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+    pos_base = hex_to_rgb(positive_hex)
     pos_light = (232, 245, 243)
-    neg_base = pc.hex_to_rgb(negative_hex)
+    neg_base = hex_to_rgb(negative_hex)
     neg_light = (252, 232, 232)
 
     colors = []
@@ -121,7 +124,7 @@ if data:
             marker_color=colors_strat,
             text=df_strat['trades'],
             textposition='outside',
-            texttemplate='%{text} сдел.',
+            texttemplate='%{text}',
             hovertemplate=(
                 '<b>%{y}</b><br>PnL: %{x:,.1f} руб<br>Сделок: %{text}'
                 '<extra></extra>'
@@ -138,6 +141,7 @@ if data:
             bargap=0.15,
         )
         st.plotly_chart(fig1, use_container_width=True)
+        st.caption("Числа на столбцах — количество сделок за период")
 
     # ── PnL по семействам стратегий ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
@@ -158,7 +162,7 @@ if data:
             marker_color=colors_fam,
             text=df_fam['trades'],
             textposition='outside',
-            texttemplate='%{text} сдел.',
+            texttemplate='%{text}',
             hovertemplate=(
                 '<b>%{x}</b><br>PnL: %{y:,.1f} руб<br>Сделок: %{text}'
                 '<extra></extra>'
@@ -177,6 +181,7 @@ if data:
             xaxis={'categoryorder': 'total ascending'},
         )
         st.plotly_chart(fig2, use_container_width=True)
+        st.caption("Числа на столбцах — количество сделок за период")
 
     # ── Exposure heatmap: активность по символам во времени ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
@@ -184,12 +189,11 @@ if data:
 
         df_heat = data['trades_df'].copy()
 
-        # Адаптивный размер корзины
         if days_back <= 3:
-            df_heat['bucket'] = df_heat['timestamp'].dt.floor('H')
+            df_heat['bucket'] = df_heat['timestamp'].dt.floor('h')
             bucket_fmt = '%d.%m %H:%M'
         elif days_back <= 14:
-            df_heat['bucket'] = df_heat['timestamp'].dt.floor('4H')
+            df_heat['bucket'] = df_heat['timestamp'].dt.floor('4h')
             bucket_fmt = '%d.%m %Hh'
         else:
             df_heat['bucket'] = df_heat['timestamp'].dt.floor('D')
@@ -208,7 +212,6 @@ if data:
         display_symbols = [s.replace('rfd', '') for s in pivot.index]
         time_labels = [col.strftime(bucket_fmt) for col in pivot.columns]
 
-        # Лимит позиций = 3, шкала до 3 (всё что выше — перебор, баг)
         z_max = max(3, pivot.values.max())
 
         fig_heat = go.Figure(data=go.Heatmap(
@@ -261,7 +264,6 @@ if data:
         total_volume = sum(p.volume for p in positions)
         n_positions = len(positions)
 
-        # Максимальный убыток по SL для каждой позиции
         max_loss = 0.0
         no_sl_count = 0
         risk_by_symbol = {}
@@ -294,7 +296,6 @@ if data:
 
         risk_pct = (max_loss / quota * 100) if quota > 0 else 0
 
-        # Метрики
         col_r1, col_r2, col_r3, col_r4 = st.columns(4)
         with col_r1:
             st.metric("Открыто позиций", f"{n_positions}")
@@ -307,7 +308,6 @@ if data:
             st.metric("Квота использована", f"{risk_pct:.1f}%",
                       delta_color="inverse")
 
-        # Gauge
         fig_gauge = go.Figure()
         fig_gauge.add_trace(go.Indicator(
             mode="gauge+number",
@@ -335,7 +335,6 @@ if data:
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-        # Разбивка по символам
         if risk_by_symbol:
             df_risk = pd.DataFrame([
                 {'symbol': s, **v} for s, v in risk_by_symbol.items()
@@ -354,11 +353,10 @@ if data:
                 marker_color=risk_colors,
                 text=df_risk['count'],
                 textposition='outside',
-                texttemplate='%{text} поз.',
+                texttemplate='%{text}',
                 hovertemplate=(
                     '<b>%{y}</b><br>Макс. риск: %{x:,.1f} руб<br>'
-                    'Позиций: %{text}<br>PnL: '
-                    '<extra></extra>'
+                    'Позиций: %{text}<extra></extra>'
                 ),
                 name='',
             ))
@@ -371,14 +369,8 @@ if data:
                 margin=dict(l=80, r=60, t=10, b=40),
                 bargap=0.2,
             )
-
-            # Добавляем PnL в hover
-            fig_risk.data[0].hovertemplate = (
-                '<b>%{y}</b><br>Макс. риск: %{x:,.1f} руб<br>'
-                'Позиций: %{text}<extra></extra>'
-            )
-
             st.plotly_chart(fig_risk, use_container_width=True)
+            st.caption("Числа на столбцах — количество позиций")
 
         caption_parts = [
             f"Открыто: {n_positions} | Объём: {total_volume:.2f} лот | "
@@ -393,7 +385,6 @@ if data:
     elif positions is not None and len(positions) == 0:
         st.info("Нет открытых позиций — риск нулевой.")
     else:
-        # Fallback: данные из active_strategies
         if data.get('active_strategies'):
             active = [s for s in data['active_strategies'] if s.get('has_position')]
             n = len(active)
