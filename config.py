@@ -237,8 +237,8 @@ class StrategyParams:
 @dataclass(frozen=True)
 class RiskParams:
     """Параметры риск-менеджмента."""
-    max_total_positions: int = 15
-    max_per_symbol: int = 3
+    max_total_positions: int = 999999   # ВРЕМЕННО отключено (было 15) — вернуть после проверки
+    max_per_symbol: int = 999999  # ВРЕМЕННО отключено (было 3) — позиции по пропорции квоты
     daily_loss_limit_pct: float = 3.0
     equity_stop_pct: float = 10.0
     realtime_quota_recalc: bool = True

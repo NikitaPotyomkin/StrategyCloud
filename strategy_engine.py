@@ -855,7 +855,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 occupied_by_symbol[sym].add('unknown')
     
     # ── Проверка 2: Лимиты позиций (пункт 3) ──
-    current_counts = {sym: len(types) for sym, types in occupied_by_symbol.items()}
+    # current_counts — ПО СИМВОЛАМ (не по типам стратегий!)
+    current_counts = {sym: len(positions) for sym, positions in occupied_by_symbol.items()}
     limits_ok, limits_reason, limits_details = check_position_limits(
         current_counts,
         risk_cfg.max_total_positions,
