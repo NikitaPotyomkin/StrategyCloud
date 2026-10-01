@@ -685,7 +685,7 @@ with tab_3d:
                 colors_3d.append(f'rgb({int(239)}, {int(83 + 70*ratio)}, {int(80)})')
 
         # Размер по trades
-        sizes = df_3d['trades'].clip(lower=1) * 3
+        sizes = df_3d['trades'].clip(lower=1) * 9
 
         fig_3d = go.Figure()
         fig_3d.add_trace(go.Scatter3d(
