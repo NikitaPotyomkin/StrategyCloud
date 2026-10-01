@@ -2023,20 +2023,22 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 df = calc_bayesian_trend_fn(df, s.get('window', 30), s.get('prior', 0.5), s.get('p_entry', 0.65))
                 if df is None or len(df) < 2:
                     continue
-                prev_signal = df['p_trend'].iloc[-2]
-                curr_signal = df['p_trend'].iloc[-1]
+                prev_up = df['trend_up'].iloc[-2]
+                prev_down = df['trend_down'].iloc[-2]
+                curr_up = df['trend_up'].iloc[-1]
+                curr_down = df['trend_down'].iloc[-1]
                 if s['position'] is not None:
                     if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
                                              _record_close_fn, record_trade_fn):
                         continue
-                    if check_exit_bayesian_fn(prev_signal, curr_signal, s.get('p_exit', 0.5), s['position']['direction']):
+                    if check_exit_bayesian_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
                         exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
                                                     s['position']['direction'], s['magic'], symbol_data)
                         if exit_price is not None:
                             _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
                                              journal_df, JOURNAL_FILE)
                 if s['position'] is None:
-                    entry_dir = check_entry_bayesian_fn(prev_signal, curr_signal, s.get('p_entry', 0.65))
+                    entry_dir = check_entry_bayesian_fn(prev_up, prev_down, curr_up, curr_down)
                     if entry_dir:
                         strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
@@ -2074,22 +2076,22 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 df = calc_kurtosis_fn(df, s.get('window', 40), s.get('kurt_entry', 5.0))
                 if df is None or len(df) < 2:
                     continue
-                prev_signal = df['kurtosis'].iloc[-2]
-                curr_kurt = df['kurtosis'].iloc[-1]
-                curr_sigma = df['sigma'].iloc[-1]
+                prev_up = df['trend_up'].iloc[-2]
+                prev_down = df['trend_down'].iloc[-2]
+                curr_up = df['trend_up'].iloc[-1]
+                curr_down = df['trend_down'].iloc[-1]
                 if s['position'] is not None:
                     if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
                                              _record_close_fn, record_trade_fn):
                         continue
-                    if check_exit_kurtosis_fn(prev_signal, curr_kurt, s.get('kurt_exit', 3.0), s['position']['direction']):
+                    if check_exit_kurtosis_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
                         exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
                                                     s['position']['direction'], s['magic'], symbol_data)
                         if exit_price is not None:
                             _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
                                              journal_df, JOURNAL_FILE)
                 if s['position'] is None:
-                    entry_dir = check_entry_kurtosis_fn(prev_signal, curr_kurt, curr_sigma,
-                                                        s.get('kurt_entry', 5.0), s.get('sigma_mult', 1.0))
+                    entry_dir = check_entry_kurtosis_fn(prev_up, prev_down, curr_up, curr_down)
                     if entry_dir:
                         strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
@@ -2127,20 +2129,22 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 df = calc_chi_square_fn(df, s.get('window', 30), s.get('p_entry', 0.05))
                 if df is None or len(df) < 2:
                     continue
-                prev_signal = df['chi2_pvalue'].iloc[-2]
-                curr_signal = df['chi2_pvalue'].iloc[-1]
+                prev_up = df['trend_up'].iloc[-2]
+                prev_down = df['trend_down'].iloc[-2]
+                curr_up = df['trend_up'].iloc[-1]
+                curr_down = df['trend_down'].iloc[-1]
                 if s['position'] is not None:
                     if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
                                              _record_close_fn, record_trade_fn):
                         continue
-                    if check_exit_chi_square_fn(prev_signal, curr_signal, s.get('p_exit', 0.2), s['position']['direction']):
+                    if check_exit_chi_square_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
                         exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
                                                     s['position']['direction'], s['magic'], symbol_data)
                         if exit_price is not None:
                             _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
                                              journal_df, JOURNAL_FILE)
                 if s['position'] is None:
-                    entry_dir = check_entry_chi_square_fn(prev_signal, curr_signal, s.get('p_entry', 0.05))
+                    entry_dir = check_entry_chi_square_fn(prev_up, prev_down, curr_up, curr_down)
                     if entry_dir:
                         strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
