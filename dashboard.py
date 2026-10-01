@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime, timedelta
 
@@ -11,6 +12,7 @@ except ImportError:
 
 try:
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
@@ -18,7 +20,6 @@ except ImportError:
 from daily_report import get_dashboard_data
 
 st.set_page_config(page_title="Strategy Cloud", layout="wide")
-st.title("📊 Рэнкинг стратегий")
 
 
 @st.cache_data(ttl=30)
@@ -58,20 +59,50 @@ def make_gradient_colors(values, positive_hex='#26A69A', negative_hex='#EF5350')
     return colors
 
 
+def make_empty_placeholder(title, description, icon="🔬"):
+    """Заглушка для будущего графика."""
+    st.markdown(f"### {icon} {title}")
+    st.info(description)
+    st.markdown("---")
+
+
+# ── Заголовок + кнопка обновления ──
+col_title, col_btn = st.columns([5, 1])
+with col_title:
+    st.title("📊 Рэнкинг стратегий")
+with col_btn:
+    st.write("")
+    if st.button("🔄 Обновить"):
+        load_dashboard_data.clear()
+        st.rerun()
+
 # ── Настройки ──
 with st.sidebar:
     st.subheader("Настройки")
     days_back = st.slider("История сделок (дней)", 1, 90, 30)
     st.caption("Данные обновляются каждые 30 секунд")
 
-
-# ── Загрузка данных из единой точки входа ──
+# ── Загрузка данных ──
 data = load_dashboard_data(days_back)
 
+# ── Табы ──
+tab_overview, tab_risk, tab_strategies, tab_3d, tab_roadmap = st.tabs([
+    "📊 Обзор",
+    "🎯 Риск",
+    "📋 Стратегии",
+    "🗺️ 3D Ландшафт",
+    "🚧 В разработке",
+])
 
-# ── Отображение данных ──
-if data:
-    # ── Сводка (Баланс, Квота, Прогноз) ──
+# ═══════════════════════════════════════════════════════════════
+#  ТАБ: ОБЗОР
+# ═══════════════════════════════════════════════════════════════
+with tab_overview:
+    if not data:
+        st.warning("Не удалось загрузить данные. Убедитесь, что MT5 запущен.")
+        st.stop()
+
+    # ── Сводка ──
     col1, col2, col3 = st.columns(3)
     updated = datetime.fromisoformat(data['updated']).strftime('%H:%M:%S')
 
@@ -87,7 +118,6 @@ if data:
             )['profit_net'].sum().mean()
             if pd.notna(daily_avg):
                 forecast_pnl = daily_avg * 21
-
         if forecast_pnl is not None:
             st.metric("Прогноз PnL (мес)", f"{forecast_pnl:,.1f} руб",
                       delta_color="normal")
@@ -96,159 +126,131 @@ if data:
 
     st.caption(f"Обновлено: {updated} | Сделок за {days_back} дн.: {data['total_trades']}")
 
-    # ── PnL по стратегиям ──
+    # ── Дневной объём + Equity Curve ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("📊 PnL по стратегиям")
+        col_vol, col_eq = st.columns(2)
 
-        df_strat = data['trades_df'].groupby(
-            ['symbol', 'strategy_type', 'param_key']
-        ).agg(
-            pnl=('profit_net', 'sum'),
-            trades=('profit_net', 'count'),
-        ).reset_index()
+        with col_vol:
+            st.subheader("📦 Дневной объём торгов")
+            df_daily = data['trades_df'].copy()
+            df_daily['date'] = df_daily['timestamp'].dt.date
+            daily_stats = df_daily.groupby('date').agg(
+                volume=('volume', 'sum'),
+                trades=('profit_net', 'count'),
+                pnl=('profit_net', 'sum'),
+            ).reset_index()
 
-        df_strat['name'] = (
-            df_strat['symbol'].str.replace('rfd', '') + ' | ' +
-            df_strat['strategy_type'] + ' | ' +
-            df_strat['param_key']
-        )
-        df_strat = df_strat.sort_values('pnl', ascending=True).reset_index(drop=True)
+            fig_vol = go.Figure()
+            fig_vol.add_trace(go.Bar(
+                x=daily_stats['date'],
+                y=daily_stats['volume'],
+                name='Объём (лот)',
+                marker_color='#90CAF9',
+                yaxis='y',
+            ))
+            fig_vol.add_trace(go.Scatter(
+                x=daily_stats['date'],
+                y=daily_stats['trades'],
+                name='Сделок',
+                mode='lines+markers',
+                line=dict(color='#1565C0', width=2),
+                yaxis='y2',
+            ))
+            fig_vol.update_layout(
+                height=260,
+                template='plotly_white',
+                margin=dict(l=40, r=40, t=10, b=30),
+                xaxis_title='Дата',
+                yaxis=dict(title='Объём (лот)', side='left'),
+                yaxis2=dict(title='Сделок', side='right', overlaying='y'),
+                showlegend=True,
+                legend=dict(orientation='h', y=1.12, x=0),
+                bargap=0.2,
+            )
+            st.plotly_chart(fig_vol, use_container_width=True)
 
-        colors_strat = make_gradient_colors(df_strat['pnl'].tolist())
+        with col_eq:
+            st.subheader("📈 Equity Curve")
+            df_eq = data['trades_df'].sort_values('timestamp').copy()
+            df_eq['cum_pnl'] = df_eq['profit_net'].cumsum()
 
-        fig1 = go.Figure()
-        fig1.add_trace(go.Bar(
-            x=df_strat['pnl'],
-            y=df_strat['name'],
-            orientation='h',
-            marker_color=colors_strat,
-            text=df_strat['trades'],
-            textposition='outside',
-            texttemplate='%{text}',
-            hovertemplate=(
-                '<b>%{y}</b><br>PnL: %{x:,.1f} руб<br>Сделок: %{text}'
-                '<extra></extra>'
-            ),
-            name='',
-        ))
-        fig1.update_layout(
-            height=max(450, len(df_strat) * 24),
-            xaxis_title='PnL (руб)',
-            yaxis_title='',
-            showlegend=False,
-            template='plotly_white',
-            margin=dict(l=20, r=80, t=20, b=40),
-            bargap=0.15,
-        )
-        st.plotly_chart(fig1, use_container_width=True)
-        st.caption("Числа на столбцах — количество сделок за период")
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(
+                x=df_eq['timestamp'],
+                y=df_eq['cum_pnl'],
+                mode='lines',
+                line=dict(color='#26A69A', width=2),
+                fill='tozeroy',
+                fillgradient=dict(
+                    type='vertical',
+                    colorscale=[
+                        [0, 'rgba(239, 83, 80, 0.3)'],
+                        [0.5, 'rgba(239, 83, 80, 0.05)'],
+                        [0.5, 'rgba(38, 166, 154, 0.05)'],
+                        [1, 'rgba(38, 166, 154, 0.3)'],
+                    ],
+                ),
+                hovertemplate='Время: %{x}<br>Кум. PnL: %{y:,.1f} руб<extra></extra>',
+                name='',
+            ))
+            fig_eq.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
+            fig_eq.update_layout(
+                height=260,
+                template='plotly_white',
+                margin=dict(l=50, r=20, t=10, b=30),
+                xaxis_title='Время',
+                yaxis_title='Кум. PnL (руб)',
+                showlegend=False,
+            )
+            st.plotly_chart(fig_eq, use_container_width=True)
 
-    # ── PnL по семействам стратегий ──
+    # ── Облако сделок ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("📊 PnL по семействам стратегий")
+        st.subheader("☁️ Облако сделок")
+        df_sorted = data['trades_df'].sort_values('timestamp').copy()
+        colors = ['#26A69A' if x >= 0 else '#EF5350' for x in df_sorted['profit_net']]
 
-        df_fam = data['trades_df'].groupby('strategy_type').agg(
-            pnl=('profit_net', 'sum'),
-            trades=('profit_net', 'count'),
-        ).reset_index()
-        df_fam = df_fam.sort_values('pnl', ascending=True).reset_index(drop=True)
-
-        colors_fam = make_gradient_colors(df_fam['pnl'].tolist())
-
-        fig2 = go.Figure()
-        fig2.add_trace(go.Bar(
-            x=df_fam['strategy_type'],
-            y=df_fam['pnl'],
-            marker_color=colors_fam,
-            text=df_fam['trades'],
-            textposition='outside',
-            texttemplate='%{text}',
-            hovertemplate=(
-                '<b>%{x}</b><br>PnL: %{y:,.1f} руб<br>Сделок: %{text}'
-                '<extra></extra>'
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_sorted['timestamp'],
+            y=df_sorted['profit_net'],
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=colors,
+                line=dict(width=1, color='white'),
+                symbol='diamond'
             ),
-            name='',
+            text=df_sorted.apply(
+                lambda r: f"{r['symbol']}<br>{r['entry']}<br>PnL: {r['profit_net']:+.2f}<br>Vol: {r.get('volume', 0):.2f}",
+                axis=1
+            ),
+            hoverinfo='text',
+            name='Сделки'
         ))
-        fig2.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
-        fig2.update_layout(
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.update_layout(
             height=400,
-            xaxis_title='Семейство стратегий',
-            yaxis_title='PnL (руб)',
+            xaxis_title="Время",
+            yaxis_title="PnL (руб)",
+            hovermode="x unified",
             showlegend=False,
-            template='plotly_white',
-            margin=dict(l=60, r=20, t=20, b=60),
-            bargap=0.25,
-            xaxis={'categoryorder': 'total ascending'},
+            template="plotly_white",
+            margin=dict(l=60, r=20, t=30, b=40)
         )
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption("Числа на столбцах — количество сделок за период")
+        fig.update_xaxes(dtick="D")
+        st.plotly_chart(fig, use_container_width=True)
 
-    # ── Exposure heatmap: активность по символам во времени ──
-    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("🔥 Exposure: сделки по символам во времени")
 
-        df_heat = data['trades_df'].copy()
+# ═══════════════════════════════════════════════════════════════
+#  ТАБ: РИСК
+# ═══════════════════════════════════════════════════════════════
+with tab_risk:
+    if not data:
+        st.warning("Нет данных.")
+        st.stop()
 
-        if days_back <= 3:
-            df_heat['bucket'] = df_heat['timestamp'].dt.floor('h')
-            bucket_fmt = '%d.%m %H:%M'
-        elif days_back <= 14:
-            df_heat['bucket'] = df_heat['timestamp'].dt.floor('4h')
-            bucket_fmt = '%d.%m %Hh'
-        else:
-            df_heat['bucket'] = df_heat['timestamp'].dt.floor('D')
-            bucket_fmt = '%d.%m'
-
-        pivot = df_heat.pivot_table(
-            index='symbol',
-            columns='bucket',
-            values='profit_net',
-            aggfunc='count',
-            fill_value=0,
-        )
-
-        symbols_order = sorted(pivot.index)
-        pivot = pivot.loc[symbols_order]
-        display_symbols = [s.replace('rfd', '') for s in pivot.index]
-        time_labels = [col.strftime(bucket_fmt) for col in pivot.columns]
-
-        z_max = max(3, pivot.values.max())
-
-        fig_heat = go.Figure(data=go.Heatmap(
-            z=pivot.values,
-            x=time_labels,
-            y=display_symbols,
-            colorscale=[
-                [0.0, '#f5f5f5'],
-                [0.33, '#81C784'],
-                [0.66, '#FFB74D'],
-                [1.0, '#E53935'],
-            ],
-            zmin=0,
-            zmax=z_max,
-            text=pivot.values,
-            texttemplate='%{text}',
-            textfont=dict(size=10),
-            hovertemplate=(
-                'Символ: %{y}<br>Время: %{x}<br>Сделок: %{z}'
-                '<extra></extra>'
-            ),
-        ))
-
-        fig_heat.update_layout(
-            height=350,
-            xaxis_title='Время',
-            yaxis_title='Символ',
-            template='plotly_white',
-            margin=dict(l=80, r=20, t=20, b=60),
-            xaxis=dict(tickangle=-45),
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
-        st.caption("Цвет: 0 сделок — серый, 1–2 — зелёный, 3 (лимит) — оранжевый, >3 — красный (баг)")
-
-    # ── Risk gauge: использование квоты ──
     st.subheader("🎯 Использование квоты риска")
-
     quota = data['quota']
     positions = None
 
@@ -278,16 +280,12 @@ if data:
                     sl_loss = p.volume * loss_in_ticks * info.trade_tick_value
             else:
                 no_sl_count += 1
-
             max_loss += sl_loss
 
             sym = p.symbol.replace('rfd', '')
             if sym not in risk_by_symbol:
                 risk_by_symbol[sym] = {
-                    'count': 0,
-                    'volume': 0.0,
-                    'pnl': 0.0,
-                    'max_loss': 0.0,
+                    'count': 0, 'volume': 0.0, 'pnl': 0.0, 'max_loss': 0.0,
                 }
             risk_by_symbol[sym]['count'] += 1
             risk_by_symbol[sym]['volume'] += p.volume
@@ -329,8 +327,7 @@ if data:
             },
         ))
         fig_gauge.update_layout(
-            height=220,
-            template='plotly_white',
+            height=220, template='plotly_white',
             margin=dict(l=40, r=40, t=10, b=10),
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
@@ -339,11 +336,8 @@ if data:
             df_risk = pd.DataFrame([
                 {'symbol': s, **v} for s, v in risk_by_symbol.items()
             ]).sort_values('max_loss', ascending=True)
-
             df_risk['display_sym'] = df_risk['symbol']
-            risk_colors = make_gradient_colors(
-                [-x for x in df_risk['max_loss']]
-            )
+            risk_colors = make_gradient_colors([-x for x in df_risk['max_loss']])
 
             fig_risk = go.Figure()
             fig_risk.add_trace(go.Bar(
@@ -363,11 +357,9 @@ if data:
             fig_risk.update_layout(
                 height=max(200, len(df_risk) * 30 + 60),
                 xaxis_title='Макс. риск по SL (руб)',
-                yaxis_title='',
-                showlegend=False,
+                yaxis_title='', showlegend=False,
                 template='plotly_white',
-                margin=dict(l=80, r=60, t=10, b=40),
-                bargap=0.2,
+                margin=dict(l=80, r=60, t=10, b=40), bargap=0.2,
             )
             st.plotly_chart(fig_risk, use_container_width=True)
             st.caption("Числа на столбцах — количество позиций")
@@ -399,54 +391,187 @@ if data:
         else:
             st.info("Нет открытых позиций.")
 
-    # ── Облако сделок (Scatter) ──
+    # ── Exposure heatmap ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("☁️ Облако сделок")
+        st.subheader("🔥 Exposure: сделки по символам во времени")
+        df_heat = data['trades_df'].copy()
 
-        df_sorted = data['trades_df'].sort_values('timestamp').copy()
+        if days_back <= 3:
+            df_heat['bucket'] = df_heat['timestamp'].dt.floor('h')
+            bucket_fmt = '%d.%m %H:%M'
+        elif days_back <= 14:
+            df_heat['bucket'] = df_heat['timestamp'].dt.floor('4h')
+            bucket_fmt = '%d.%m %Hh'
+        else:
+            df_heat['bucket'] = df_heat['timestamp'].dt.floor('D')
+            bucket_fmt = '%d.%m'
 
-        colors = ['#26A69A' if x >= 0 else '#EF5350' for x in df_sorted['profit_net']]
+        pivot = df_heat.pivot_table(
+            index='symbol', columns='bucket',
+            values='profit_net', aggfunc='count', fill_value=0,
+        )
+        symbols_order = sorted(pivot.index)
+        pivot = pivot.loc[symbols_order]
+        display_symbols = [s.replace('rfd', '') for s in pivot.index]
+        time_labels = [col.strftime(bucket_fmt) for col in pivot.columns]
+        z_max = max(3, pivot.values.max())
 
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=df_sorted['timestamp'],
-            y=df_sorted['profit_net'],
-            mode='markers',
-            marker=dict(
-                size=10,
-                color=colors,
-                line=dict(width=1, color='white'),
-                symbol='diamond'
-            ),
-            text=df_sorted.apply(
-                lambda r: f"{r['symbol']}<br>{r['entry']}<br>PnL: {r['profit_net']:+.2f}<br>Vol: {r.get('volume', 0):.2f}",
-                axis=1
-            ),
-            hoverinfo='text',
-            name='Сделки'
+        fig_heat = go.Figure(data=go.Heatmap(
+            z=pivot.values, x=time_labels, y=display_symbols,
+            colorscale=[
+                [0.0, '#f5f5f5'],
+                [0.33, '#81C784'],
+                [0.66, '#FFB74D'],
+                [1.0, '#E53935'],
+            ],
+            zmin=0, zmax=z_max,
+            text=pivot.values, texttemplate='%{text}',
+            textfont=dict(size=10),
+            hovertemplate='Символ: %{y}<br>Время: %{x}<br>Сделок: %{z}<extra></extra>',
         ))
+        fig_heat.update_layout(
+            height=350, xaxis_title='Время', yaxis_title='Символ',
+            template='plotly_white',
+            margin=dict(l=80, r=20, t=20, b=60),
+            xaxis=dict(tickangle=-45),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+        st.caption("Цвет: 0 сделок — серый, 1–2 — зелёный, 3 (лимит) — оранжевый, >3 — красный (баг)")
 
-        fig.add_hline(
-            y=0,
-            line_dash="dash",
-            line_color="gray",
-            opacity=0.5
+
+# ═══════════════════════════════════════════════════════════════
+#  ТАБ: СТРАТЕГИИ
+# ═══════════════════════════════════════════════════════════════
+with tab_strategies:
+    if not data:
+        st.warning("Нет данных.")
+        st.stop()
+
+    # ── PnL по стратегиям ──
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        st.subheader("📊 PnL по стратегиям")
+        df_strat = data['trades_df'].groupby(
+            ['symbol', 'strategy_type', 'param_key']
+        ).agg(
+            pnl=('profit_net', 'sum'),
+            trades=('profit_net', 'count'),
+        ).reset_index()
+        df_strat['name'] = (
+            df_strat['symbol'].str.replace('rfd', '') + ' | ' +
+            df_strat['strategy_type'] + ' | ' +
+            df_strat['param_key']
+        )
+        df_strat = df_strat.sort_values('pnl', ascending=True).reset_index(drop=True)
+        colors_strat = make_gradient_colors(df_strat['pnl'].tolist())
+
+        fig1 = go.Figure()
+        fig1.add_trace(go.Bar(
+            x=df_strat['pnl'], y=df_strat['name'],
+            orientation='h', marker_color=colors_strat,
+            text=df_strat['trades'], textposition='outside',
+            texttemplate='%{text}',
+            hovertemplate='<b>%{y}</b><br>PnL: %{x:,.1f} руб<br>Сделок: %{text}<extra></extra>',
+            name='',
+        ))
+        fig1.update_layout(
+            height=max(450, len(df_strat) * 24),
+            xaxis_title='PnL (руб)', yaxis_title='',
+            showlegend=False, template='plotly_white',
+            margin=dict(l=20, r=80, t=20, b=40), bargap=0.15,
+        )
+        st.plotly_chart(fig1, use_container_width=True)
+        st.caption("Числа на столбцах — количество сделок за период")
+
+    # ── Win Rate и Profit Factor ──
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        st.subheader("📊 Win Rate и Profit Factor по семействам")
+        df_wf = data['trades_df'].groupby('strategy_type').agg(
+            wins=('profit_net', lambda x: (x > 0).sum()),
+            losses=('profit_net', lambda x: (x < 0).sum()),
+            gross_profit=('profit_net', lambda x: x[x > 0].sum()),
+            gross_loss=('profit_net', lambda x: abs(x[x < 0].sum())),
+            total=('profit_net', 'count'),
+        ).reset_index()
+        df_wf['win_rate'] = df_wf['wins'] / df_wf['total'] * 100
+        df_wf['profit_factor'] = df_wf.apply(
+            lambda r: r['gross_profit'] / r['gross_loss']
+            if r['gross_loss'] > 0 else float('inf'),
+            axis=1,
         )
 
-        fig.update_layout(
-            height=400,
-            xaxis_title="Время",
-            yaxis_title="PnL (руб)",
-            hovermode="x unified",
-            showlegend=False,
-            template="plotly_white",
-            margin=dict(l=60, r=20, t=30, b=40)
+        col_wr, col_pf = st.columns(2)
+        with col_wr:
+            df_wr_sorted = df_wf.sort_values('win_rate', ascending=True)
+            wr_colors = make_gradient_colors(df_wr_sorted['win_rate'].tolist())
+            fig_wr = go.Figure()
+            fig_wr.add_trace(go.Bar(
+                x=df_wr_sorted['win_rate'], y=df_wr_sorted['strategy_type'],
+                orientation='h', marker_color=wr_colors,
+                text=df_wr_sorted['win_rate'].round(1),
+                texttemplate='%{text}%', textposition='outside',
+                hovertemplate='<b>%{y}</b><br>Win Rate: %{text}%<extra></extra>',
+                name='',
+            ))
+            fig_wr.update_layout(
+                height=max(250, len(df_wr_sorted) * 30 + 40),
+                xaxis_title='Win Rate (%)', yaxis_title='',
+                showlegend=False, template='plotly_white',
+                margin=dict(l=20, r=60, t=10, b=30), bargap=0.2,
+            )
+            st.plotly_chart(fig_wr, use_container_width=True)
+
+        with col_pf:
+            df_pf_sorted = df_wf.sort_values('profit_factor', ascending=True)
+            pf_colors = make_gradient_colors(df_pf_sorted['profit_factor'].tolist())
+            fig_pf = go.Figure()
+            fig_pf.add_trace(go.Bar(
+                x=df_pf_sorted['strategy_type'], y=df_pf_sorted['profit_factor'],
+                marker_color=pf_colors,
+                text=df_pf_sorted['profit_factor'].round(2),
+                texttemplate='%{text}', textposition='outside',
+                hovertemplate='<b>%{x}</b><br>PF: %{text}<extra></extra>',
+                name='',
+            ))
+            fig_pf.add_hline(y=1.0, line_dash='dash', line_color='red', opacity=0.6)
+            fig_pf.update_layout(
+                height=max(250, len(df_pf_sorted) * 30 + 40),
+                xaxis_title='Семейство', yaxis_title='Profit Factor',
+                showlegend=False, template='plotly_white',
+                margin=dict(l=50, r=20, t=10, b=60), bargap=0.25,
+                xaxis={'categoryorder': 'total ascending'},
+            )
+            st.plotly_chart(fig_pf, use_container_width=True)
+        st.caption("Красная пунктирная линия на PF = 1.0 — граница безубытка")
+
+    # ── PnL по семействам ──
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        st.subheader("📊 PnL по семействам стратегий")
+        df_fam = data['trades_df'].groupby('strategy_type').agg(
+            pnl=('profit_net', 'sum'),
+            trades=('profit_net', 'count'),
+        ).reset_index()
+        df_fam = df_fam.sort_values('pnl', ascending=True).reset_index(drop=True)
+        colors_fam = make_gradient_colors(df_fam['pnl'].tolist())
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(
+            x=df_fam['strategy_type'], y=df_fam['pnl'],
+            marker_color=colors_fam,
+            text=df_fam['trades'], textposition='outside',
+            texttemplate='%{text}',
+            hovertemplate='<b>%{x}</b><br>PnL: %{y:,.1f} руб<br>Сделок: %{text}<extra></extra>',
+            name='',
+        ))
+        fig2.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
+        fig2.update_layout(
+            height=400, xaxis_title='Семейство стратегий',
+            yaxis_title='PnL (руб)', showlegend=False,
+            template='plotly_white',
+            margin=dict(l=60, r=20, t=20, b=60), bargap=0.25,
+            xaxis={'categoryorder': 'total ascending'},
         )
-
-        fig.update_xaxes(dtick="D")
-
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True)
+        st.caption("Числа на столбцах — количество сделок за период")
 
     # ── Торгующие стратегии ──
     st.subheader("Торгующие стратегии")
@@ -456,22 +581,16 @@ if data:
         df_active['статус'] = df_active['has_position'].apply(
             lambda x: '🟢 в позиции' if x else '⚪ ожидание'
         )
-
-        display_cols = ['статус', 'symbol', 'type', 'param_key',
-                        'lot', 'magic']
+        display_cols = ['статус', 'symbol', 'type', 'param_key', 'lot', 'magic']
         cols_to_show = [c for c in display_cols if c in df_active.columns]
-
         st.dataframe(
-            df_active[cols_to_show],
-            use_container_width=True,
+            df_active[cols_to_show], use_container_width=True,
             column_config={
                 'lot': st.column_config.NumberColumn(format="%.2f"),
                 'magic': st.column_config.NumberColumn(format="%.0f"),
-            },
-            hide_index=True,
+            }, hide_index=True,
         )
 
-        # ── Распределение по символам ──
         st.subheader("Распределение по символам")
         by_symbol = df_active.groupby('symbol').agg(
             стратегий=('symbol', 'count'),
@@ -480,21 +599,18 @@ if data:
         ).reset_index()
         st.dataframe(by_symbol, use_container_width=True, hide_index=True)
     else:
-        st.info("Нет открытых позиций.")
+        st.info("Нет активных стратегий.")
 
     # ── Журнал сделок ──
     st.subheader("Журнал сделок (последние 50)")
     if not data['trades_df'].empty:
         show_cols = ['timestamp', 'symbol', 'strategy_type', 'param_key',
-                     'type', 'entry', 'volume',
-                     'price', 'profit', 'commission', 'swap', 'profit_net',
-                     'magic']
+                     'type', 'entry', 'volume', 'price',
+                     'profit', 'commission', 'swap', 'profit_net', 'magic']
         cols_available = [c for c in show_cols if c in data['trades_df'].columns]
-
         st.dataframe(
             data['trades_df'][cols_available].tail(50),
-            use_container_width=True,
-            hide_index=True,
+            use_container_width=True, hide_index=True,
             column_config={
                 'timestamp': st.column_config.DatetimeColumn(format="DD.MM.YYYY HH:mm:ss"),
                 'price': st.column_config.NumberColumn(format="%.5f"),
@@ -508,11 +624,178 @@ if data:
     else:
         st.info("Нет сделок в истории MT5 за выбранный период.")
 
-else:
-    st.warning("Не удалось загрузить данные. Убедитесь, что MT5 запущен.")
+
+# ═══════════════════════════════════════════════════════════════
+#  ТАБ: 3D ЛАНДШАФТ
+# ═══════════════════════════════════════════════════════════════
+with tab_3d:
+    st.subheader("🗺️ 3D Ландшафт доходности стратегий")
+
+    st.markdown("""
+    **Концепция:** каждая стратегия — точка в 3D-пространстве.
+
+    - **Ось X** — кумулятивный PnL стратегии (вправо = прибыль, влево = убыток)
+    - **Ось Y** — волатильность доходности (разброс результатов)
+    - **Ось Z** — количество сделок (высота столбика)
+    - **Цвет** — Profit Factor (зелёный = прибыльная, красный = убыточная)
+    - **Размер** — текущий лот стратегии
+
+    Холсты, которые «тянут вниз» (большие красные столбы слева), — кандидаты на сокращение объёма.
+    Холсты, которые «тянут вверх» (зелёные справа) — кандидаты на увеличение.
+    """)
+
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        df_3d = data['trades_df'].groupby(
+            ['symbol', 'strategy_type', 'param_key']
+        ).agg(
+            pnl=('profit_net', 'sum'),
+            trades=('profit_net', 'count'),
+            volatility=('profit_net', 'std'),
+            wins=('profit_net', lambda x: (x > 0).sum()),
+            losses=('profit_net', lambda x: (x < 0).sum()),
+        ).reset_index()
+
+        df_3d['name'] = (
+            df_3d['symbol'].str.replace('rfd', '') + '|' +
+            df_3d['strategy_type']
+        )
+        df_3d['volatility'] = df_3d['volatility'].fillna(0)
+        df_3d['profit_factor'] = df_3d.apply(
+            lambda r: abs(r['wins'] / r['losses']) if r['losses'] > 0
+            else (10.0 if r['wins'] > 0 else 0),
+            axis=1,
+        )
+
+        # Цвет по PF
+        pf_vals = df_3d['profit_factor'].clip(0, 3)
+        colors_3d = []
+        for pf in pf_vals:
+            if pf >= 1.0:
+                ratio = min((pf - 1.0) / 2.0, 1.0)
+                colors_3d.append(f'rgb({int(200 - 162*ratio)}, {int(220 - 54*ratio)}, {int(154 - 0*ratio)})')
+            else:
+                ratio = min((1.0 - pf) / 1.0, 1.0)
+                colors_3d.append(f'rgb({int(239)}, {int(83 + 70*ratio)}, {int(80)})')
+
+        # Размер по trades
+        sizes = df_3d['trades'].clip(lower=1) * 3
+
+        fig_3d = go.Figure()
+        fig_3d.add_trace(go.Scatter3d(
+            x=df_3d['pnl'],
+            y=df_3d['volatility'],
+            z=df_3d['trades'],
+            mode='markers+text',
+            marker=dict(
+                size=sizes,
+                color=colors_3d,
+                line=dict(width=1, color='white'),
+                opacity=0.85,
+            ),
+            text=df_3d['name'],
+            textposition='top center',
+            textfont=dict(size=8),
+            hovertemplate=(
+                '<b>%{text}</b><br>'
+                'PnL: %{x:,.1f} руб<br>'
+                'Волатильность: %{y:,.1f}<br>'
+                'Сделок: %{z}<extra></extra>'
+            ),
+            name='',
+        ))
+
+        # Нулевая плоскость
+        fig_3d.add_trace(go.Scatter3d(
+            x=[0, 0], y=[0, df_3d['volatility'].max() * 1.1 if df_3d['volatility'].max() > 0 else 1],
+            z=[0, df_3d['trades'].max() * 1.1 if df_3d['trades'].max() > 0 else 1],
+            mode='lines',
+            line=dict(color='gray', width=2, dash='dash'),
+            showlegend=False,
+            hoverinfo='skip',
+        ))
+
+        fig_3d.update_layout(
+            scene=dict(
+                xaxis=dict(title='PnL (руб)', backgroundcolor='white',
+                          gridcolor='#e0e0e0', showbackground=True),
+                yaxis=dict(title='Волатильность', backgroundcolor='white',
+                          gridcolor='#e0e0e0', showbackground=True),
+                zaxis=dict(title='Сделок', backgroundcolor='white',
+                          gridcolor='#e0e0e0', showbackground=True),
+                camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)),
+            ),
+            height=650,
+            template='plotly_white',
+            margin=dict(l=0, r=0, t=30, b=0),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_3d, use_container_width=True)
+
+        st.caption(
+            "Вращайте мышью. Зелёные точки справа — прибыльные стратегии, "
+            "красные слева — убыточные. Высота = объём активности, "
+            "глубина = волатильность."
+        )
+
+        # ── Легенда-пояснение ──
+        with st.expander("📖 Как читать график"):
+            st.markdown("""
+            | Параметр | Ось | Что значит |
+            |----------|-----|------------|
+            | PnL | X (горизонталь) | Суммарный профит/убыток за период |
+            | Волатильность | Y (глубина) | Разброс результатов сделок |
+            | Сделок | Z (высота) | Активность стратегии |
+            | Цвет | — | PF > 1 — зелёный, PF < 1 — красный |
+            | Размер | — | Пропорционален количеству сделок |
+
+            **Стратегии для увеличения лота:** зелёные, крупные, с низкой волатильностью (близко к нулю по Y).
+
+            **Стратегии для сокращения:** красные, слева от нуля, с высокой волатильностью.
+
+            **Стратегии под вопросом:** мелкие точки — мало сделок, статистика ненадёжна.
+            """)
+
+    else:
+        st.info("Нет данных для построения 3D-модели.")
 
 
-# ── Кнопка обновления ──
-if st.button("🔄 Обновить"):
-    load_dashboard_data.clear()
-    st.rerun()
+# ═══════════════════════════════════════════════════════════════
+#  ТАБ: В РАЗРАБОТКЕ
+# ═══════════════════════════════════════════════════════════════
+with tab_roadmap:
+    st.subheader("🚧 В разработке")
+
+    st.markdown("Планируемые дэши. Ниже — заглушки с описанием.")
+
+    make_empty_placeholder(
+        "Drawdown Chart",
+        "Просадка от пика equity. Показывает, насколько портфель «проваливался» "
+        "от максимумов. Помогает оценить реальный риск и стресс-устойчивость. "
+        "График: область под кривой equity, залитая красным в зоне просадки.",
+        icon="📉"
+    )
+
+    make_empty_placeholder(
+        "Тепловая карта PnL по часам",
+        "Матрица: строки — символы или стратегии, столбцы — часы суток. "
+        "Цвет ячейки — суммарный PnL за этот час. Помогает найти временные окна, "
+        "где стратегии стабильно зарабатывают или сливают. "
+        "Полезно для настройки торговых сессий и таймаутов.",
+        icon="🕐"
+    )
+
+    make_empty_placeholder(
+        "Сравнение бэктест vs реальность",
+        "Сравнение ожидаемых показателей из бэктеста с фактическими результатами "
+        "живой торговли. Расхождения по PnL, Win Rate, PF, просадке. "
+        "Таблица с колонками: бэктест / факт / отклонение / вердикт.",
+        icon="🔬"
+    )
+
+    make_empty_placeholder(
+        "Sharpe по семействам",
+        "Отношение средней дневной доходности к дневной волатильности. "
+        "Ранжирование семейств стратегий по эффективности с учётом риска. "
+        "Чем выше Sharpe — тем лучше доходность на единицу риска.",
+        icon="⚖️"
+    )
