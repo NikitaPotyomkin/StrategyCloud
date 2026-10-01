@@ -927,6 +927,212 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
     if not limits_ok:
         print(f"  -> [WARN] Лимиты позиций: {limits_reason}")
 
+    # ── Dispatch-таблица: 23 типа в одной структуре (вместо 23 elif-веток) ──
+    # calc      — вызов расчёта сигнала с параметрами конкретного типа
+    # missing   — сообщение, если calc-модуль не передан (None → как раньше, молча/исключение)
+    # min_len   — минимальное число строк df (у RSI-Rev прогрев EMA200 = 202)
+    # snapshot  — извлекает последние значения сигналов из df
+    # exit/entry— проверки выхода/входа (подписи — точно как в прежних ветках)
+    # comment   — комментарий ордера
+    def _spec(calc, missing, min_len, snapshot, exit_fn, entry_fn, comment):
+        return {'calc': calc, 'missing': missing, 'min_len': min_len,
+                'snapshot': snapshot, 'exit': exit_fn, 'entry': entry_fn,
+                'comment': comment}
+
+    specs = {
+        'stoch': _spec(
+            lambda df, s: calc_stochastic_fn(df, s['param_key']),
+            None, 2,
+            lambda df: {'prev': df['k'].iloc[-2], 'curr': df['k'].iloc[-1]},
+            lambda v, s, d: check_exit_stoch_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_stoch_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, K={s['param_key']}",
+        ),
+        'parabolic': _spec(
+            lambda df, s: calc_parabolic_fn(df, s['param_key'], s.get('parabolic_max', 0.2)),
+            None, 2,
+            lambda df: {'prev_sar': df['sar'].iloc[-2], 'curr_sar': df['sar'].iloc[-1],
+                        'prev_close': df['close'].iloc[-2], 'curr_close': df['close'].iloc[-1]},
+            lambda v, s, d: check_exit_parabolic_fn(v['prev_sar'], v['curr_sar'], v['prev_close'], v['curr_close'], d),
+            lambda v, s: check_entry_parabolic_fn(v['prev_sar'], v['curr_sar'], v['prev_close'], v['curr_close']),
+            lambda s: f"{s['symbol']}, Step={s['param_key']}, Max={s.get('parabolic_max', 0.2)}",
+        ),
+        'ma': _spec(
+            lambda df, s: calc_moving_average_fn(df, s['param_key']),
+            None, 2,
+            lambda df: {'prev_ma': df['ma'].iloc[-2], 'curr_ma': df['ma'].iloc[-1],
+                        'prev_close': df['close'].iloc[-2], 'curr_close': df['close'].iloc[-1]},
+            lambda v, s, d: check_exit_ma_fn(v['prev_ma'], v['prev_close'], v['curr_ma'], v['curr_close'], d),
+            lambda v, s: check_entry_ma_fn(v['prev_ma'], v['prev_close'], v['curr_ma'], v['curr_close']),
+            lambda s: f"{s['symbol']}, MA={s['param_key']}",
+        ),
+        'rf': _spec(
+            (lambda df, s: calc_random_forest_fn(df, s.get('lookback', 200), s.get('n_bars', 5), s.get('threshold', 0.6))) if calc_random_forest_fn is not None else None,
+            "RF-стратегия, но модуль расчёта не передан — пропуск", 2,
+            lambda df: {'prev': df['rf_signal'].iloc[-2], 'curr': df['rf_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_rf_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_rf_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, RF {s.get('param_key', '')}",
+        ),
+        'logreg': _spec(
+            (lambda df, s: calc_logreg_fn(df, s.get('lookback', 100), s.get('n_bars', 12), s.get('threshold', 0.55))) if calc_logreg_fn is not None else None,
+            "LogReg-стратегия, но модуль расчёта не передан — пропуск", 2,
+            lambda df: {'prev': df['lr_signal'].iloc[-2], 'curr': df['lr_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_logreg_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_logreg_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, LogReg {s.get('param_key', '')}",
+        ),
+        'macd_cross': _spec(
+            (lambda df, s: calc_macd_cross_fn(df, s.get('macd_fast', 12), s.get('macd_slow', 26), s.get('macd_signal', 9))) if calc_macd_cross_fn is not None else None,
+            "MACD-Cross — модуль не передан", 2,
+            lambda df: {'prev': df['signal'].iloc[-2], 'curr': df['signal'].iloc[-1]},
+            lambda v, s, d: check_exit_macd_cross_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_macd_cross_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, MACD-Cross",
+        ),
+        'rsi_rev': _spec(
+            (lambda df, s: calc_rsi_reversal_fn(df, s.get('rsi_period', 14), s.get('rsi_oversold', 30), s.get('rsi_overbought', 70))) if calc_rsi_reversal_fn is not None else None,
+            "RSI-Rev — модуль не передан", 202,
+            lambda df: {'prev': df['signal'].iloc[-2], 'curr': df['signal'].iloc[-1],
+                        'rsi': df['rsi'].iloc[-1], 'trend': df['trend'].iloc[-1]},
+            lambda v, s, d: check_exit_rsi_reversal_fn(v['rsi'], d),
+            lambda v, s: check_entry_rsi_reversal_fn(v['prev'], v['curr'], v['trend']),
+            lambda s: f"{s['symbol']}, RSI-Rev",
+        ),
+        'bollinger': _spec(
+            (lambda df, s: calc_bollinger_fn(df, s.get('bb_period', 20), s.get('bb_std', 2), s.get('volume_period', 20))) if calc_bollinger_fn is not None else None,
+            "Bollinger — модуль не передан", 2,
+            lambda df: {'prev': df['signal'].iloc[-2], 'curr': df['signal'].iloc[-1]},
+            lambda v, s, d: check_exit_bollinger_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_bollinger_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, Bollinger",
+        ),
+        'ema_cross': _spec(
+            (lambda df, s: calc_ema_crossover_fn(df, s.get('ema_fast', 9), s.get('ema_slow', 21))) if calc_ema_crossover_fn is not None else None,
+            "EMA — модуль не передан", 2,
+            lambda df: {'prev': df['signal'].iloc[-2], 'curr': df['signal'].iloc[-1]},
+            lambda v, s, d: check_exit_ema_crossover_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_ema_crossover_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, EMA",
+        ),
+        'rsi_div': _spec(
+            (lambda df, s: calc_rsi_divergence_fn(df, s.get('rsi_period', 14), s.get('lookback', 5), s.get('threshold', 0.5))) if calc_rsi_divergence_fn is not None else None,
+            "RSI-Div — модуль не передан", 2,
+            lambda df: {'prev': df['signal'].iloc[-2], 'curr': df['signal'].iloc[-1]},
+            lambda v, s, d: check_exit_rsi_divergence_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_rsi_divergence_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, RSI-Div",
+        ),
+        'ichimoku': _spec(
+            (lambda df, s: calc_ichimoku_fn(df, s.get('tenkan', 9), s.get('kijun', 26), s.get('senkou_b', 52), s.get('displacement', 26))) if calc_ichimoku_fn is not None else None,
+            "Ichimoku — модуль не передан", 2,
+            lambda df: {'prev': df['signal'].iloc[-2], 'curr': df['signal'].iloc[-1]},
+            lambda v, s, d: check_exit_ichimoku_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_ichimoku_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, Ichimoku",
+        ),
+        'zscore': _spec(
+            (lambda df, s: calc_zscore_fn(df, s.get('sma_period', 30), s.get('z_threshold', 2.0))) if calc_zscore_fn is not None else None,
+            "Zscore — модуль не передан", 2,
+            lambda df: {'prev': df['zscore'].iloc[-2], 'curr': df['zscore'].iloc[-1]},
+            lambda v, s, d: check_exit_zscore_fn(v['prev'], v['curr'], s.get('z_threshold', 2.0), d),
+            lambda v, s: check_entry_zscore_fn(v['prev'], v['curr'], s.get('z_threshold', 2.0)),
+            lambda s: f"{s['symbol']}, Zscore",
+        ),
+        'autocorr': _spec(
+            (lambda df, s: calc_autocorrelation_fn(df, s.get('acf_lag', 3), s.get('threshold', 0.3))) if calc_autocorrelation_fn is not None else None,
+            "Autocorr — модуль не передан", 2,
+            lambda df: {'prev': df['acf'].iloc[-2], 'curr': df['acf'].iloc[-1]},
+            lambda v, s, d: check_exit_autocorr_fn(v['prev'], v['curr'], s.get('threshold', 0.3), d),
+            lambda v, s: check_entry_autocorr_fn(v['prev'], v['curr'], s.get('threshold', 0.3)),
+            lambda s: f"{s['symbol']}, Autocorr",
+        ),
+        'hurst': _spec(
+            (lambda df, s: calc_hurst_fn(df, s.get('window', 40), s.get('trend_threshold', 0.6))) if calc_hurst_fn is not None else None,
+            "Hurst — модуль не передан", 2,
+            lambda df: {'prev_up': df['trend_up'].iloc[-2], 'prev_down': df['trend_down'].iloc[-2],
+                        'curr_up': df['trend_up'].iloc[-1], 'curr_down': df['trend_down'].iloc[-1]},
+            lambda v, s, d: check_exit_hurst_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down'], d),
+            lambda v, s: check_entry_hurst_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down']),
+            lambda s: f"{s['symbol']}, Hurst",
+        ),
+        'lrc': _spec(
+            (lambda df, s: calc_lr_channel_fn(df, s.get('period', 30), s.get('std_threshold', 2.0))) if calc_lr_channel_fn is not None else None,
+            "LRC — модуль не передан", 2,
+            lambda df: {'prev': df['lr_signal'].iloc[-2], 'curr': df['lr_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_lrc_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_lrc_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, LRC",
+        ),
+        'percentile': _spec(
+            (lambda df, s: calc_percentile_fn(df, s.get('period', 30), s.get('pct_low', 5), s.get('pct_high', 95))) if calc_percentile_fn is not None else None,
+            "Percentile — модуль не передан", 2,
+            lambda df: {'prev': df['percentile'].iloc[-2], 'curr': df['percentile'].iloc[-1]},
+            lambda v, s, d: check_exit_percentile_fn(v['prev'], v['curr'], s.get('mid_pct', 50), d),
+            lambda v, s: check_entry_percentile_fn(v['prev'], v['curr'], s.get('pct_low', 5), s.get('pct_high', 95)),
+            lambda s: f"{s['symbol']}, Percentile",
+        ),
+        'runs': _spec(
+            (lambda df, s: calc_runs_test_fn(df, s.get('window', 30), s.get('z_threshold', 1.96))) if calc_runs_test_fn is not None else None,
+            "Runs — модуль не передан", 2,
+            lambda df: {'prev': df['z_stat'].iloc[-2], 'curr': df['z_stat'].iloc[-1]},
+            lambda v, s, d: check_exit_runs_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_runs_fn(v['prev'], v['curr'], s.get('z_threshold', 1.96)),
+            lambda s: f"{s['symbol']}, Runs",
+        ),
+        'coint': _spec(
+            (lambda df, s: calc_cointegration_fn(df, s.get('window', 40), s.get('z_entry', 2.0))) if calc_cointegration_fn is not None else None,
+            "Coint — модуль не передан", 2,
+            lambda df: {'prev': df['spread_z'].iloc[-2], 'curr': df['spread_z'].iloc[-1]},
+            lambda v, s, d: check_exit_coint_fn(v['prev'], v['curr'], s.get('z_exit', 0.0), d),
+            lambda v, s: check_entry_coint_fn(v['prev'], v['curr'], s.get('z_entry', 2.0)),
+            lambda s: f"{s['symbol']}, Coint",
+        ),
+        'sharpe': _spec(
+            (lambda df, s: calc_rolling_sharpe_fn(df, s.get('window', 40), s.get('sharpe_entry', 0.5))) if calc_rolling_sharpe_fn is not None else None,
+            "Sharpe — модуль не передан", 2,
+            lambda df: {'prev': df['sharpe'].iloc[-2], 'curr': df['sharpe'].iloc[-1]},
+            lambda v, s, d: check_exit_sharpe_fn(v['prev'], v['curr'], s.get('sharpe_exit', 0.0), d),
+            lambda v, s: check_entry_sharpe_fn(v['prev'], v['curr'], s.get('sharpe_entry', 0.5)),
+            lambda s: f"{s['symbol']}, Sharpe",
+        ),
+        'skewness': _spec(
+            (lambda df, s: calc_skewness_fn(df, s.get('window', 30), s.get('skew_entry', 1.0))) if calc_skewness_fn is not None else None,
+            "Skewness — модуль не передан", 2,
+            lambda df: {'prev': df['skewness'].iloc[-2], 'curr': df['skewness'].iloc[-1]},
+            lambda v, s, d: check_exit_skewness_fn(v['prev'], v['curr'], s.get('skew_exit', 0.3), d),
+            lambda v, s: check_entry_skewness_fn(v['prev'], v['curr'], s.get('skew_entry', 1.0), s.get('skew_exit', 0.3)),
+            lambda s: f"{s['symbol']}, Skewness",
+        ),
+        'bayesian': _spec(
+            (lambda df, s: calc_bayesian_trend_fn(df, s.get('window', 30), s.get('prior', 0.5), s.get('p_entry', 0.65))) if calc_bayesian_trend_fn is not None else None,
+            "Bayesian — модуль не передан", 2,
+            lambda df: {'prev_up': df['trend_up'].iloc[-2], 'prev_down': df['trend_down'].iloc[-2],
+                        'curr_up': df['trend_up'].iloc[-1], 'curr_down': df['trend_down'].iloc[-1]},
+            lambda v, s, d: check_exit_bayesian_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down'], d),
+            lambda v, s: check_entry_bayesian_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down']),
+            lambda s: f"{s['symbol']}, Bayesian",
+        ),
+        'kurtosis': _spec(
+            (lambda df, s: calc_kurtosis_fn(df, s.get('window', 40), s.get('kurt_entry', 5.0))) if calc_kurtosis_fn is not None else None,
+            "Kurtosis — модуль не передан", 2,
+            lambda df: {'prev_up': df['trend_up'].iloc[-2], 'prev_down': df['trend_down'].iloc[-2],
+                        'curr_up': df['trend_up'].iloc[-1], 'curr_down': df['trend_down'].iloc[-1]},
+            lambda v, s, d: check_exit_kurtosis_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down'], d),
+            lambda v, s: check_entry_kurtosis_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down']),
+            lambda s: f"{s['symbol']}, Kurtosis",
+        ),
+        'chi_square': _spec(
+            (lambda df, s: calc_chi_square_fn(df, s.get('window', 30), s.get('p_entry', 0.05))) if calc_chi_square_fn is not None else None,
+            "ChiSq — модуль не передан", 2,
+            lambda df: {'prev_up': df['trend_up'].iloc[-2], 'prev_down': df['trend_down'].iloc[-2],
+                        'curr_up': df['trend_up'].iloc[-1], 'curr_down': df['trend_down'].iloc[-1]},
+            lambda v, s, d: check_exit_chi_square_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down'], d),
+            lambda v, s: check_entry_chi_square_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down']),
+            lambda s: f"{s['symbol']}, ChiSq",
+        ),
+    }
+
     for key, s in active_strategies.items():
         try:
             if s['symbol'] not in symbol_data:
@@ -943,1238 +1149,75 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             info = sd['info']
             digits = getattr(info, 'digits', None) or 5
 
-            if stype == 'stoch':
-                df = calc_stochastic_fn(df, s['param_key'])
-                if df is None or len(df) < 2:
+            spec = specs.get(stype)
+            if spec is None:
+                # Тип вне таблицы — как раньше (не было ветки): молча пропускаем.
+                continue
+
+            calc_fn = spec['calc']
+            if calc_fn is None and spec['missing']:
+                print(f"  -> [{key}] {spec['missing']}")
+                continue
+            df = calc_fn(df, s)
+            if df is None or len(df) < spec['min_len']:
+                continue
+            vals = spec['snapshot'](df)
+
+            # ── Если есть позиция — проверяем выход ──
+            if s['position'] is not None:
+                if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
+                                         _record_close_fn, record_trade_fn):
                     continue
 
-                prev_k = df['k'].iloc[-2]
-                last_k = df['k'].iloc[-1]
+                if spec['exit'](vals, s, s['position']['direction']):
+                    exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
+                                                s['position']['direction'], s['magic'], symbol_data)
+                    if exit_price is not None:
+                        _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
+                                         journal_df, JOURNAL_FILE)
 
-                # ── Если есть позиция — проверяем выход ──
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-
-                    if check_exit_stoch_fn(prev_k, last_k, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-
-                # ── Если нет позиции — проверяем вход ──
-                if s['position'] is None:
-                    entry_dir = check_entry_stoch_fn(prev_k, last_k)
-                    if entry_dir:
-                        # Уникальный ключ стратегии для проверки дублирования
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        # Проверка лимитов
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is None:
-                                pass
+            # ── Если нет позиции — проверяем вход ──
+            if s['position'] is None:
+                entry_dir = spec['entry'](vals, s)
+                if entry_dir:
+                    # Уникальный ключ стратегии: symbol + type + param_key (+ _M для parabolic)
+                    strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
+                    if not limits_ok:
+                        print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
+                    elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                        print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
+                    elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
+                        print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
+                    else:
+                        tick = mt5.symbol_info_tick(s['symbol'])
+                        if tick is not None:
+                            sl_dist = s['sl_points'] * info.point
+                            tp_dist = s['tp_points'] * info.point
+                            if entry_dir == 'long':
+                                entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
                             else:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-
-                                comment = f"{s['symbol']}, K={s['param_key']}"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {
-                                        'direction': entry_dir,
-                                        'entry_price': entry,
-                                        'entry_time': now,
-                                        'ticket': ticket,
-                                        'lot': s['lot'],
-                                    }
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'parabolic':
-                df = calc_parabolic_fn(df, s['param_key'], s.get('parabolic_max', 0.2))
-                if df is None or len(df) < 2:
-                    continue
-
-                prev_sar = df['sar'].iloc[-2]
-                current_sar = df['sar'].iloc[-1]
-                prev_close = df['close'].iloc[-2]
-                current_close = df['close'].iloc[-1]
-
-                # ── Если есть позиция — проверяем выход ──
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-
-                    if check_exit_parabolic_fn(prev_sar, current_sar, prev_close, current_close,
-                                               s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-
-                # ── Если нет позиции — проверяем вход ──
-                if s['position'] is None:
-                    entry_dir = check_entry_parabolic_fn(prev_sar, current_sar, prev_close, current_close)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
+                                entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
                         else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
+                            entry = sl = tp = None
 
-                                comment = f"{s['symbol']}, Step={s['param_key']}, Max={s.get('parabolic_max', 0.2)}"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {
-                                        'direction': entry_dir,
-                                        'entry_price': entry,
-                                        'entry_time': now,
-                                        'ticket': ticket,
-                                        'lot': s['lot'],
-                                    }
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'ma':
-                df = calc_moving_average_fn(df, s['param_key'])
-                if df is None or len(df) < 2:
-                    continue
-
-                prev_ma = df['ma'].iloc[-2]
-                curr_ma = df['ma'].iloc[-1]
-                prev_close = df['close'].iloc[-2]
-                curr_close = df['close'].iloc[-1]
-
-                # ── Если есть позиция — проверяем выход ──
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-
-                    if check_exit_ma_fn(prev_ma, prev_close, curr_ma, curr_close,
-                                        s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-
-                # ── Если нет позиции — проверяем вход ──
-                if s['position'] is None:
-                    entry_dir = check_entry_ma_fn(prev_ma, prev_close, curr_ma, curr_close)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-
-                                comment = f"{s['symbol']}, MA={s['param_key']}"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {
-                                        'direction': entry_dir,
-                                        'entry_price': entry,
-                                        'entry_time': now,
-                                        'ticket': ticket,
-                                        'lot': s['lot'],
-                                    }
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'rf':
-                if calc_random_forest_fn is None:
-                    print(f"  -> [{key}] RF-стратегия, но модуль расчёта не передан — пропуск")
-                    continue
-
-                df = calc_random_forest_fn(df, s.get('lookback', 200), s.get('n_bars', 5),
-                                           s.get('threshold', 0.6))
-                if df is None or len(df) < 2:
-                    continue
-
-                prev_signal = df['rf_signal'].iloc[-2]
-                curr_signal = df['rf_signal'].iloc[-1]
-
-                # ── Если есть позиция — проверяем выход ──
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-
-                    if check_exit_rf_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-
-                # ── Если нет позиции — проверяем вход ──
-                if s['position'] is None:
-                    entry_dir = check_entry_rf_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-
-                                comment = f"{s['symbol']}, RF {s.get('param_key', '')}"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {
-                                        'direction': entry_dir,
-                                        'entry_price': entry,
-                                        'entry_time': now,
-                                        'ticket': ticket,
-                                        'lot': s['lot'],
-                                    }
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'logreg':
-                if calc_logreg_fn is None:
-                    print(f"  -> [{key}] LogReg-стратегия, но модуль расчёта не передан — пропуск")
-                    continue
-
-                df = calc_logreg_fn(df, s.get('lookback', 100), s.get('n_bars', 12),
-                                    s.get('threshold', 0.55))
-                if df is None or len(df) < 2:
-                    continue
-
-                prev_signal = df['lr_signal'].iloc[-2]
-                curr_signal = df['lr_signal'].iloc[-1]
-
-                # ── Если есть позиция — проверяем выход ──
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-
-                    if check_exit_logreg_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-
-                # ── Если нет позиции — проверяем вход ──
-                if s['position'] is None:
-                    entry_dir = check_entry_logreg_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-
-                                comment = f"{s['symbol']}, LogReg {s.get('param_key', '')}"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {
-                                        'direction': entry_dir,
-                                        'entry_price': entry,
-                                        'entry_time': now,
-                                        'ticket': ticket,
-                                        'lot': s['lot'],
-                                    }
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'macd_cross':
-                if calc_macd_cross_fn is None:
-                    print(f"  -> [{key}] MACD-Cross — модуль не передан")
-                    continue
-                df = calc_macd_cross_fn(df, s.get('macd_fast', 12), s.get('macd_slow', 26), s.get('macd_signal', 9))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_macd_cross_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_macd_cross_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, MACD-Cross"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'rsi_rev':
-                if calc_rsi_reversal_fn is None:
-                    print(f"  -> [{key}] RSI-Rev — модуль не передан")
-                    continue
-                df = calc_rsi_reversal_fn(df, s.get('rsi_period', 14), s.get('rsi_oversold', 30), s.get('rsi_overbought', 70))
-                # Прогрев как в backtest_rsi_reversal (цикл идёт с bar 201 из-за EMA200):
-                # на короткой истории не входим — иначе live расходится с бэктестом.
-                if df is None or len(df) < 202:
-                    continue
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                curr_rsi = df['rsi'].iloc[-1]
-                curr_trend = df['trend'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_rsi_reversal_fn(curr_rsi, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_rsi_reversal_fn(prev_signal, curr_signal, curr_trend)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, RSI-Rev"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'bollinger':
-                if calc_bollinger_fn is None:
-                    print(f"  -> [{key}] Bollinger — модуль не передан")
-                    continue
-                df = calc_bollinger_fn(df, s.get('bb_period', 20), s.get('bb_std', 2), s.get('volume_period', 20))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_bollinger_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_bollinger_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Bollinger"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'ema_cross':
-                if calc_ema_crossover_fn is None:
-                    print(f"  -> [{key}] EMA — модуль не передан")
-                    continue
-                df = calc_ema_crossover_fn(df, s.get('ema_fast', 9), s.get('ema_slow', 21))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_ema_crossover_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_ema_crossover_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, EMA"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'rsi_div':
-                if calc_rsi_divergence_fn is None:
-                    print(f"  -> [{key}] RSI-Div — модуль не передан")
-                    continue
-                df = calc_rsi_divergence_fn(df, s.get('rsi_period', 14), s.get('lookback', 5), s.get('threshold', 0.5))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_rsi_divergence_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_rsi_divergence_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, RSI-Div"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'ichimoku':
-                if calc_ichimoku_fn is None:
-                    print(f"  -> [{key}] Ichimoku — модуль не передан")
-                    continue
-                df = calc_ichimoku_fn(df, s.get('tenkan', 9), s.get('kijun', 26), s.get('senkou_b', 52), s.get('displacement', 26))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['signal'].iloc[-2]
-                curr_signal = df['signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_ichimoku_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_ichimoku_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-                            
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Ichimoku"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'zscore':
-                if calc_zscore_fn is None:
-                    print(f"  -> [{key}] Zscore — модуль не передан")
-                    continue
-                df = calc_zscore_fn(df, s.get('sma_period', 30), s.get('z_threshold', 2.0))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['zscore'].iloc[-2]
-                curr_signal = df['zscore'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_zscore_fn(prev_signal, curr_signal, s.get('z_threshold', 2.0), s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_zscore_fn(prev_signal, curr_signal, s.get('z_threshold', 2.0))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Zscore"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'autocorr':
-                if calc_autocorrelation_fn is None:
-                    print(f"  -> [{key}] Autocorr — модуль не передан")
-                    continue
-                df = calc_autocorrelation_fn(df, s.get('acf_lag', 3), s.get('threshold', 0.3))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['acf'].iloc[-2]
-                curr_signal = df['acf'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_autocorr_fn(prev_signal, curr_signal, s.get('threshold', 0.3), s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_autocorr_fn(prev_signal, curr_signal, s.get('threshold', 0.3))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Autocorr"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'hurst':
-                if calc_hurst_fn is None:
-                    print(f"  -> [{key}] Hurst — модуль не передан")
-                    continue
-                df = calc_hurst_fn(df, s.get('window', 40), s.get('trend_threshold', 0.6))
-                if df is None or len(df) < 2:
-                    continue
-                prev_up = df['trend_up'].iloc[-2]
-                prev_down = df['trend_down'].iloc[-2]
-                curr_up = df['trend_up'].iloc[-1]
-                curr_down = df['trend_down'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_hurst_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_hurst_fn(prev_up, prev_down, curr_up, curr_down)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Hurst"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'lrc':
-                if calc_lr_channel_fn is None:
-                    print(f"  -> [{key}] LRC — модуль не передан")
-                    continue
-                df = calc_lr_channel_fn(df, s.get('period', 30), s.get('std_threshold', 2.0))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['lr_signal'].iloc[-2]
-                curr_signal = df['lr_signal'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_lrc_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_lrc_fn(prev_signal, curr_signal)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, LRC"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'percentile':
-                if calc_percentile_fn is None:
-                    print(f"  -> [{key}] Percentile — модуль не передан")
-                    continue
-                df = calc_percentile_fn(df, s.get('period', 30), s.get('pct_low', 5), s.get('pct_high', 95))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['percentile'].iloc[-2]
-                curr_signal = df['percentile'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_percentile_fn(prev_signal, curr_signal, s.get('mid_pct', 50), s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_percentile_fn(prev_signal, curr_signal, s.get('pct_low', 5), s.get('pct_high', 95))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Percentile"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'runs':
-                if calc_runs_test_fn is None:
-                    print(f"  -> [{key}] Runs — модуль не передан")
-                    continue
-                df = calc_runs_test_fn(df, s.get('window', 30), s.get('z_threshold', 1.96))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['z_stat'].iloc[-2]
-                curr_signal = df['z_stat'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_runs_fn(prev_signal, curr_signal, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_runs_fn(prev_signal, curr_signal, s.get('z_threshold', 1.96))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Runs"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'coint':
-                if calc_cointegration_fn is None:
-                    print(f"  -> [{key}] Coint — модуль не передан")
-                    continue
-                df = calc_cointegration_fn(df, s.get('window', 40), s.get('z_entry', 2.0))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['spread_z'].iloc[-2]
-                curr_signal = df['spread_z'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_coint_fn(prev_signal, curr_signal, s.get('z_exit', 0.0), s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_coint_fn(prev_signal, curr_signal, s.get('z_entry', 2.0))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Coint"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'sharpe':
-                if calc_rolling_sharpe_fn is None:
-                    print(f"  -> [{key}] Sharpe — модуль не передан")
-                    continue
-                df = calc_rolling_sharpe_fn(df, s.get('window', 40), s.get('sharpe_entry', 0.5))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['sharpe'].iloc[-2]
-                curr_signal = df['sharpe'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_sharpe_fn(prev_signal, curr_signal, s.get('sharpe_exit', 0.0), s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_sharpe_fn(prev_signal, curr_signal, s.get('sharpe_entry', 0.5))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Sharpe"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'skewness':
-                if calc_skewness_fn is None:
-                    print(f"  -> [{key}] Skewness — модуль не передан")
-                    continue
-                df = calc_skewness_fn(df, s.get('window', 30), s.get('skew_entry', 1.0))
-                if df is None or len(df) < 2:
-                    continue
-                prev_signal = df['skewness'].iloc[-2]
-                curr_signal = df['skewness'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_skewness_fn(prev_signal, curr_signal, s.get('skew_exit', 0.3), s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_skewness_fn(prev_signal, curr_signal, s.get('skew_entry', 1.0), s.get('skew_exit', 0.3))
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Skewness"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'bayesian':
-                if calc_bayesian_trend_fn is None:
-                    print(f"  -> [{key}] Bayesian — модуль не передан")
-                    continue
-                df = calc_bayesian_trend_fn(df, s.get('window', 30), s.get('prior', 0.5), s.get('p_entry', 0.65))
-                if df is None or len(df) < 2:
-                    continue
-                prev_up = df['trend_up'].iloc[-2]
-                prev_down = df['trend_down'].iloc[-2]
-                curr_up = df['trend_up'].iloc[-1]
-                curr_down = df['trend_down'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_bayesian_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_bayesian_fn(prev_up, prev_down, curr_up, curr_down)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Bayesian"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'kurtosis':
-                if calc_kurtosis_fn is None:
-                    print(f"  -> [{key}] Kurtosis — модуль не передан")
-                    continue
-                df = calc_kurtosis_fn(df, s.get('window', 40), s.get('kurt_entry', 5.0))
-                if df is None or len(df) < 2:
-                    continue
-                prev_up = df['trend_up'].iloc[-2]
-                prev_down = df['trend_down'].iloc[-2]
-                curr_up = df['trend_up'].iloc[-1]
-                curr_down = df['trend_down'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_kurtosis_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_kurtosis_fn(prev_up, prev_down, curr_up, curr_down)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, Kurtosis"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
-
-            elif stype == 'chi_square':
-                if calc_chi_square_fn is None:
-                    print(f"  -> [{key}] ChiSq — модуль не передан")
-                    continue
-                df = calc_chi_square_fn(df, s.get('window', 30), s.get('p_entry', 0.05))
-                if df is None or len(df) < 2:
-                    continue
-                prev_up = df['trend_up'].iloc[-2]
-                prev_down = df['trend_down'].iloc[-2]
-                curr_up = df['trend_up'].iloc[-1]
-                curr_down = df['trend_down'].iloc[-1]
-                if s['position'] is not None:
-                    if _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
-                                             _record_close_fn, record_trade_fn):
-                        continue
-                    if check_exit_chi_square_fn(prev_up, prev_down, curr_up, curr_down, s['position']['direction']):
-                        exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
-                                                    s['position']['direction'], s['magic'], symbol_data)
-                        if exit_price is not None:
-                            _record_close_fn(key, s, now, exit_price, 'signal', symbol_data, record_trade_fn,
-                                             journal_df, JOURNAL_FILE)
-                if s['position'] is None:
-                    entry_dir = check_entry_chi_square_fn(prev_up, prev_down, curr_up, curr_down)
-                    if entry_dir:
-                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
-                        if not limits_ok:
-                            print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
-                        elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
-                            print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                        else:
-                            tick = mt5.symbol_info_tick(s['symbol'])
-                            if tick is not None:
-                                sl_dist = s['sl_points'] * info.point
-                                tp_dist = s['tp_points'] * info.point
-                                if entry_dir == 'long':
-                                    entry, sl, tp = tick.ask, tick.ask - sl_dist, tick.ask + tp_dist
-                                else:
-                                    entry, sl, tp = tick.bid, tick.bid + sl_dist, tick.bid - tp_dist
-                            else:
-                                entry = sl = tp = None
-
-                            if entry is not None:
-                                comment = f"{s['symbol']}, ChiSq"
-                                ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
-                                                       sl, tp, s['magic'], comment, symbol_data,
-                                                       risk_params=risk_params)
-                                if ticket is not None:
-                                    s['position'] = {'direction': entry_dir, 'entry_price': entry,
-                                                     'entry_time': now, 'ticket': ticket, 'lot': s['lot']}
-                                    print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                        if entry is not None:
+                            comment = spec['comment'](s)
+                            ticket = send_order_fn(s['symbol'], entry_dir, s['lot'],
+                                                   sl, tp, s['magic'], comment, symbol_data,
+                                                   risk_params=risk_params)
+                            if ticket is not None:
+                                s['position'] = {
+                                    'direction': entry_dir,
+                                    'entry_price': entry,
+                                    'entry_time': now,
+                                    'ticket': ticket,
+                                    'lot': s['lot'],
+                                }
+                                print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
 
         except Exception as e:
             print(f"\n[WARN] Ошибка стратегии {key}: {e!r}", flush=True)
             continue
+
+
+
