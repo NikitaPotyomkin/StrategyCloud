@@ -294,7 +294,7 @@ if __name__ == '__main__':
     manual_full = bool(bt_cfg.full_recalc_mode)   # ручной полный пересчёт при запуске
     
     # ═══ АВТОМАТИЧЕСКИЙ ПЕРЕСЧЁТ ПОСЛЕ ЗАКРЫТИЯ РЫНКА (Сб 00:00) ═══
-    now = datetime.datetime.now()
+    now = datetime.now()
     if bt_cfg.auto_weekend_recalc:
         # Проверяем, наступила ли суббота после пятницы
         if now.weekday() == 5 and now.hour == 0:  # Суббота 00:00+

@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import re
 from datetime import datetime, timedelta
 
 try:
@@ -86,13 +87,15 @@ with st.sidebar:
 data = load_dashboard_data(days_back)
 
 # ── Табы ──
-tab_overview, tab_risk, tab_strategies, tab_3d, tab_roadmap = st.tabs([
+tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_roadmap = st.tabs([
     "📊 Обзор",
     "🎯 Риск",
     "📋 Стратегии",
     "🗺️ 3D Ландшафт",
+    "🏔️ 3D Поверхность",
     "🚧 В разработке",
 ])
+
 
 # ═══════════════════════════════════════════════════════════════
 #  ТАБ: ОБЗОР
@@ -626,7 +629,7 @@ with tab_strategies:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: 3D ЛАНДШАФТ
+#  ТАБ: 3D ЛАНДШАФТ (пузыри)
 # ═══════════════════════════════════════════════════════════════
 with tab_3d:
     st.subheader("🗺️ 3D Ландшафт доходности стратегий")
@@ -638,7 +641,7 @@ with tab_3d:
     - **Ось Y** — волатильность доходности (разброс результатов)
     - **Ось Z** — количество сделок (высота столбика)
     - **Цвет** — Profit Factor (зелёный = прибыльная, красный = убыточная)
-    - **Размер** — текущий лот стратегии
+    - **Размер** — пропорционален количеству сделок
 
     Холсты, которые «тянут вниз» (большие красные столбы слева), — кандидаты на сокращение объёма.
     Холсты, которые «тянут вверх» (зелёные справа) — кандидаты на увеличение.
@@ -757,6 +760,240 @@ with tab_3d:
 
     else:
         st.info("Нет данных для построения 3D-модели.")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ТАБ: 3D ПОВЕРХНОСТЬ (параметрический ландшафт)
+# ═══════════════════════════════════════════════════════════════
+with tab_surface:
+    st.subheader("🏔️ 3D Поверхность доходности")
+
+    st.markdown("""
+    **Режим полотна:** параметрический ландшафт одной семьи стратегий.
+
+    Выбираешь семейство и два параметра — получаешь 3D-поверхность,
+    где высота = суммарный PnL. «Хребты» — оптимальные зоны параметров,
+    «долины» — убыточные комбинации.
+    """)
+
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        df_surf_src = data['trades_df'].copy()
+
+        # ── Выбор семейства ──
+        families = sorted(df_surf_src['strategy_type'].unique())
+        sel_family = st.selectbox(
+            "Семейство стратегий", families,
+            key="surface_family"
+        )
+
+        df_fam = df_surf_src[df_surf_src['strategy_type'] == sel_family].copy()
+
+        if df_fam.empty:
+            st.info("Нет данных для выбранного семейства.")
+        else:
+            # ── Агрегация по (symbol, param_key) ──
+            df_agg = df_fam.groupby(['symbol', 'param_key']).agg(
+                pnl=('profit_net', 'sum'),
+                trades=('profit_net', 'count'),
+                wins=('profit_net', lambda x: (x > 0).sum()),
+                volatility=('profit_net', 'std'),
+                avg_pnl=('profit_net', 'mean'),
+            ).reset_index()
+            df_agg['win_rate'] = df_agg['wins'] / df_agg['trades'] * 100
+            df_agg['volatility'] = df_agg['volatility'].fillna(0)
+
+            # ── Попытка извлечь числовые параметры из param_key ──
+            def extract_numbers(key):
+                """Извлекает все числа из строки param_key."""
+                return [float(x) for x in re.findall(r'[-+]?\d*\.?\d+', str(key))]
+
+            sample_nums = extract_numbers(df_agg['param_key'].iloc[0]) if len(df_agg) > 0 else []
+
+            # ── Выбор осей ──
+            col_ax1, col_ax2, col_z = st.columns(3)
+
+            axis_options = {
+                'trades': 'Количество сделок',
+                'win_rate': 'Win Rate (%)',
+                'volatility': 'Волатильность',
+                'avg_pnl': 'Средний PnL',
+                'pnl': 'Суммарный PnL',
+            }
+
+            param_axis_options = {}
+            if len(sample_nums) >= 1:
+                param_axis_options['param_0'] = 'Параметр 1 (из param_key)'
+            if len(sample_nums) >= 2:
+                param_axis_options['param_1'] = 'Параметр 2 (из param_key)'
+
+            all_x_options = {**param_axis_options, **axis_options}
+            all_y_options = {**param_axis_options, **axis_options}
+            z_options = {'pnl': 'Суммарный PnL', 'avg_pnl': 'Средний PnL', 'win_rate': 'Win Rate (%)'}
+
+            with col_ax1:
+                x_axis = st.selectbox("Ось X", list(all_x_options.keys()),
+                                      format_func=lambda k: all_x_options[k],
+                                      key="surf_x")
+            with col_ax2:
+                y_axis = st.selectbox("Ось Y", list(all_y_options.keys()),
+                                      format_func=lambda k: all_y_options[k],
+                                      key="surf_y",
+                                      index=min(1, len(all_y_options) - 1))
+            with col_z:
+                z_axis = st.selectbox("Ось Z (высота)", list(z_options.keys()),
+                                      format_func=lambda k: z_options[k],
+                                      key="surf_z")
+
+            # ── Извлечение значений ──
+            def get_axis_values(df, axis):
+                if axis.startswith('param_'):
+                    idx = int(axis.split('_')[1])
+                    nums_list = df['param_key'].apply(lambda k: extract_numbers(k))
+                    return nums_list.apply(
+                        lambda nums: nums[idx] if len(nums) > idx else 0.0
+                    ).values
+                return df[axis].values
+
+            x_vals = get_axis_values(df_agg, x_axis)
+            y_vals = get_axis_values(df_agg, y_axis)
+            z_vals = df_agg[z_axis].values
+
+            labels = (df_agg['symbol'].str.replace('rfd', '') +
+                      ' | ' + df_agg['param_key'])
+
+            n_points = len(df_agg)
+
+            if n_points < 3:
+                st.warning("Слишком мало точек для поверхности (нужно минимум 3).")
+            else:
+                x_unique = np.unique(x_vals)
+                y_unique = np.unique(y_vals)
+
+                use_surface = (len(x_unique) >= 2 and len(y_unique) >= 2 and
+                               len(x_unique) * len(y_unique) <= n_points * 2)
+
+                if use_surface:
+                    from scipy.interpolate import griddata
+
+                    xi = np.linspace(x_vals.min(), x_vals.max(), max(len(x_unique), 20))
+                    yi = np.linspace(y_vals.min(), y_vals.max(), max(len(y_unique), 20))
+                    X_grid, Y_grid = np.meshgrid(xi, yi)
+
+                    Z_grid = griddata(
+                        (x_vals, y_vals), z_vals,
+                        (X_grid, Y_grid), method='linear'
+                    )
+                    mask = np.isnan(Z_grid)
+                    if mask.any():
+                        Z_nearest = griddata(
+                            (x_vals, y_vals), z_vals,
+                            (X_grid, Y_grid), method='nearest'
+                        )
+                        Z_grid[mask] = Z_nearest[mask]
+
+                    fig_surf = go.Figure()
+                    fig_surf.add_trace(go.Surface(
+                        x=xi, y=yi, z=Z_grid,
+                        colorscale='RdYlGn',
+                        contours={
+                            "z": {
+                                "show": True,
+                                "usecolormap": True,
+                                "highlightcolor": "#ffffff",
+                                "project": {"z": True},
+                            }
+                        },
+                        colorbar=dict(title=z_options[z_axis], x=1.02),
+                        hovertemplate=(
+                            f'{all_x_options[x_axis]}: %{{x:.1f}}<br>'
+                            f'{all_y_options[y_axis]}: %{{y:.1f}}<br>'
+                            f'{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>'
+                        ),
+                        name='',
+                    ))
+
+                    fig_surf.update_layout(
+                        scene=dict(
+                            xaxis=dict(title=all_x_options[x_axis]),
+                            yaxis=dict(title=all_y_options[y_axis]),
+                            zaxis=dict(title=z_options[z_axis]),
+                            camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
+                        ),
+                        height=650,
+                        template='plotly_white',
+                        margin=dict(l=0, r=0, t=30, b=0),
+                    )
+                    st.plotly_chart(fig_surf, use_container_width=True)
+
+                    st.caption(
+                        f"Поверхность построена интерполяцией {n_points} точек "
+                        f"на сетку {len(xi)}×{len(yi)}. "
+                        f"Зелёные «хребты» — прибыльные зоны, красные «долины» — убыточные."
+                    )
+
+                else:
+                    st.info(
+                        f"Точек ({n_points}) недостаточно для регулярной поверхности. "
+                        f"Показываю триангулированную mesh."
+                    )
+
+                    fig_mesh = go.Figure()
+                    fig_mesh.add_trace(go.Mesh3d(
+                        x=x_vals, y=y_vals, z=z_vals,
+                        colorscale='RdYlGn',
+                        intensity=z_vals,
+                        colorbar=dict(title=z_options[z_axis], x=1.02),
+                        hovertemplate=(
+                            f'{all_x_options[x_axis]}: %{{x:.1f}}<br>'
+                            f'{all_y_options[y_axis]}: %{{y:.1f}}<br>'
+                            f'{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>'
+                        ),
+                        name='',
+                    ))
+
+                    fig_mesh.add_trace(go.Scatter3d(
+                        x=x_vals, y=y_vals, z=z_vals,
+                        mode='markers+text',
+                        marker=dict(size=5, color='white',
+                                   line=dict(width=1, color='#333')),
+                        text=labels,
+                        textposition='top center',
+                        textfont=dict(size=7),
+                        hoverinfo='skip',
+                        name='',
+                    ))
+
+                    fig_mesh.update_layout(
+                        scene=dict(
+                            xaxis=dict(title=all_x_options[x_axis]),
+                            yaxis=dict(title=all_y_options[y_axis]),
+                            zaxis=dict(title=z_options[z_axis]),
+                            camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
+                        ),
+                        height=650,
+                        template='plotly_white',
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_mesh, use_container_width=True)
+
+            # ── Таблица с исходными данными ──
+            with st.expander("📋 Исходные данные поверхности"):
+                display_df = df_agg[['symbol', 'param_key', 'pnl', 'trades',
+                                     'win_rate', 'volatility', 'avg_pnl']].copy()
+                display_df['symbol'] = display_df['symbol'].str.replace('rfd', '')
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    else:
+        st.info("Нет данных для построения поверхности.")
+
+    st.markdown("---")
+    st.markdown("""
+    💡 **Совет:** поверхность наиболее полезна при оптимизации параметров
+    одной стратегии. Например, выбрать семейство `Stochastic` и поставить
+    оси X = Параметр 1, Y = Параметр 2, Z = Суммарный PnL.
+    Тогда «хребет» на поверхности покажет оптимальную зону параметров.
+    """)
 
 
 # ═══════════════════════════════════════════════════════════════
