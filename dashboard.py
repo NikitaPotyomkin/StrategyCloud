@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 try:
     import MetaTrader5 as mt5
+
     MT5_AVAILABLE = True
 except ImportError:
     MT5_AVAILABLE = False
@@ -14,23 +15,134 @@ except ImportError:
 try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
+
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
 
 from daily_report import get_dashboard_data
 
-st.set_page_config(page_title="Strategy Cloud", layout="wide")
+# ── Палитра (институциональная) ──
+COL_BG = '#0E1117'
+COL_PANEL = '#161B22'
+COL_TEXT = '#C9D1D9'
+COL_MUTED = '#8B949E'
+COL_GREEN = '#2EA043'
+COL_GREEN_LT = '#3FB950'
+COL_RED = '#DA3633'
+COL_RED_LT = '#F85149'
+COL_BLUE = '#388bfd'
+COL_AMBER = '#D29922'
+COL_GRID = '#30363D'
+COL_NAVY = '#1F2A3A'
+
+st.set_page_config(page_title="Strategy Cloud — Terminal", layout="wide")
+
+# ── Кастомный CSS ──
+st.markdown("""
+<style>
+    /* Тёмный фон */
+    .stApp { background-color: #0E1117; }
+
+    /* Текст */
+    .stMarkdown, .stText { color: #C9D1D9; }
+
+    /* Метрики Streamlit */
+    [data-testid="stMetricValue"] {
+        font-size: 1.5rem;
+        font-weight: 600;
+        font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    }
+    [data-testid="stMetricDelta"] {
+        font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #8B949E;
+    }
+
+    /* Табы */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0px;
+        background-color: #161B22;
+        border-radius: 0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 12px 24px;
+        background-color: #161B22;
+        color: #8B949E;
+        font-size: 0.85rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-radius: 0;
+        border-bottom: 2px solid transparent;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #C9D1D9 !important;
+        background-color: #161B22;
+        border-bottom: 2px solid #388bfd;
+    }
+
+    /* Таблицы */
+    .stDataFrame [data-testid="stDataFrame"] {
+        background-color: #161B22;
+    }
+
+    /* Сайдбар */
+    .stSidebar > div:first-child {
+        background-color: #161B22;
+        padding-top: 2rem;
+    }
+
+    /* Заголовки */
+    h1 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        color: #C9D1D9;
+    }
+    h2, h3 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #C9D1D9;
+        border-bottom: 1px solid #30363D;
+        padding-bottom: 0.4rem;
+        margin-top: 1.5rem;
+    }
+
+    /* Кнопка */
+    .stButton > button {
+        background-color: #21262D;
+        color: #C9D1D9;
+        border: 1px solid #30363D;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .stButton > button:hover {
+        background-color: #30363D;
+        border-color: #388bfd;
+    }
+
+    /* Caption */
+    .stCaption {
+        font-size: 0.75rem;
+        color: #8B949E;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=30)
 def load_dashboard_data(days_back=30):
-    """Единая точка входа — все данные для дэшборда из daily_report.py"""
     return get_dashboard_data(days_back)
 
 
-def make_gradient_colors(values, positive_hex='#26A69A', negative_hex='#EF5350'):
-    """Возвращает список цветов с насыщенностью, пропорциональной величине PnL."""
+def make_gradient_colors(values, positive_hex='#2EA043', negative_hex='#DA3633'):
     if not values:
         return []
     abs_vals = [abs(v) for v in values]
@@ -38,12 +150,12 @@ def make_gradient_colors(values, positive_hex='#26A69A', negative_hex='#EF5350')
 
     def hex_to_rgb(h):
         h = h.lstrip('#')
-        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
     pos_base = hex_to_rgb(positive_hex)
-    pos_light = (232, 245, 243)
+    pos_light = (30, 40, 30)
     neg_base = hex_to_rgb(negative_hex)
-    neg_light = (252, 232, 232)
+    neg_light = (40, 28, 28)
 
     colors = []
     for v in values:
@@ -60,59 +172,88 @@ def make_gradient_colors(values, positive_hex='#26A69A', negative_hex='#EF5350')
     return colors
 
 
-def make_empty_placeholder(title, description, icon="🔬"):
-    """Заглушка для будущего графика."""
-    st.markdown(f"### {icon} {title}")
-    st.info(description)
-    st.markdown("---")
+def plotly_dark_layout(fig, height=400):
+    """Применяет тёмную институциональную тему к plotly-фигуре."""
+    fig.update_layout(
+        height=height,
+        template='plotly_dark',
+        paper_bgcolor=COL_PANEL,
+        plot_bgcolor=COL_PANEL,
+        font=dict(color=COL_TEXT, family='SF Mono, Cascadia Code, Consolas, monospace', size=11),
+        margin=dict(l=50, r=20, t=30, b=40),
+        coloraxis_colorbar=dict(
+            tickfont=dict(size=9, color=COL_MUTED),
+            title_font=dict(size=9, color=COL_MUTED),
+        ),
+    )
+    fig.update_xaxes(gridcolor=COL_GRID, zerolinecolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED))
+    fig.update_yaxes(gridcolor=COL_GRID, zerolinecolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED))
+    return fig
 
 
-# ── Заголовок + кнопка обновления ──
-col_title, col_btn = st.columns([5, 1])
+# ── Заголовок ──
+col_title, col_btn = st.columns([6, 1])
 with col_title:
-    st.title("📊 Рэнкинг стратегий")
+    st.markdown(
+        "<h1>STRATEGY CLOUD <span style='color:#8B949E;font-size:0.8rem;font-weight:400'>/ Terminal</span></h1>",
+        unsafe_allow_html=True)
 with col_btn:
     st.write("")
-    if st.button("🔄 Обновить"):
+    if st.button("REFRESH"):
         load_dashboard_data.clear()
         st.rerun()
 
 # ── Настройки ──
 with st.sidebar:
-    st.subheader("Настройки")
-    days_back = st.slider("История сделок (дней)", 1, 90, 30)
-    st.caption("Данные обновляются каждые 30 секунд")
+    st.markdown("### Configuration")
+    days_back = st.slider("Lookback (days)", 1, 90, 30)
+    st.caption("Auto-refresh: 30s")
 
 # ── Загрузка данных ──
 data = load_dashboard_data(days_back)
 
 # ── Табы ──
-tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_roadmap = st.tabs([
-    "📊 Обзор",
-    "🎯 Риск",
-    "📋 Стратегии",
-    "🗺️ 3D Ландшафт",
-    "🏔️ 3D Поверхность",
-    "🚧 В разработке",
+tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_pipeline = st.tabs([
+    "Overview",
+    "Risk",
+    "Strategies",
+    "3D Landscape",
+    "3D Surface",
+    "Pipeline",
 ])
 
-
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: ОБЗОР
+#  OVERVIEW
 # ═══════════════════════════════════════════════════════════════
 with tab_overview:
     if not data:
-        st.warning("Не удалось загрузить данные. Убедитесь, что MT5 запущен.")
+        st.warning("No data. Ensure MT5 terminal is running.")
         st.stop()
 
-    # ── Сводка ──
     col1, col2, col3 = st.columns(3)
     updated = datetime.fromisoformat(data['updated']).strftime('%H:%M:%S')
 
     with col1:
-        st.metric("Баланс", f"{data['balance']:,.0f} руб")
+        st.metric("Balance", f"{data['balance']:,.0f} RUB")
+
     with col2:
-        st.metric("Квота риска", f"{data['quota']:,.0f} руб")
+        today_pnl = 0.0
+        if not data['trades_df'].empty:
+            today_trades = data['trades_df'][
+                data['trades_df']['timestamp'].dt.date == datetime.now().date()
+            ]
+            today_pnl = today_trades['profit_net'].sum()
+        pnl_color = COL_GREEN_LT if today_pnl >= 0 else COL_RED_LT
+        st.markdown(f"""
+        <div style="padding: 1rem 0;">
+            <div style="font-size: 0.75rem; text-transform: uppercase;
+                        letter-spacing: 0.08em; color: {COL_MUTED};
+                        margin-bottom: 0.3rem;">P&L Today</div>
+            <div style="font-size: 1.5rem; font-weight: 600;
+                        font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+                        color: {pnl_color};">{today_pnl:+,.1f} RUB</div>
+        </div>
+        """, unsafe_allow_html=True)
     with col3:
         forecast_pnl = None
         if not data['trades_df'].empty:
@@ -122,138 +263,100 @@ with tab_overview:
             if pd.notna(daily_avg):
                 forecast_pnl = daily_avg * 21
         if forecast_pnl is not None:
-            st.metric("Прогноз PnL (мес)", f"{forecast_pnl:,.1f} руб",
+            st.metric("Forecast P&L (30D)", f"{forecast_pnl:,.1f} RUB",
                       delta_color="normal")
         else:
-            st.metric("Прогноз PnL (мес)", "Нет данных")
+            st.metric("Forecast P&L (30D)", "—")
 
-    st.caption(f"Обновлено: {updated} | Сделок за {days_back} дн.: {data['total_trades']}")
+    st.caption(f"Last update: {updated} | Trades ({days_back}D): {data['total_trades']}")
 
-    # ── Дневной объём + Equity Curve ──
+    # ── Volume + Equity Curve ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         col_vol, col_eq = st.columns(2)
 
         with col_vol:
-            st.subheader("📦 Дневной объём торгов")
+            st.markdown("### Daily Volume")
             df_daily = data['trades_df'].copy()
             df_daily['date'] = df_daily['timestamp'].dt.date
             daily_stats = df_daily.groupby('date').agg(
                 volume=('volume', 'sum'),
                 trades=('profit_net', 'count'),
-                pnl=('profit_net', 'sum'),
             ).reset_index()
 
             fig_vol = go.Figure()
             fig_vol.add_trace(go.Bar(
-                x=daily_stats['date'],
-                y=daily_stats['volume'],
-                name='Объём (лот)',
-                marker_color='#90CAF9',
-                yaxis='y',
+                x=daily_stats['date'], y=daily_stats['volume'],
+                name='Volume (lots)', marker_color=COL_BLUE, opacity=0.7,
             ))
             fig_vol.add_trace(go.Scatter(
-                x=daily_stats['date'],
-                y=daily_stats['trades'],
-                name='Сделок',
-                mode='lines+markers',
-                line=dict(color='#1565C0', width=2),
+                x=daily_stats['date'], y=daily_stats['trades'],
+                name='Trades', mode='lines+markers',
+                line=dict(color=COL_AMBER, width=1.5),
                 yaxis='y2',
             ))
             fig_vol.update_layout(
-                height=260,
-                template='plotly_white',
-                margin=dict(l=40, r=40, t=10, b=30),
-                xaxis_title='Дата',
-                yaxis=dict(title='Объём (лот)', side='left'),
-                yaxis2=dict(title='Сделок', side='right', overlaying='y'),
-                showlegend=True,
+                yaxis=dict(title='Volume', side='left'),
+                yaxis2=dict(title='Trades', side='right', overlaying='y'),
                 legend=dict(orientation='h', y=1.12, x=0),
-                bargap=0.2,
+                bargap=0.15,
             )
-            st.plotly_chart(fig_vol, use_container_width=True)
+            st.plotly_chart(plotly_dark_layout(fig_vol, 260), use_container_width=True)
 
         with col_eq:
-            st.subheader("📈 Equity Curve")
+            st.markdown("### Equity Curve")
             df_eq = data['trades_df'].sort_values('timestamp').copy()
             df_eq['cum_pnl'] = df_eq['profit_net'].cumsum()
 
             fig_eq = go.Figure()
             fig_eq.add_trace(go.Scatter(
-                x=df_eq['timestamp'],
-                y=df_eq['cum_pnl'],
-                mode='lines',
-                line=dict(color='#26A69A', width=2),
+                x=df_eq['timestamp'], y=df_eq['cum_pnl'],
+                mode='lines', line=dict(color=COL_GREEN_LT, width=1.5),
                 fill='tozeroy',
                 fillgradient=dict(
                     type='vertical',
                     colorscale=[
-                        [0, 'rgba(239, 83, 80, 0.3)'],
-                        [0.5, 'rgba(239, 83, 80, 0.05)'],
-                        [0.5, 'rgba(38, 166, 154, 0.05)'],
-                        [1, 'rgba(38, 166, 154, 0.3)'],
+                        [0, 'rgba(218, 54, 51, 0.25)'],
+                        [0.5, 'rgba(218, 54, 51, 0.02)'],
+                        [0.5, 'rgba(46, 160, 67, 0.02)'],
+                        [1, 'rgba(46, 160, 67, 0.25)'],
                     ],
                 ),
-                hovertemplate='Время: %{x}<br>Кум. PnL: %{y:,.1f} руб<extra></extra>',
+                hovertemplate='Time: %{x}<br>Cum P&L: %{y:,.1f}<extra></extra>',
                 name='',
             ))
-            fig_eq.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
-            fig_eq.update_layout(
-                height=260,
-                template='plotly_white',
-                margin=dict(l=50, r=20, t=10, b=30),
-                xaxis_title='Время',
-                yaxis_title='Кум. PnL (руб)',
-                showlegend=False,
-            )
-            st.plotly_chart(fig_eq, use_container_width=True)
+            fig_eq.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+            st.plotly_chart(plotly_dark_layout(fig_eq, 260), use_container_width=True)
 
-    # ── Облако сделок ──
+    # ── Trade Scatter ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("☁️ Облако сделок")
+        st.markdown("### Trade Scatter")
         df_sorted = data['trades_df'].sort_values('timestamp').copy()
-        colors = ['#26A69A' if x >= 0 else '#EF5350' for x in df_sorted['profit_net']]
+        colors = [COL_GREEN_LT if x >= 0 else COL_RED_LT for x in df_sorted['profit_net']]
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=df_sorted['timestamp'],
-            y=df_sorted['profit_net'],
+            x=df_sorted['timestamp'], y=df_sorted['profit_net'],
             mode='markers',
-            marker=dict(
-                size=10,
-                color=colors,
-                line=dict(width=1, color='white'),
-                symbol='diamond'
-            ),
+            marker=dict(size=6, color=colors, line=dict(width=0.5, color=COL_PANEL),
+                        symbol='diamond'),
             text=df_sorted.apply(
-                lambda r: f"{r['symbol']}<br>{r['entry']}<br>PnL: {r['profit_net']:+.2f}<br>Vol: {r.get('volume', 0):.2f}",
-                axis=1
-            ),
-            hoverinfo='text',
-            name='Сделки'
+                lambda r: f"{r['symbol']} | PnL: {r['profit_net']:+.2f} | Vol: {r.get('volume', 0):.2f}",
+                axis=1),
+            hoverinfo='text', name='',
         ))
-        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-        fig.update_layout(
-            height=400,
-            xaxis_title="Время",
-            yaxis_title="PnL (руб)",
-            hovermode="x unified",
-            showlegend=False,
-            template="plotly_white",
-            margin=dict(l=60, r=20, t=30, b=40)
-        )
-        fig.update_xaxes(dtick="D")
-        st.plotly_chart(fig, use_container_width=True)
-
+        fig.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+        fig.update_layout(hovermode='x unified')
+        st.plotly_chart(plotly_dark_layout(fig, 380), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: РИСК
+#  RISK
 # ═══════════════════════════════════════════════════════════════
 with tab_risk:
     if not data:
-        st.warning("Нет данных.")
+        st.warning("No data.")
         st.stop()
 
-    st.subheader("🎯 Использование квоты риска")
+    st.markdown("### Risk Utilization")
     quota = data['quota']
     positions = None
 
@@ -287,9 +390,7 @@ with tab_risk:
 
             sym = p.symbol.replace('rfd', '')
             if sym not in risk_by_symbol:
-                risk_by_symbol[sym] = {
-                    'count': 0, 'volume': 0.0, 'pnl': 0.0, 'max_loss': 0.0,
-                }
+                risk_by_symbol[sym] = {'count': 0, 'volume': 0.0, 'pnl': 0.0, 'max_loss': 0.0}
             risk_by_symbol[sym]['count'] += 1
             risk_by_symbol[sym]['volume'] += p.volume
             risk_by_symbol[sym]['pnl'] += p.profit
@@ -297,106 +398,89 @@ with tab_risk:
 
         risk_pct = (max_loss / quota * 100) if quota > 0 else 0
 
-        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+        st.metric("Risk Budget", f"{quota:,.0f} RUB")
+
+        col_r1, col_r2, col_r3 = st.columns(3)
         with col_r1:
-            st.metric("Открыто позиций", f"{n_positions}")
+            st.metric("Open Positions", f"{n_positions}")
         with col_r2:
-            st.metric("Нереализ. PnL", f"{unrealized_pnl:+,.1f} руб",
+            st.metric("Unrealized P&L", f"{unrealized_pnl:+,.1f} RUB",
                       delta_color="inverse")
         with col_r3:
-            st.metric("Макс. риск (SL)", f"{max_loss:,.1f} руб")
-        with col_r4:
-            st.metric("Квота использована", f"{risk_pct:.1f}%",
-                      delta_color="inverse")
+            st.metric("Max Risk (SL)", f"{max_loss:,.1f} RUB")
 
+        # ── Gauge ──
         fig_gauge = go.Figure()
         fig_gauge.add_trace(go.Indicator(
             mode="gauge+number",
             value=risk_pct,
-            number={'suffix': '%', 'font': {'size': 28}},
+            number={'suffix': '%', 'font': {'size': 28, 'color': COL_TEXT}},
             gauge={
-                'axis': {'range': [0, 150], 'tickwidth': 1},
-                'bar': {'color': "#1a1a1a"},
+                'axis': {'range': [0, 150], 'tickwidth': 1,
+                         'tickcolor': COL_MUTED,
+                         'tickfont': dict(size=9, color=COL_MUTED)},
+                'bar': {'color': COL_TEXT, 'thickness': 0.12},
                 'steps': [
-                    {'range': [0, 30], 'color': "#26A69A"},
-                    {'range': [30, 70], 'color': "#FFD54F"},
-                    {'range': [70, 150], 'color': "#EF5350"},
+                    {'range': [0, 30], 'color': '#1A2E1F'},
+                    {'range': [30, 70], 'color': '#2E2A1A'},
+                    {'range': [70, 150], 'color': '#2E1A1A'},
                 ],
-                'threshold': {
-                    'line': {'color': "red", 'width': 4},
-                    'thickness': 0.85,
-                    'value': 100,
-                },
+                'shape': 'gauge',
             },
         ))
         fig_gauge.update_layout(
-            height=220, template='plotly_white',
+            paper_bgcolor=COL_PANEL, height=200,
             margin=dict(l=40, r=40, t=10, b=10),
+            font=dict(color=COL_TEXT, family='SF Mono, Consolas, monospace'),
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
+        # ── Risk by symbol ──
         if risk_by_symbol:
             df_risk = pd.DataFrame([
                 {'symbol': s, **v} for s, v in risk_by_symbol.items()
             ]).sort_values('max_loss', ascending=True)
-            df_risk['display_sym'] = df_risk['symbol']
             risk_colors = make_gradient_colors([-x for x in df_risk['max_loss']])
 
             fig_risk = go.Figure()
             fig_risk.add_trace(go.Bar(
-                x=df_risk['max_loss'],
-                y=df_risk['display_sym'],
-                orientation='h',
-                marker_color=risk_colors,
-                text=df_risk['count'],
-                textposition='outside',
+                x=df_risk['max_loss'], y=df_risk['symbol'],
+                orientation='h', marker_color=risk_colors,
+                text=df_risk['count'], textposition='outside',
                 texttemplate='%{text}',
-                hovertemplate=(
-                    '<b>%{y}</b><br>Макс. риск: %{x:,.1f} руб<br>'
-                    'Позиций: %{text}<extra></extra>'
-                ),
+                hovertemplate='<b>%{y}</b><br>Risk: %{x:,.1f} RUB<br>Positions: %{text}<extra></extra>',
                 name='',
             ))
             fig_risk.update_layout(
-                height=max(200, len(df_risk) * 30 + 60),
-                xaxis_title='Макс. риск по SL (руб)',
-                yaxis_title='', showlegend=False,
-                template='plotly_white',
-                margin=dict(l=80, r=60, t=10, b=40), bargap=0.2,
+                xaxis_title='Max risk by SL (RUB)',
+                bargap=0.15,
             )
-            st.plotly_chart(fig_risk, use_container_width=True)
-            st.caption("Числа на столбцах — количество позиций")
+            st.plotly_chart(plotly_dark_layout(fig_risk, max(200, len(df_risk) * 30 + 60)),
+                            use_container_width=True)
 
-        caption_parts = [
-            f"Открыто: {n_positions} | Объём: {total_volume:.2f} лот | "
-            f"Квота: {quota:,.0f} руб"
-        ]
+        caption = f"Open: {n_positions} | Volume: {total_volume:.2f} lots | Budget: {quota:,.0f} RUB"
         if no_sl_count > 0:
-            caption_parts.append(
-                f"⚠️ {no_sl_count} поз. без SL — не учтены в макс. риске"
-            )
-        st.caption(" | ".join(caption_parts))
+            caption += f" | {no_sl_count} positions without SL"
+        st.caption(caption)
 
     elif positions is not None and len(positions) == 0:
-        st.info("Нет открытых позиций — риск нулевой.")
+        st.metric("Risk Budget", f"{quota:,.0f} RUB")
+        st.info("No open positions — risk is zero.")
     else:
+        st.metric("Risk Budget", f"{quota:,.0f} RUB")
         if data.get('active_strategies'):
             active = [s for s in data['active_strategies'] if s.get('has_position')]
             n = len(active)
             total_lot = sum(s.get('lot', 0) for s in active)
-            st.metric("Открыто позиций (из стратегий)", f"{n}")
-            st.metric("Суммарный объём", f"{total_lot:.2f} лот")
-            st.caption(
-                f"MT5 недоступен для детального риска. "
-                f"Квота: {quota:,.0f} руб | "
-                f"Активных стратегий с позицией: {n}"
-            )
+            st.metric("Open Positions (from strategies)", f"{n}")
+            st.metric("Total Volume", f"{total_lot:.2f} lots")
+            st.caption(f"MT5 unavailable for detailed risk | Budget: {quota:,.0f} RUB")
         else:
-            st.info("Нет открытых позиций.")
+            st.info("No open positions.")
 
     # ── Exposure heatmap ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("🔥 Exposure: сделки по символам во времени")
+        st.markdown("### Exposure Matrix")
         df_heat = data['trades_df'].copy()
 
         if days_back <= 3:
@@ -422,47 +506,40 @@ with tab_risk:
         fig_heat = go.Figure(data=go.Heatmap(
             z=pivot.values, x=time_labels, y=display_symbols,
             colorscale=[
-                [0.0, '#f5f5f5'],
-                [0.33, '#81C784'],
-                [0.66, '#FFB74D'],
-                [1.0, '#E53935'],
+                [0.0, '#161B22'],
+                [0.33, '#1A3A1F'],
+                [0.66, '#3A3A1A'],
+                [1.0, '#3A1A1F'],
             ],
             zmin=0, zmax=z_max,
             text=pivot.values, texttemplate='%{text}',
-            textfont=dict(size=10),
-            hovertemplate='Символ: %{y}<br>Время: %{x}<br>Сделок: %{z}<extra></extra>',
+            textfont=dict(size=9, color=COL_TEXT),
+            hovertemplate='Symbol: %{y}<br>Time: %{x}<br>Trades: %{z}<extra></extra>',
         ))
         fig_heat.update_layout(
-            height=350, xaxis_title='Время', yaxis_title='Символ',
-            template='plotly_white',
-            margin=dict(l=80, r=20, t=20, b=60),
+            xaxis_title='Time', yaxis_title='Symbol',
             xaxis=dict(tickangle=-45),
         )
-        st.plotly_chart(fig_heat, use_container_width=True)
-        st.caption("Цвет: 0 сделок — серый, 1–2 — зелёный, 3 (лимит) — оранжевый, >3 — красный (баг)")
-
+        st.plotly_chart(plotly_dark_layout(fig_heat, 320), use_container_width=True)
+        st.caption("Scale: 0 — dark, 1-2 — green, 3 (limit) — amber, >3 — red")
 
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: СТРАТЕГИИ
+#  STRATEGIES
 # ═══════════════════════════════════════════════════════════════
 with tab_strategies:
     if not data:
-        st.warning("Нет данных.")
+        st.warning("No data.")
         st.stop()
 
-    # ── PnL по стратегиям ──
+    # ── P&L by strategy ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("📊 PnL по стратегиям")
+        st.markdown("### P&L by Strategy")
         df_strat = data['trades_df'].groupby(
             ['symbol', 'strategy_type', 'param_key']
-        ).agg(
-            pnl=('profit_net', 'sum'),
-            trades=('profit_net', 'count'),
-        ).reset_index()
+        ).agg(pnl=('profit_net', 'sum'), trades=('profit_net', 'count')).reset_index()
         df_strat['name'] = (
-            df_strat['symbol'].str.replace('rfd', '') + ' | ' +
-            df_strat['strategy_type'] + ' | ' +
-            df_strat['param_key']
+                df_strat['symbol'].str.replace('rfd', '') + ' | ' +
+                df_strat['strategy_type'] + ' | ' + df_strat['param_key']
         )
         df_strat = df_strat.sort_values('pnl', ascending=True).reset_index(drop=True)
         colors_strat = make_gradient_colors(df_strat['pnl'].tolist())
@@ -473,21 +550,16 @@ with tab_strategies:
             orientation='h', marker_color=colors_strat,
             text=df_strat['trades'], textposition='outside',
             texttemplate='%{text}',
-            hovertemplate='<b>%{y}</b><br>PnL: %{x:,.1f} руб<br>Сделок: %{text}<extra></extra>',
+            hovertemplate='<b>%{y}</b><br>PnL: %{x:,.1f}<br>Trades: %{text}<extra></extra>',
             name='',
         ))
-        fig1.update_layout(
-            height=max(450, len(df_strat) * 24),
-            xaxis_title='PnL (руб)', yaxis_title='',
-            showlegend=False, template='plotly_white',
-            margin=dict(l=20, r=80, t=20, b=40), bargap=0.15,
-        )
-        st.plotly_chart(fig1, use_container_width=True)
-        st.caption("Числа на столбцах — количество сделок за период")
+        fig1.update_layout(xaxis_title='P&L (RUB)', bargap=0.12)
+        st.plotly_chart(plotly_dark_layout(fig1, max(450, len(df_strat) * 24)),
+                        use_container_width=True)
 
-    # ── Win Rate и Profit Factor ──
+    # ── Win Rate + Profit Factor ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("📊 Win Rate и Profit Factor по семействам")
+        st.markdown("### Win Rate & Profit Factor by Family")
         df_wf = data['trades_df'].groupby('strategy_type').agg(
             wins=('profit_net', lambda x: (x > 0).sum()),
             losses=('profit_net', lambda x: (x < 0).sum()),
@@ -498,8 +570,7 @@ with tab_strategies:
         df_wf['win_rate'] = df_wf['wins'] / df_wf['total'] * 100
         df_wf['profit_factor'] = df_wf.apply(
             lambda r: r['gross_profit'] / r['gross_loss']
-            if r['gross_loss'] > 0 else float('inf'),
-            axis=1,
+            if r['gross_loss'] > 0 else float('inf'), axis=1,
         )
 
         col_wr, col_pf = st.columns(2)
@@ -512,16 +583,12 @@ with tab_strategies:
                 orientation='h', marker_color=wr_colors,
                 text=df_wr_sorted['win_rate'].round(1),
                 texttemplate='%{text}%', textposition='outside',
-                hovertemplate='<b>%{y}</b><br>Win Rate: %{text}%<extra></extra>',
+                hovertemplate='<b>%{y}</b><br>WR: %{text}%<extra></extra>',
                 name='',
             ))
-            fig_wr.update_layout(
-                height=max(250, len(df_wr_sorted) * 30 + 40),
-                xaxis_title='Win Rate (%)', yaxis_title='',
-                showlegend=False, template='plotly_white',
-                margin=dict(l=20, r=60, t=10, b=30), bargap=0.2,
-            )
-            st.plotly_chart(fig_wr, use_container_width=True)
+            fig_wr.update_layout(xaxis_title='Win Rate (%)', bargap=0.15)
+            st.plotly_chart(plotly_dark_layout(fig_wr, max(250, len(df_wr_sorted) * 30 + 40)),
+                            use_container_width=True)
 
         with col_pf:
             df_pf_sorted = df_wf.sort_values('profit_factor', ascending=True)
@@ -538,24 +605,18 @@ with tab_strategies:
                 hovertemplate='<b>%{x}</b><br>PF: %{text}<extra></extra>',
                 name='',
             ))
-            fig_pf.add_hline(y=1.0, line_dash='dash', line_color='red', opacity=0.6)
-            fig_pf.update_layout(
-                height=max(250, len(df_pf_sorted) * 30 + 40),
-                xaxis_title='Семейство', yaxis_title='Profit Factor',
-                showlegend=False, template='plotly_white',
-                margin=dict(l=50, r=20, t=10, b=60), bargap=0.25,
-                xaxis={'categoryorder': 'total ascending'},
-            )
-            st.plotly_chart(fig_pf, use_container_width=True)
+            fig_pf.add_hline(y=1.0, line_dash='dot', line_color=COL_RED, opacity=0.5)
+            fig_pf.update_layout(xaxis_title='Family', yaxis_title='Profit Factor',
+                                 bargap=0.2, xaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(plotly_dark_layout(fig_pf, max(250, len(df_pf_sorted) * 30 + 40)),
+                            use_container_width=True)
+        st.caption("Dotted line at PF = 1.0 — breakeven threshold")
 
-        st.caption("Красная пунктирная линия на PF = 1.0 — граница безубытка")
-
-    # ── PnL по семействам ──
+    # ── P&L by family ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.subheader("📊 PnL по семействам стратегий")
+        st.markdown("### P&L by Strategy Family")
         df_fam = data['trades_df'].groupby('strategy_type').agg(
-            pnl=('profit_net', 'sum'),
-            trades=('profit_net', 'count'),
+            pnl=('profit_net', 'sum'), trades=('profit_net', 'count')
         ).reset_index()
         df_fam = df_fam.sort_values('pnl', ascending=True).reset_index(drop=True)
         colors_fam = make_gradient_colors(df_fam['pnl'].tolist())
@@ -566,29 +627,23 @@ with tab_strategies:
             marker_color=colors_fam,
             text=df_fam['trades'], textposition='outside',
             texttemplate='%{text}',
-            hovertemplate='<b>%{x}</b><br>PnL: %{y:,.1f} руб<br>Сделок: %{text}<extra></extra>',
+            hovertemplate='<b>%{x}</b><br>PnL: %{y:,.1f}<br>Trades: %{text}<extra></extra>',
             name='',
         ))
-        fig2.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
-        fig2.update_layout(
-            height=400, xaxis_title='Семейство стратегий',
-            yaxis_title='PnL (руб)', showlegend=False,
-            template='plotly_white',
-            margin=dict(l=60, r=20, t=20, b=60), bargap=0.25,
-            xaxis={'categoryorder': 'total ascending'},
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption("Числа на столбцах — количество сделок за период")
+        fig2.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+        fig2.update_layout(xaxis_title='Family', yaxis_title='P&L (RUB)',
+                           bargap=0.2, xaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(plotly_dark_layout(fig2, 380), use_container_width=True)
 
-    # ── Торгующие стратегии ──
-    st.subheader("Торгующие стратегии")
+    # ── Active strategies table ──
+    st.markdown("### Active Strategies")
     if data['active_strategies']:
         df_active = pd.DataFrame(data['active_strategies'])
         df_active = df_active.sort_values('lot', ascending=False).reset_index(drop=True)
-        df_active['статус'] = df_active['has_position'].apply(
-            lambda x: '🟢 в позиции' if x else '⚪ ожидание'
+        df_active['status'] = df_active['has_position'].apply(
+            lambda x: 'LONG' if x else 'WAITING'
         )
-        display_cols = ['статус', 'symbol', 'type', 'param_key', 'lot', 'magic']
+        display_cols = ['status', 'symbol', 'type', 'param_key', 'lot', 'magic']
         cols_to_show = [c for c in display_cols if c in df_active.columns]
         st.dataframe(
             df_active[cols_to_show], use_container_width=True,
@@ -598,18 +653,18 @@ with tab_strategies:
             }, hide_index=True,
         )
 
-        st.subheader("Распределение по символам")
+        st.markdown("### Allocation by Symbol")
         by_symbol = df_active.groupby('symbol').agg(
-            стратегий=('symbol', 'count'),
-            лот=('lot', 'sum'),
-            в_позиции=('has_position', 'sum'),
+            strategies=('symbol', 'count'),
+            lots=('lot', 'sum'),
+            in_position=('has_position', 'sum'),
         ).reset_index()
         st.dataframe(by_symbol, use_container_width=True, hide_index=True)
     else:
-        st.info("Нет активных стратегий.")
+        st.info("No active strategies.")
 
-    # ── Журнал сделок ──
-    st.subheader("Журнал сделок (последние 50)")
+    # ── Trade log ──
+    st.markdown("### Trade Log — Last 50")
     if not data['trades_df'].empty:
         show_cols = ['timestamp', 'symbol', 'strategy_type', 'param_key',
                      'type', 'entry', 'volume', 'price',
@@ -629,27 +684,13 @@ with tab_strategies:
             },
         )
     else:
-        st.info("Нет сделок в истории MT5 за выбранный период.")
-
+        st.info("No trades in history for selected period.")
 
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: 3D ЛАНДШАФТ (пузыри)
+#  3D LANDSCAPE
 # ═══════════════════════════════════════════════════════════════
 with tab_3d:
-    st.subheader("🗺️ 3D Ландшафт доходности стратегий")
-
-    st.markdown("""
-    **Концепция:** каждая стратегия — точка в 3D-пространстве.
-
-    - **Ось X** — кумулятивный PnL стратегии (вправо = прибыль, влево = убыток)
-    - **Ось Y** — волатильность доходности (разброс результатов)
-    - **Ось Z** — количество сделок (высота столбика)
-    - **Цвет** — Profit Factor (зелёный = прибыльная, красный = убыточная)
-    - **Размер** — пропорционален количеству сделок
-
-    Холсты, которые «тянут вниз» (большие красные столбы слева), — кандидаты на сокращение объёма.
-    Холсты, которые «тянут вверх» (зелёные справа) — кандидаты на увеличение.
-    """)
+    st.markdown("### Strategy Landscape — 3D")
 
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         df_3d = data['trades_df'].groupby(
@@ -662,217 +703,155 @@ with tab_3d:
             losses=('profit_net', lambda x: (x < 0).sum()),
         ).reset_index()
 
-        df_3d['name'] = (
-            df_3d['symbol'].str.replace('rfd', '') + '|' +
-            df_3d['strategy_type']
-        )
+        df_3d['name'] = df_3d['symbol'].str.replace('rfd', '') + '|' + df_3d['strategy_type']
         df_3d['volatility'] = df_3d['volatility'].fillna(0)
         df_3d['profit_factor'] = df_3d.apply(
             lambda r: abs(r['wins'] / r['losses']) if r['losses'] > 0
-            else (10.0 if r['wins'] > 0 else 0),
-            axis=1,
+            else (10.0 if r['wins'] > 0 else 0), axis=1,
         )
 
-        # Цвет по PF
         pf_vals = df_3d['profit_factor'].clip(0, 3)
         colors_3d = []
         for pf in pf_vals:
             if pf >= 1.0:
                 ratio = min((pf - 1.0) / 2.0, 1.0)
-                colors_3d.append(f'rgb({int(200 - 162*ratio)}, {int(220 - 54*ratio)}, {int(154 - 0*ratio)})')
+                colors_3d.append(f'rgb({int(46 + 20 * ratio)}, {int(160 + 10 * ratio)}, {int(67 + 20 * ratio)})')
             else:
                 ratio = min((1.0 - pf) / 1.0, 1.0)
-                colors_3d.append(f'rgb({int(239)}, {int(83 + 70*ratio)}, {int(80)})')
+                colors_3d.append(f'rgb({int(218)}, {int(54 + 20 * ratio)}, {int(51 + 10 * ratio)})')
 
-        # Размер по trades
         sizes = df_3d['trades'].clip(lower=1) * 9
 
         fig_3d = go.Figure()
         fig_3d.add_trace(go.Scatter3d(
-            x=df_3d['pnl'],
-            y=df_3d['volatility'],
-            z=df_3d['trades'],
+            x=df_3d['pnl'], y=df_3d['volatility'], z=df_3d['trades'],
             mode='markers+text',
-            marker=dict(
-                size=sizes,
-                color=colors_3d,
-                line=dict(width=1, color='white'),
-                opacity=0.85,
-            ),
-            text=df_3d['name'],
-            textposition='top center',
-            textfont=dict(size=8),
-            hovertemplate=(
-                '<b>%{text}</b><br>'
-                'PnL: %{x:,.1f} руб<br>'
-                'Волатильность: %{y:,.1f}<br>'
-                'Сделок: %{z}<extra></extra>'
-            ),
+            marker=dict(size=sizes, color=colors_3d, line=dict(width=0.5, color=COL_PANEL),
+                        opacity=0.85),
+            text=df_3d['name'], textposition='top center',
+            textfont=dict(size=7, color=COL_MUTED),
+            hovertemplate='<b>%{text}</b><br>PnL: %{x:,.1f}<br>Vol: %{y:,.1f}<br>Trades: %{z}<extra></extra>',
             name='',
         ))
 
-        # Нулевая плоскость
         fig_3d.add_trace(go.Scatter3d(
             x=[0, 0], y=[0, df_3d['volatility'].max() * 1.1 if df_3d['volatility'].max() > 0 else 1],
             z=[0, df_3d['trades'].max() * 1.1 if df_3d['trades'].max() > 0 else 1],
-            mode='lines',
-            line=dict(color='gray', width=2, dash='dash'),
-            showlegend=False,
-            hoverinfo='skip',
+            mode='lines', line=dict(color=COL_MUTED, width=1, dash='dot'),
+            showlegend=False, hoverinfo='skip',
         ))
 
         fig_3d.update_layout(
             scene=dict(
-                xaxis=dict(title='PnL (руб)', backgroundcolor='white',
-                          gridcolor='#e0e0e0', showbackground=True),
-                yaxis=dict(title='Волатильность', backgroundcolor='white',
-                          gridcolor='#e0e0e0', showbackground=True),
-                zaxis=dict(title='Сделок', backgroundcolor='white',
-                          gridcolor='#e0e0e0', showbackground=True),
+                xaxis=dict(title='P&L', backgroundcolor=COL_PANEL, gridcolor=COL_GRID, showbackground=True,
+                           tickfont=dict(size=9, color=COL_MUTED)),
+                yaxis=dict(title='Volatility', backgroundcolor=COL_PANEL, gridcolor=COL_GRID, showbackground=True,
+                           tickfont=dict(size=9, color=COL_MUTED)),
+                zaxis=dict(title='Trades', backgroundcolor=COL_PANEL, gridcolor=COL_GRID, showbackground=True,
+                           tickfont=dict(size=9, color=COL_MUTED)),
                 camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)),
             ),
-            height=650,
-            template='plotly_white',
-            margin=dict(l=0, r=0, t=30, b=0),
+            paper_bgcolor=COL_PANEL, height=650,
+            margin=dict(l=0, r=0, t=10, b=0),
+            font=dict(color=COL_TEXT, size=10),
             showlegend=False,
         )
         st.plotly_chart(fig_3d, use_container_width=True)
 
-        st.caption(
-            "Вращайте мышью. Зелёные точки справа — прибыльные стратегии, "
-            "красные слева — убыточные. Высота = объём активности, "
-            "глубина = волатильность."
-        )
-
-        # ── Легенда-пояснение ──
-        with st.expander("📖 Как читать график"):
+        with st.expander("Reading the chart"):
             st.markdown("""
-            | Параметр | Ось | Что значит |
-            |----------|-----|------------|
-            | PnL | X (горизонталь) | Суммарный профит/убыток за период |
-            | Волатильность | Y (глубина) | Разброс результатов сделок |
-            | Сделок | Z (высота) | Активность стратегии |
-            | Цвет | — | PF > 1 — зелёный, PF < 1 — красный |
-            | Размер | — | Пропорционален количеству сделок |
+            | Dimension | Axis | Meaning |
+            |-----------|------|---------|
+            | P&L | X | Cumulative profit/loss |
+            | Volatility | Y | Return dispersion |
+            | Trades | Z | Activity volume |
+            | Color | — | PF > 1 green, PF < 1 red |
+            | Size | — | Proportional to trade count |
 
-            **Стратегии для увеличения лота:** зелёные, крупные, с низкой волатильностью (близко к нулю по Y).
-
-            **Стратегии для сокращения:** красные, слева от нуля, с высокой волатильностью.
-
-            **Стратегии под вопросом:** мелкие точки — мало сделок, статистика ненадёжна.
+            **Scale up:** green, large, low volatility (near Y=0).
+            **Scale down:** red, left of zero, high volatility.
+            **Unreliable:** small dots — insufficient sample size.
             """)
 
     else:
-        st.info("Нет данных для построения 3D-модели.")
-
+        st.info("No data for 3D model.")
 
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: 3D ПОВЕРХНОСТЬ (параметрический ландшафт)
+#  3D SURFACE
 # ═══════════════════════════════════════════════════════════════
 with tab_surface:
-    st.subheader("🏔️ 3D Поверхность доходности")
-
-    st.markdown("""
-    **Режим полотна:** параметрический ландшафт одной семьи стратегий.
-
-    Выбираешь семейство и два параметра — получаешь 3D-поверхность,
-    где высота = суммарный PnL. «Хребты» — оптимальные зоны параметров,
-    «долины» — убыточные комбинации.
-    """)
+    st.markdown("### Parametric Surface — 3D")
 
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         df_surf_src = data['trades_df'].copy()
-
-        # ── Выбор семейства ──
         families = sorted(df_surf_src['strategy_type'].unique())
-        sel_family = st.selectbox(
-            "Семейство стратегий", families,
-            key="surface_family"
-        )
-
+        sel_family = st.selectbox("Strategy family", families, key="surface_family")
         df_fam = df_surf_src[df_surf_src['strategy_type'] == sel_family].copy()
 
         if df_fam.empty:
-            st.info("Нет данных для выбранного семейства.")
+            st.info("No data for selected family.")
         else:
-            # ── Агрегация по (symbol, param_key) ──
             df_agg = df_fam.groupby(['symbol', 'param_key']).agg(
-                pnl=('profit_net', 'sum'),
-                trades=('profit_net', 'count'),
+                pnl=('profit_net', 'sum'), trades=('profit_net', 'count'),
                 wins=('profit_net', lambda x: (x > 0).sum()),
-                volatility=('profit_net', 'std'),
-                avg_pnl=('profit_net', 'mean'),
+                volatility=('profit_net', 'std'), avg_pnl=('profit_net', 'mean'),
             ).reset_index()
             df_agg['win_rate'] = df_agg['wins'] / df_agg['trades'] * 100
             df_agg['volatility'] = df_agg['volatility'].fillna(0)
 
-            # ── Попытка извлечь числовые параметры из param_key ──
+
             def extract_numbers(key):
-                """Извлекает все числа из строки param_key."""
                 return [float(x) for x in re.findall(r'[-+]?\d*\.?\d+', str(key))]
+
 
             sample_nums = extract_numbers(df_agg['param_key'].iloc[0]) if len(df_agg) > 0 else []
 
-            # ── Выбор осей ──
             col_ax1, col_ax2, col_z = st.columns(3)
-
             axis_options = {
-                'trades': 'Количество сделок',
-                'win_rate': 'Win Rate (%)',
-                'volatility': 'Волатильность',
-                'avg_pnl': 'Средний PnL',
-                'pnl': 'Суммарный PnL',
+                'trades': 'Trade count', 'win_rate': 'Win Rate (%)',
+                'volatility': 'Volatility', 'avg_pnl': 'Avg P&L', 'pnl': 'Total P&L',
             }
-
             param_axis_options = {}
             if len(sample_nums) >= 1:
-                param_axis_options['param_0'] = 'Параметр 1 (из param_key)'
+                param_axis_options['param_0'] = 'Param 1 (from key)'
             if len(sample_nums) >= 2:
-                param_axis_options['param_1'] = 'Параметр 2 (из param_key)'
+                param_axis_options['param_1'] = 'Param 2 (from key)'
 
             all_x_options = {**param_axis_options, **axis_options}
             all_y_options = {**param_axis_options, **axis_options}
-            z_options = {'pnl': 'Суммарный PnL', 'avg_pnl': 'Средний PnL', 'win_rate': 'Win Rate (%)'}
+            z_options = {'pnl': 'Total P&L', 'avg_pnl': 'Avg P&L', 'win_rate': 'Win Rate (%)'}
 
             with col_ax1:
-                x_axis = st.selectbox("Ось X", list(all_x_options.keys()),
-                                      format_func=lambda k: all_x_options[k],
-                                      key="surf_x")
+                x_axis = st.selectbox("X axis", list(all_x_options.keys()),
+                                      format_func=lambda k: all_x_options[k], key="surf_x")
             with col_ax2:
-                y_axis = st.selectbox("Ось Y", list(all_y_options.keys()),
+                y_axis = st.selectbox("Y axis", list(all_y_options.keys()),
                                       format_func=lambda k: all_y_options[k],
-                                      key="surf_y",
-                                      index=min(1, len(all_y_options) - 1))
+                                      key="surf_y", index=min(1, len(all_y_options) - 1))
             with col_z:
-                z_axis = st.selectbox("Ось Z (высота)", list(z_options.keys()),
-                                      format_func=lambda k: z_options[k],
-                                      key="surf_z")
+                z_axis = st.selectbox("Z axis (height)", list(z_options.keys()),
+                                      format_func=lambda k: z_options[k], key="surf_z")
 
-            # ── Извлечение значений ──
+
             def get_axis_values(df, axis):
                 if axis.startswith('param_'):
                     idx = int(axis.split('_')[1])
                     nums_list = df['param_key'].apply(lambda k: extract_numbers(k))
-                    return nums_list.apply(
-                        lambda nums: nums[idx] if len(nums) > idx else 0.0
-                    ).values
+                    return nums_list.apply(lambda nums: nums[idx] if len(nums) > idx else 0.0).values
                 return df[axis].values
+
 
             x_vals = get_axis_values(df_agg, x_axis)
             y_vals = get_axis_values(df_agg, y_axis)
             z_vals = df_agg[z_axis].values
-
-            labels = (df_agg['symbol'].str.replace('rfd', '') +
-                      ' | ' + df_agg['param_key'])
-
+            labels = df_agg['symbol'].str.replace('rfd', '') + ' | ' + df_agg['param_key']
             n_points = len(df_agg)
 
             if n_points < 3:
-                st.warning("Слишком мало точек для поверхности (нужно минимум 3).")
+                st.warning("Insufficient data points (minimum 3 required).")
             else:
                 x_unique = np.unique(x_vals)
                 y_unique = np.unique(y_vals)
-
                 use_surface = (len(x_unique) >= 2 and len(y_unique) >= 2 and
                                len(x_unique) * len(y_unique) <= n_points * 2)
 
@@ -882,161 +861,106 @@ with tab_surface:
                     xi = np.linspace(x_vals.min(), x_vals.max(), max(len(x_unique), 20))
                     yi = np.linspace(y_vals.min(), y_vals.max(), max(len(y_unique), 20))
                     X_grid, Y_grid = np.meshgrid(xi, yi)
-
-                    Z_grid = griddata(
-                        (x_vals, y_vals), z_vals,
-                        (X_grid, Y_grid), method='linear'
-                    )
+                    Z_grid = griddata((x_vals, y_vals), z_vals, (X_grid, Y_grid), method='linear')
                     mask = np.isnan(Z_grid)
                     if mask.any():
-                        Z_nearest = griddata(
-                            (x_vals, y_vals), z_vals,
-                            (X_grid, Y_grid), method='nearest'
-                        )
+                        Z_nearest = griddata((x_vals, y_vals), z_vals, (X_grid, Y_grid), method='nearest')
                         Z_grid[mask] = Z_nearest[mask]
 
                     fig_surf = go.Figure()
                     fig_surf.add_trace(go.Surface(
                         x=xi, y=yi, z=Z_grid,
-                        colorscale='RdYlGn',
-                        contours={
-                            "z": {
-                                "show": True,
-                                "usecolormap": True,
-                                "highlightcolor": "#ffffff",
-                                "project": {"z": True},
-                            }
-                        },
-                        colorbar=dict(title=z_options[z_axis], x=1.02),
-                        hovertemplate=(
-                            f'{all_x_options[x_axis]}: %{{x:.1f}}<br>'
-                            f'{all_y_options[y_axis]}: %{{y:.1f}}<br>'
-                            f'{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>'
-                        ),
+                        colorscale=[[0, '#DA3633'], [0.5, '#161B22'], [1, '#2EA043']],
+                        contours={"z": {"show": True, "usecolormap": True,
+                                        "highlightcolor": "#ffffff", "project": {"z": True}}},
+                        colorbar=dict(title=z_options[z_axis], x=1.02,
+                                      tickfont=dict(size=9, color=COL_MUTED)),
+                        hovertemplate=f'{all_x_options[x_axis]}: %{{x:.1f}}<br>{all_y_options[y_axis]}: %{{y:.1f}}<br>{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>',
                         name='',
                     ))
-
                     fig_surf.update_layout(
                         scene=dict(
-                            xaxis=dict(title=all_x_options[x_axis]),
-                            yaxis=dict(title=all_y_options[y_axis]),
-                            zaxis=dict(title=z_options[z_axis]),
+                            xaxis=dict(title=all_x_options[x_axis], backgroundcolor=COL_PANEL,
+                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                            yaxis=dict(title=all_y_options[y_axis], backgroundcolor=COL_PANEL,
+                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                            zaxis=dict(title=z_options[z_axis], backgroundcolor=COL_PANEL,
+                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
                             camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
                         ),
-                        height=650,
-                        template='plotly_white',
-                        margin=dict(l=0, r=0, t=30, b=0),
+                        paper_bgcolor=COL_PANEL, height=650,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        font=dict(color=COL_TEXT, size=10),
                     )
                     st.plotly_chart(fig_surf, use_container_width=True)
-
                     st.caption(
-                        f"Поверхность построена интерполяцией {n_points} точек "
-                        f"на сетку {len(xi)}×{len(yi)}. "
-                        f"Зелёные «хребты» — прибыльные зоны, красные «долины» — убыточные."
-                    )
-
+                        f"Interpolated {n_points} points onto {len(xi)}x{len(yi)} grid. Ridges = profitable zones.")
                 else:
-                    st.info(
-                        f"Точек ({n_points}) недостаточно для регулярной поверхности. "
-                        f"Показываю триангулированную mesh."
-                    )
+                    st.info(f"Insufficient grid for surface ({n_points} points). Showing triangulated mesh.")
 
                     fig_mesh = go.Figure()
                     fig_mesh.add_trace(go.Mesh3d(
                         x=x_vals, y=y_vals, z=z_vals,
-                        colorscale='RdYlGn',
+                        colorscale=[[0, '#DA3633'], [0.5, '#161B22'], [1, '#2EA043']],
                         intensity=z_vals,
-                        colorbar=dict(title=z_options[z_axis], x=1.02),
-                        hovertemplate=(
-                            f'{all_x_options[x_axis]}: %{{x:.1f}}<br>'
-                            f'{all_y_options[y_axis]}: %{{y:.1f}}<br>'
-                            f'{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>'
-                        ),
+                        colorbar=dict(title=z_options[z_axis], x=1.02,
+                                      tickfont=dict(size=9, color=COL_MUTED)),
+                        hovertemplate=f'{all_x_options[x_axis]}: %{{x:.1f}}<br>{all_y_options[y_axis]}: %{{y:.1f}}<br>{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>',
                         name='',
                     ))
-
                     fig_mesh.add_trace(go.Scatter3d(
-                        x=x_vals, y=y_vals, z=z_vals,
-                        mode='markers+text',
-                        marker=dict(size=5, color='white',
-                                   line=dict(width=1, color='#333')),
-                        text=labels,
-                        textposition='top center',
-                        textfont=dict(size=7),
-                        hoverinfo='skip',
-                        name='',
+                        x=x_vals, y=y_vals, z=z_vals, mode='markers+text',
+                        marker=dict(size=4, color=COL_TEXT, line=dict(width=0.5, color=COL_PANEL)),
+                        text=labels, textposition='top center',
+                        textfont=dict(size=6, color=COL_MUTED),
+                        hoverinfo='skip', name='',
                     ))
-
                     fig_mesh.update_layout(
                         scene=dict(
-                            xaxis=dict(title=all_x_options[x_axis]),
-                            yaxis=dict(title=all_y_options[y_axis]),
-                            zaxis=dict(title=z_options[z_axis]),
+                            xaxis=dict(title=all_x_options[x_axis], backgroundcolor=COL_PANEL,
+                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                            yaxis=dict(title=all_y_options[y_axis], backgroundcolor=COL_PANEL,
+                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                            zaxis=dict(title=z_options[z_axis], backgroundcolor=COL_PANEL,
+                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
                             camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
                         ),
-                        height=650,
-                        template='plotly_white',
-                        margin=dict(l=0, r=0, t=30, b=0),
+                        paper_bgcolor=COL_PANEL, height=650,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        font=dict(color=COL_TEXT, size=10),
                         showlegend=False,
                     )
                     st.plotly_chart(fig_mesh, use_container_width=True)
 
-            # ── Таблица с исходными данными ──
-            with st.expander("📋 Исходные данные поверхности"):
+            with st.expander("Source data"):
                 display_df = df_agg[['symbol', 'param_key', 'pnl', 'trades',
                                      'win_rate', 'volatility', 'avg_pnl']].copy()
                 display_df['symbol'] = display_df['symbol'].str.replace('rfd', '')
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
-
     else:
-        st.info("Нет данных для построения поверхности.")
+        st.info("No data for surface.")
 
     st.markdown("---")
-    st.markdown("""
-    💡 **Совет:** поверхность наиболее полезна при оптимизации параметров
-    одной стратегии. Например, выбрать семейство `Stochastic` и поставить
-    оси X = Параметр 1, Y = Параметр 2, Z = Суммарный PnL.
-    Тогда «хребет» на поверхности покажет оптимальную зону параметров.
-    """)
-
+    st.caption("Select a family, set X/Y to parameter axes, Z to P&L. Ridges indicate optimal parameter zones.")
 
 # ═══════════════════════════════════════════════════════════════
-#  ТАБ: В РАЗРАБОТКЕ
+#  PIPELINE
 # ═══════════════════════════════════════════════════════════════
-with tab_roadmap:
-    st.subheader("🚧 В разработке")
+with tab_pipeline:
+    st.markdown("### Pipeline — Upcoming Features")
 
-    st.markdown("Планируемые дэши. Ниже — заглушки с описанием.")
+    items = [
+        ("Drawdown Chart", "Peak-to-trough equity drawdown. Identifies maximum portfolio stress periods. "
+                           "Area chart with red fill in drawdown zones."),
+        ("Hourly P&L Heatmap", "Matrix: rows = symbols/strategies, columns = hours. Cell color = cumulative P&L. "
+                               "Identifies time windows with consistent alpha or bleeding."),
+        ("Backtest vs Live", "Compares expected backtest metrics with live trading results. "
+                             "Columns: backtest / actual / deviation / verdict."),
+        ("Sharpe by Family", "Risk-adjusted return ranking. Mean daily P&L divided by daily volatility. "
+                             "Higher Sharpe = better return per unit of risk."),
+    ]
 
-    make_empty_placeholder(
-        "Drawdown Chart",
-        "Просадка от пика equity. Показывает, насколько портфель «проваливался» "
-        "от максимумов. Помогает оценить реальный риск и стресс-устойчивость. "
-        "График: область под кривой equity, залитая красным в зоне просадки.",
-        icon="📉"
-    )
-
-    make_empty_placeholder(
-        "Тепловая карта PnL по часам",
-        "Матрица: строки — символы или стратегии, столбцы — часы суток. "
-        "Цвет ячейки — суммарный PnL за этот час. Помогает найти временные окна, "
-        "где стратегии стабильно зарабатывают или сливают. "
-        "Полезно для настройки торговых сессий и таймаутов.",
-        icon="🕐"
-    )
-
-    make_empty_placeholder(
-        "Сравнение бэктест vs реальность",
-        "Сравнение ожидаемых показателей из бэктеста с фактическими результатами "
-        "живой торговли. Расхождения по PnL, Win Rate, PF, просадке. "
-        "Таблица с колонками: бэктест / факт / отклонение / вердикт.",
-        icon="🔬"
-    )
-
-    make_empty_placeholder(
-        "Sharpe по семействам",
-        "Отношение средней дневной доходности к дневной волатильности. "
-        "Ранжирование семейств стратегий по эффективности с учётом риска. "
-        "Чем выше Sharpe — тем лучше доходность на единицу риска.",
-        icon="⚖️"
-    )
+    for title, desc in items:
+        st.markdown(f"**{title}**")
+        st.caption(desc)
+        st.markdown("")

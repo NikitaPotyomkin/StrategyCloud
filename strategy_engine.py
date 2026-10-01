@@ -1075,9 +1075,9 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
         'runs': _spec(
             (lambda df, s: calc_runs_test_fn(df, s.get('window', 30), s.get('z_threshold', 1.96))) if calc_runs_test_fn is not None else None,
             "Runs — модуль не передан", 2,
-            lambda df: {'prev': df['z_stat'].iloc[-2], 'curr': df['z_stat'].iloc[-1]},
-            lambda v, s, d: check_exit_runs_fn(v['prev'], v['curr'], d),
-            lambda v, s: check_entry_runs_fn(v['prev'], v['curr'], s.get('z_threshold', 1.96)),
+            lambda df: {'prev_up': df['trend_up'].iloc[-2], 'prev_down': df['trend_down'].iloc[-2], 'curr_up': df['trend_up'].iloc[-1], 'curr_down': df['trend_down'].iloc[-1]},
+            lambda v, s, d: check_exit_runs_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down'], d),
+            lambda v, s: check_entry_runs_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down']),
             lambda s: f"{s['symbol']}, Runs",
         ),
         'coint': _spec(
