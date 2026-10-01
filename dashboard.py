@@ -425,7 +425,6 @@ with tab_risk:
                     {'range': [30, 70], 'color': '#2E2A1A'},
                     {'range': [70, 150], 'color': '#2E1A1A'},
                 ],
-                'shape': 'gauge',
             },
         ))
         fig_gauge.update_layout(

@@ -267,7 +267,7 @@ def sig_col_for(t):
         'bollinger': 'signal', 'ema_cross': 'signal', 'rsi_div': 'signal',
         'ichimoku': 'signal', 'zscore': 'zscore', 'autocorr': 'acf',
         'hurst': 'trend_up', 'lrc': 'lr_signal', 'percentile': 'percentile',
-        'runs': 'z_stat', 'coint': 'spread_z', 'sharpe': 'sharpe',
+        'runs': 'trend_up', 'coint': 'spread_z', 'sharpe': 'sharpe',
         'skewness': 'skewness', 'bayesian': 'trend_up', 'kurtosis': 'trend_up',
         'chi_square': 'trend_up',
     }[t]
