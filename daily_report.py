@@ -427,7 +427,7 @@ def get_dashboard_data(days_back=30):
         quota = balance * 0.05  # MAX_RISK_PCT = 0.05
 
         # 3. История сделок — от max(1 сентября 2026, today - days_back)
-        date_to = datetime.datetime.now()
+        date_to = datetime.datetime.now() + datetime.timedelta(hours=6)  # запас: часы хоста могут отставать от сервера UTC+3
         date_from = max(datetime.datetime(2026, 9, 1), date_to - datetime.timedelta(days=days_back))
 
         deals = mt5.history_deals_get(date_from, date_to)
