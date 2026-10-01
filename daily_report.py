@@ -505,6 +505,13 @@ def get_dashboard_data(days_back=30):
                 time=('time', 'max'),
             ).reset_index()
             trades_df = agg.sort_values('timestamp').reset_index(drop=True)
+            # DEBUG: разбивка P&L Today (позиции закрытые сегодня, независимо от даты открытия)
+            if 'time' in trades_df.columns:
+                d0 = datetime.datetime.combine(datetime.datetime.now().date(), datetime.datetime.min.time()).timestamp()
+                d1 = datetime.datetime.combine(datetime.datetime.now().date(), datetime.datetime.max.time()).timestamp()
+                tm = (trades_df['time'] >= d0) & (trades_df['time'] < d1)
+                print(f"  [DASHBOARD] Окно: {len(trades_df)} поз., PnL_всего={trades_df['profit_net'].sum():+.2f} | "
+                      f"Сегодня: {int(tm.sum())} поз., PnL_сегодня={trades_df.loc[tm, 'profit_net'].sum():+.2f}", flush=True)
 
         # 4. Активные стратегии (из реестра + текущие позиции)
         registry = _load_registry()

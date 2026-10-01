@@ -736,7 +736,7 @@ with tab_3d:
             marker=dict(size=sizes, color=colors_3d, line=dict(width=0.5, color=COL_PANEL),
                         opacity=0.85),
             text=df_3d['name'], textposition='top center',
-            textfont=dict(size=14, color=COL_MUTED),
+            textfont=dict(size=10, color=COL_MUTED),
             hovertemplate='<b>%{text}</b><br>PnL: %{x:,.1f}<br>Vol: %{y:,.1f}<br>Trades: %{z}<extra></extra>',
             name='',
         ))
