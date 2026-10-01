@@ -40,21 +40,23 @@ def calc_rolling_sharpe(df, window, sharpe_entry=0.5, sharpe_exit=0.0):
 
 def check_entry(prev_sharpe, curr_sharpe, sharpe_entry):
     """
-    Вход при росте Sharpe выше порога.
+    Вход при переходе Sharpe из нейтральной зоны.
     
     Returns:
         'long', 'short' или None
     """
-    if prev_sharpe <= sharpe_entry and curr_sharpe > sharpe_entry:
+    # Long: из нейтральной зоны (> -sharpe_entry и < sharpe_entry) вверх выше sharpe_entry
+    if prev_sharpe >= -sharpe_entry and prev_sharpe <= sharpe_entry and curr_sharpe > sharpe_entry:
         return 'long'
-    if prev_sharpe >= -sharpe_entry and curr_sharpe < -sharpe_entry:
+    # Short: из нейтральной зоны вниз ниже -sharpe_entry
+    if prev_sharpe >= -sharpe_entry and prev_sharpe <= sharpe_entry and curr_sharpe < -sharpe_entry:
         return 'short'
     return None
 
 
 def check_exit(prev_sharpe, curr_sharpe, sharpe_exit, direction):
     """
-    Выход при падении Sharpe ниже порога.
+    Выход при возврате Sharpe к нулю.
     
     Args:
         direction: 'long' или 'short'
@@ -65,7 +67,7 @@ def check_exit(prev_sharpe, curr_sharpe, sharpe_exit, direction):
     if direction == 'long':
         return curr_sharpe <= sharpe_exit
     else:
-        return curr_sharpe >= -sharpe_exit
+        return curr_sharpe >= sharpe_exit
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):

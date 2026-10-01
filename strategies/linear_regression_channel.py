@@ -68,14 +68,16 @@ def calc_lr_channel(df, lr_period, sigma_mult=2.0):
 
 def check_entry(prev_signal, curr_signal):
     """
-    Вход при появлении сигнала.
+    Вход при уходе цены за пределы канала.
     
     Returns:
         'long', 'short' или None
     """
-    if prev_signal == 0 and curr_signal == 1:
+    # Long: был нейтральный или short-сигнал, теперь цена ниже нижней границы
+    if prev_signal != 1 and curr_signal == 1:
         return 'long'
-    if prev_signal == 0 and curr_signal == -1:
+    # Short: был нейтральный или long-сигнал, теперь цена выше верхней границы
+    if prev_signal != -1 and curr_signal == -1:
         return 'short'
     return None
 

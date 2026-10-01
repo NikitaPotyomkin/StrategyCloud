@@ -1,11 +1,21 @@
-"""Стратегия Kurtosis spike — вход при Kurtosis > 5 и последний бар > 1σ, выход при Kurtosis < 3."""
+"""Стратегия Kurtosis spike — вход при Kurtosis > 5 и последний бар > 1σ с направлением.
+
+Kurtosis (эксцесс) показывает "тяжесть хвостов" распределения — высокий эксцесс
+означает частые резкие движения. Но сам по себе Kurtosis НЕ даёт направления!
+
+Направление задаётся знаком последнего возврата (current_return).
+
+Вход: Kurtosis > 5 + |sigma| > 1 + current_return > 0 → LONG
+      Kurtosis > 5 + |sigma| > 1 + current_return < 0 → SHORT
+Выход: Kurtosis < 3 (экстремальность прошла)
+"""
 import numpy as np
 import pandas as pd
 
 
 def calc_kurtosis(df, window, kurt_entry=5.0, kurt_exit=3.0, sigma_mult=1.0):
     """
-    Добавляет колонку 'kurtosis' с коэффициентом эксцесса.
+    Добавляет колонки 'kurtosis', 'sigma' и 'current_return' для определения направления.
     
     Args:
         df: DataFrame с OHLCV
@@ -15,10 +25,11 @@ def calc_kurtosis(df, window, kurt_entry=5.0, kurt_exit=3.0, sigma_mult=1.0):
         sigma_mult: множитель стандартного отклонения
     
     Returns:
-        DataFrame с колонкой 'kurtosis'
+        DataFrame с колонками 'kurtosis', 'sigma', 'current_return', 'trend_up', 'trend_down'
     """
     df = df.copy()
     returns = df['close'].pct_change().fillna(0)
+    df['current_return'] = returns
     
     kurt_values = []
     sigma_values = []
@@ -41,30 +52,35 @@ def calc_kurtosis(df, window, kurt_entry=5.0, kurt_exit=3.0, sigma_mult=1.0):
                 kurt = ((window_returns - mean) ** 4).sum() / (n * std ** 4) - 3
                 kurt_values.append(kurt)
                 
-                # Текущее отклонение в сигмах
+                # Текущее отклонение в сигмах (АБСОЛЮТНОЕ значение)
                 current_return = returns.iloc[i]
                 sigma = abs(current_return - mean) / std if std > 0 else 0
                 sigma_values.append(sigma)
     
     df['kurtosis'] = kurt_values
     df['sigma'] = sigma_values
+    
+    # Направление по знаку current_return (текущий возврат)
+    df['trend_up'] = (df['kurtosis'] > kurt_entry) & (df['sigma'] > sigma_mult) & (df['current_return'] > 0)
+    df['trend_down'] = (df['kurtosis'] > kurt_entry) & (df['sigma'] > sigma_mult) & (df['current_return'] < 0)
     return df
 
 
-def check_entry(prev_kurt, curr_kurt, curr_sigma, kurt_entry, sigma_mult):
+def check_entry(prev_up, prev_down, curr_up, curr_down):
     """
-    Вход при высоком эксцессе и большом последнем баре.
+    Вход при высоком эксцессе и большом последнем баре с направлением.
     
     Returns:
-        'long', 'short' или None
+        'long' — экстремальное восходящее движение, 'short' — нисходящее, None — иначе
     """
-    if curr_kurt > kurt_entry and curr_sigma > sigma_mult:
-        # Определяем направление по знаку последнего бара
-        return 'long' if curr_sigma > 0 else 'short'
+    if curr_up and not prev_up:
+        return 'long'
+    if curr_down and not prev_down:
+        return 'short'
     return None
 
 
-def check_exit(prev_kurt, curr_kurt, kurt_exit, direction):
+def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
     Выход при падении эксцесса.
     
@@ -74,7 +90,10 @@ def check_exit(prev_kurt, curr_kurt, kurt_exit, direction):
     Returns:
         True если нужно выйти
     """
-    return curr_kurt < kurt_exit
+    if direction == 'long':
+        return not curr_up
+    else:
+        return not curr_down
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -101,9 +120,10 @@ def backtest(df, window, kurt_entry, kurt_exit, sigma_mult, sl_points, tp_points
     trade_profits = []
 
     for i in range(1, len(df)):
-        prev_kurt = df['kurtosis'].iloc[i - 1]
-        curr_kurt = df['kurtosis'].iloc[i]
-        curr_sigma = df['sigma'].iloc[i]
+        prev_up = df['trend_up'].iloc[i - 1]
+        prev_down = df['trend_down'].iloc[i - 1]
+        curr_up = df['trend_up'].iloc[i]
+        curr_down = df['trend_down'].iloc[i]
         curr_close = df['close'].iloc[i]
         current_high = df['high'].iloc[i]
         current_low = df['low'].iloc[i]
@@ -123,7 +143,7 @@ def backtest(df, window, kurt_entry, kurt_exit, sigma_mult, sl_points, tp_points
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
-                elif check_exit(prev_kurt, curr_kurt, kurt_exit, 'long'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'long'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
@@ -136,7 +156,7 @@ def backtest(df, window, kurt_entry, kurt_exit, sigma_mult, sl_points, tp_points
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
-                elif check_exit(prev_kurt, curr_kurt, kurt_exit, 'short'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'short'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
@@ -150,7 +170,7 @@ def backtest(df, window, kurt_entry, kurt_exit, sigma_mult, sl_points, tp_points
 
         # ── Проверка входа ──
         if position is None:
-            entry_dir = check_entry(prev_kurt, curr_kurt, curr_sigma, kurt_entry, sigma_mult)
+            entry_dir = check_entry(prev_up, prev_down, curr_up, curr_down)
             if entry_dir == 'long':
                 entry = curr_close - spread
                 position = {'direction': 'long', 'entry': entry,

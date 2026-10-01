@@ -1,4 +1,14 @@
-"""Стратегия Percentile reversion — вход в 5-м или 95-м перцентиле, выход к 50-му."""
+"""Стратегия Percentile reversion — вход в 5-м или 95-м перцентиле, выход к 50-му.
+
+Percentile показывает позицию цены в распределении за окно.
+- Percentile > 95 → цена выше 95% предыдущих значений (перекупленность)
+- Percentile < 5 → цена ниже 5% предыдущих значений (перепроданность)
+
+Вход LONG: цена была в 95-м перцентиле (высокая), теперь падает (< 95)
+Вход SHORT: цена была в 5-м перцентиле (низкая), теперь растёт (> 5)
+
+Это mean-reversion: ожидаем возврат к средней.
+"""
 import numpy as np
 import pandas as pd
 
@@ -36,15 +46,15 @@ def calc_percentile(df, lookback, low_pct=5, high_pct=95, mid_pct=50):
 
 def check_entry(prev_pct, curr_pct, low_pct, high_pct):
     """
-    Вход при экстремальном перцентиле.
+    Вход при экстремальном перцентиле (mean-reversion).
     
     Returns:
-        'long' (низкий перцентиль), 'short' (высокий) или None
+        'long' (цена была внизу, теперь растёт), 'short' (цена была вверху, теперь падает) или None
     """
     if prev_pct >= high_pct and curr_pct < high_pct:
-        return 'long'
+        return 'short'  # Цена была > 95-го перцентиля (очень высокая), теперь падает
     if prev_pct <= low_pct and curr_pct > low_pct:
-        return 'short'
+        return 'long'  # Цена была < 5-го перцентиля (очень низкая), теперь растёт
     return None
 
 

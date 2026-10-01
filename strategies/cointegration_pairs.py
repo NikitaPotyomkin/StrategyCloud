@@ -40,14 +40,16 @@ def calc_cointegration(df, window, z_entry=2.0, z_exit=0.0):
 
 def check_entry(prev_z, curr_z, z_entry):
     """
-    Вход при отклонении спреда.
+    Вход при отклонении спреда из нейтральной зоны.
     
     Returns:
         'long', 'short' или None
     """
-    if prev_z >= -z_entry and curr_z > z_entry:
+    # Short: из нейтральной зоны (> -z_entry и < z_entry) вверх выше z_entry
+    if prev_z >= -z_entry and prev_z <= z_entry and curr_z > z_entry:
         return 'short'
-    if prev_z <= z_entry and curr_z < -z_entry:
+    # Long: из нейтральной зоны вниз ниже -z_entry
+    if prev_z >= -z_entry and prev_z <= z_entry and curr_z < -z_entry:
         return 'long'
     return None
 
@@ -65,7 +67,7 @@ def check_exit(prev_z, curr_z, z_exit, direction):
     if direction == 'long':
         return curr_z >= z_exit
     else:
-        return curr_z <= -z_exit
+        return curr_z <= z_exit
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):

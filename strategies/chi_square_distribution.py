@@ -1,11 +1,20 @@
-"""Стратегия Chi-square distribution — вход при p-value < 0.05, выход при p > 0.2."""
+"""Стратегия Chi-square distribution — вход при p-value < 0.05 И направлении mean_ret.
+
+Хи-квадрат тест проверяет СТАТИСТИЧЕСКУЮ ЗНАЧИМОСТЬ отклонения долей
+положительных/отрицательных возвратов от 50/50. Сам по себе p-value НЕ даёт
+направления — поэтому направление задаёт mean_ret (средний возврат за окно).
+
+Вход: p-value < 0.05 (статистическая значимость) + mean_ret > 0 → LONG
+      p-value < 0.05 (статистическая значимость) + mean_ret < 0 → SHORT
+Выход: p-value > 0.2 (статистическая значимость потеряна)
+"""
 import numpy as np
 import pandas as pd
 
 
 def calc_chi_square(df, window, p_entry=0.05, p_exit=0.2):
     """
-    Добавляет колонку 'chi2_pvalue' с p-value теста хи-квадрат.
+    Добавляет колонки 'chi2_pvalue' и 'mean_ret' для определения направления.
     
     Args:
         df: DataFrame с OHLCV
@@ -14,16 +23,19 @@ def calc_chi_square(df, window, p_entry=0.05, p_exit=0.2):
         p_exit: порог p-value для выхода
     
     Returns:
-        DataFrame с колонкой 'chi2_pvalue'
+        DataFrame с колонками 'chi2_pvalue', 'mean_ret', 'trend_up', 'trend_down'
     """
     df = df.copy()
+    returns = df['close'].pct_change().fillna(0)
+    df['mean_ret'] = returns.rolling(window, min_periods=1).mean()
+    
     p_values = []
     
     for i in range(len(df)):
         if i < window:
             p_values.append(1.0)
         else:
-            window_returns = df['close'].iloc[i - window:i].pct_change().dropna()
+            window_returns = returns.iloc[i - window:i].dropna()
             
             if len(window_returns) < 5:
                 p_values.append(1.0)
@@ -54,24 +66,30 @@ def calc_chi_square(df, window, p_entry=0.05, p_exit=0.2):
             p_values.append(p_value)
     
     df['chi2_pvalue'] = p_values
+    
+    # Направление по mean_ret (средний возврат за окно)
+    df['trend_up'] = (df['chi2_pvalue'] < p_entry) & (df['mean_ret'] > 0)
+    df['trend_down'] = (df['chi2_pvalue'] < p_entry) & (df['mean_ret'] < 0)
     return df
 
 
-def check_entry(prev_p, curr_p, p_entry):
+def check_entry(prev_up, prev_down, curr_up, curr_down):
     """
-    Вход при низком p-value (статистическая значимость).
+    Вход при появлении статистически значимого тренда с направлением.
     
     Returns:
-        'long', 'short' или None
+        'long' — появился сильный восходящий тренд, 'short' — нисходящий, None — иначе
     """
-    if prev_p >= p_entry and curr_p < p_entry:
-        return 'long'  # Или 'short' в зависимости от направления
+    if curr_up and not prev_up:
+        return 'long'
+    if curr_down and not prev_down:
+        return 'short'
     return None
 
 
-def check_exit(prev_p, curr_p, p_exit, direction):
+def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
-    Выход при высоком p-value.
+    Выход при потере статистической значимости.
     
     Args:
         direction: 'long' или 'short'
@@ -79,7 +97,10 @@ def check_exit(prev_p, curr_p, p_exit, direction):
     Returns:
         True если нужно выйти
     """
-    return curr_p > p_exit
+    if direction == 'long':
+        return not curr_up
+    else:
+        return not curr_down
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -112,8 +133,10 @@ def backtest(df, window, p_entry, p_exit, sl_points, tp_points, point,
     trade_profits = []
 
     for i in range(1, len(df)):
-        prev_p = df['chi2_pvalue'].iloc[i - 1]
-        curr_p = df['chi2_pvalue'].iloc[i]
+        prev_up = df['trend_up'].iloc[i - 1]
+        prev_down = df['trend_down'].iloc[i - 1]
+        curr_up = df['trend_up'].iloc[i]
+        curr_down = df['trend_down'].iloc[i]
         curr_close = df['close'].iloc[i]
         current_high = df['high'].iloc[i]
         current_low = df['low'].iloc[i]
@@ -133,7 +156,7 @@ def backtest(df, window, p_entry, p_exit, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
-                elif check_exit(prev_p, curr_p, p_exit, 'long'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'long'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
@@ -146,7 +169,7 @@ def backtest(df, window, p_entry, p_exit, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
-                elif check_exit(prev_p, curr_p, p_exit, 'short'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'short'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
@@ -160,7 +183,7 @@ def backtest(df, window, p_entry, p_exit, sl_points, tp_points, point,
 
         # ── Проверка входа ──
         if position is None:
-            entry_dir = check_entry(prev_p, curr_p, p_entry)
+            entry_dir = check_entry(prev_up, prev_down, curr_up, curr_down)
             if entry_dir == 'long':
                 entry = curr_close - spread
                 position = {'direction': 'long', 'entry': entry,

@@ -1,11 +1,19 @@
-"""Стратегия Bayesian trend update — вход при P(тренд) > 0.65, выход при P < 0.5."""
+"""Стратегия Bayesian trend update — вход при P(тренд) > 0.65 И направлении mean_ret.
+
+Байесовское обновление оценивает ВЕРОЯТНОСТЬ тренда, но НЕ его направление.
+Направление задаётся mean_ret (средний возврат за окно).
+
+Вход: P(тренд) > 0.65 + mean_ret > 0 → LONG
+      P(тренд) > 0.65 + mean_ret < 0 → SHORT
+Выход: P(тренд) < 0.5 (вероятность тренда потеряна)
+"""
 import numpy as np
 import pandas as pd
 
 
 def calc_bayesian_trend(df, window, prior=0.5, p_entry=0.65, p_exit=0.5):
     """
-    Добавляет колонку 'p_trend' с вероятностью тренда через байесовское обновление.
+    Добавляет колонки 'p_trend' и 'mean_ret' для определения направления.
     
     Args:
         df: DataFrame с OHLCV
@@ -15,10 +23,11 @@ def calc_bayesian_trend(df, window, prior=0.5, p_entry=0.65, p_exit=0.5):
         p_exit: порог вероятности для выхода
     
     Returns:
-        DataFrame с колонкой 'p_trend'
+        DataFrame с колонками 'p_trend', 'mean_ret', 'trend_up', 'trend_down'
     """
     df = df.copy()
     returns = df['close'].pct_change().fillna(0)
+    df['mean_ret'] = returns.rolling(window, min_periods=1).mean()
     
     p_trend_values = []
     p_trend = prior
@@ -45,24 +54,28 @@ def calc_bayesian_trend(df, window, prior=0.5, p_entry=0.65, p_exit=0.5):
             p_trend_values.append(p_trend)
     
     df['p_trend'] = p_trend_values
+    
+    # Направление по mean_ret (средний возврат за окно)
+    df['trend_up'] = (df['p_trend'] > p_entry) & (df['mean_ret'] > 0)
+    df['trend_down'] = (df['p_trend'] > p_entry) & (df['mean_ret'] < 0)
     return df
 
 
-def check_entry(prev_p, curr_p, p_entry):
+def check_entry(prev_up, prev_down, curr_up, curr_down):
     """
-    Вход при росте вероятности тренда.
+    Вход при росте вероятности тренда с направлением.
     
     Returns:
-        'long', 'short' или None
+        'long' — появился сильный восходящий тренд, 'short' — нисходящий, None — иначе
     """
-    if prev_p <= p_entry and curr_p > p_entry:
+    if curr_up and not prev_up:
         return 'long'
-    if prev_p >= (1 - p_entry) and curr_p < (1 - p_entry):
+    if curr_down and not prev_down:
         return 'short'
     return None
 
 
-def check_exit(prev_p, curr_p, p_exit, direction):
+def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
     Выход при падении вероятности тренда.
     
@@ -73,9 +86,9 @@ def check_exit(prev_p, curr_p, p_exit, direction):
         True если нужно выйти
     """
     if direction == 'long':
-        return curr_p <= p_exit
+        return not curr_up
     else:
-        return curr_p >= (1 - p_exit)
+        return not curr_down
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -102,8 +115,10 @@ def backtest(df, window, prior, p_entry, p_exit, sl_points, tp_points, point,
     trade_profits = []
 
     for i in range(1, len(df)):
-        prev_p = df['p_trend'].iloc[i - 1]
-        curr_p = df['p_trend'].iloc[i]
+        prev_up = df['trend_up'].iloc[i - 1]
+        prev_down = df['trend_down'].iloc[i - 1]
+        curr_up = df['trend_up'].iloc[i]
+        curr_down = df['trend_down'].iloc[i]
         curr_close = df['close'].iloc[i]
         current_high = df['high'].iloc[i]
         current_low = df['low'].iloc[i]
@@ -123,7 +138,7 @@ def backtest(df, window, prior, p_entry, p_exit, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
-                elif check_exit(prev_p, curr_p, p_exit, 'long'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'long'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
@@ -136,7 +151,7 @@ def backtest(df, window, prior, p_entry, p_exit, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
-                elif check_exit(prev_p, curr_p, p_exit, 'short'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'short'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
@@ -150,7 +165,7 @@ def backtest(df, window, prior, p_entry, p_exit, sl_points, tp_points, point,
 
         # ── Проверка входа ──
         if position is None:
-            entry_dir = check_entry(prev_p, curr_p, p_entry)
+            entry_dir = check_entry(prev_up, prev_down, curr_up, curr_down)
             if entry_dir == 'long':
                 entry = curr_close - spread
                 position = {'direction': 'long', 'entry': entry,

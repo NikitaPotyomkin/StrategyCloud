@@ -1,11 +1,19 @@
-"""Стратегия Runs Test trend — вход при Z-stat > 1.96 (тренд), выход при Z < 0."""
+"""Стратегия Runs Test trend — вход при Z-stat > 1.96 (тренд) И mean_ret > 0.
+
+Runs test проверяет СТАТИСТИЧЕСКУЮ ЗНАЧИМОСТЬ тренда (мало серий = тренд).
+Но сам по себе Z-stat НЕ даёт направления — нужно mean_ret.
+
+Вход LONG: Z > 1.96 (тренд) + mean_ret > 0 (восходящий)
+Вход SHORT: Z < -1.96 (тренд) + mean_ret < 0 (нисходящий)
+Выход: Z < 0 (тренд потерялся)
+"""
 import numpy as np
 import pandas as pd
 
 
 def calc_runs_test(df, window, z_threshold=1.96):
     """
-    Добавляет колонку 'z_stat' со Z-статистикой теста серий.
+    Добавляет колонки 'z_stat' и 'mean_ret' для определения направления.
     
     Args:
         df: DataFrame с OHLCV
@@ -13,9 +21,12 @@ def calc_runs_test(df, window, z_threshold=1.96):
         z_threshold: порог Z для входа
     
     Returns:
-        DataFrame с колонкой 'z_stat'
+        DataFrame с колонками 'z_stat', 'mean_ret', 'trend_up', 'trend_down'
     """
     df = df.copy()
+    returns = df['close'].pct_change().fillna(0)
+    df['mean_ret'] = returns.rolling(window, min_periods=1).mean()
+    
     z_values = []
     
     for i in range(len(df)):
@@ -57,26 +68,30 @@ def calc_runs_test(df, window, z_threshold=1.96):
                 z_values.append(z)
     
     df['z_stat'] = z_values
+    
+    # Направление по mean_ret (средний возврат за окно)
+    df['trend_up'] = (df['z_stat'] > z_threshold) & (df['mean_ret'] > 0)
+    df['trend_down'] = (df['z_stat'] < -z_threshold) & (df['mean_ret'] < 0)
     return df
 
 
-def check_entry(prev_z, curr_z, z_threshold):
+def check_entry(prev_up, prev_down, curr_up, curr_down):
     """
-    Вход при превышении Z-порога.
+    Вход при статистически значимом тренде с направлением.
     
     Returns:
-        'long', 'short' или None
+        'long' — восходящий тренд, 'short' — нисходящий, None — иначе
     """
-    if prev_z <= z_threshold and curr_z > z_threshold:
+    if curr_up and not prev_up:
         return 'long'
-    if prev_z >= -z_threshold and curr_z < -z_threshold:
+    if curr_down and not prev_down:
         return 'short'
     return None
 
 
-def check_exit(prev_z, curr_z, direction):
+def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
-    Выход при возврате Z к нулю.
+    Выход при потере тренда.
     
     Args:
         direction: 'long' или 'short'
@@ -85,9 +100,9 @@ def check_exit(prev_z, curr_z, direction):
         True если нужно выйти
     """
     if direction == 'long':
-        return curr_z <= 0
+        return not curr_up
     else:
-        return curr_z >= 0
+        return not curr_down
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -114,8 +129,10 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
     trade_profits = []
 
     for i in range(1, len(df)):
-        prev_z = df['z_stat'].iloc[i - 1]
-        curr_z = df['z_stat'].iloc[i]
+        prev_up = df['trend_up'].iloc[i - 1]
+        prev_down = df['trend_down'].iloc[i - 1]
+        curr_up = df['trend_up'].iloc[i]
+        curr_down = df['trend_down'].iloc[i]
         curr_close = df['close'].iloc[i]
         current_high = df['high'].iloc[i]
         current_low = df['low'].iloc[i]
@@ -135,7 +152,7 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
-                elif check_exit(prev_z, curr_z, 'long'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'long'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
@@ -148,7 +165,7 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
                     p = _profit(position['entry'], position['tp'],
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
-                elif check_exit(prev_z, curr_z, 'short'):
+                elif check_exit(prev_up, prev_down, curr_up, curr_down, 'short'):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
@@ -162,7 +179,7 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
 
         # ── Проверка входа ──
         if position is None:
-            entry_dir = check_entry(prev_z, curr_z, z_threshold)
+            entry_dir = check_entry(prev_up, prev_down, curr_up, curr_down)
             if entry_dir == 'long':
                 entry = curr_close - spread
                 position = {'direction': 'long', 'entry': entry,

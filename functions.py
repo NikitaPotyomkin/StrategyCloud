@@ -1419,21 +1419,6 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         except (json.JSONDecodeError, ValueError, OSError):
             last_night_reset = None
 
-    today = now.date()
-
-
-    # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
-    now = datetime.datetime.now()
-    night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
-
-    last_night_reset = None
-    if os.path.exists(night_reset_path):
-        try:
-            with open(night_reset_path, 'r', encoding='utf-8') as f:
-                night_data = json.load(f)
-            last_night_reset = datetime.datetime.fromisoformat(night_data.get('timestamp', ''))
-        except (json.JSONDecodeError, ValueError, OSError):
-            last_night_reset = None
 
     # Ночной прогон или force_recalc — всегда полный пересчёт.
     # Иначе: есть night_reset.json — используем чекпоинты, пересчёт не нужен.

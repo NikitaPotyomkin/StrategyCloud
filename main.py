@@ -20,7 +20,7 @@ from risk_manager import (
 from strategy_engine import (
     write_ranking, sync_active_strategies, check_active_signals,
     send_order, close_order, get_deal_exit_price,
-    strategy_key, make_magic, _record_close,
+    strategy_key, assign_magic, _record_close,
     deduplicate_results, _short_name,
     write_active_state, get_non_usd
 )
@@ -147,7 +147,7 @@ def _write_night_reset(night_reset_path, start_time, symbols_count, results_coun
             'symbols': symbols_count,
             'total_results': results_count,
         }, f, ensure_ascii=False, indent=2)
-    print(f"\n  ✅ night_reset.json записан (03:00) — старт: {start_time}")
+    print(f"\n  ✅ night_reset.json записан ({fake_timestamp.strftime('%H:%M')}) — старт: {start_time}")
 
 
 if __name__ == '__main__':
@@ -291,11 +291,25 @@ if __name__ == '__main__':
     FORCE_RECALC = bt_cfg.force_recalc
     night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
     is_first_run = not os.path.exists(night_reset_path)
+    manual_full = bool(bt_cfg.full_recalc_mode)   # ручной полный пересчёт при запуске
+    
+    # ═══ АВТОМАТИЧЕСКИЙ ПЕРЕСЧЁТ ПОСЛЕ ЗАКРЫТИЯ РЫНКА (Сб 00:00) ═══
+    now = datetime.datetime.now()
+    if bt_cfg.auto_weekend_recalc:
+        # Проверяем, наступила ли суббота после пятницы
+        if now.weekday() == 5 and now.hour == 0:  # Суббота 00:00+
+            FORCE_RECALC = True
+            print(f"  🌙 АВТОМАТИЧЕСКИЙ force_recalc после закрытия рынка ({now.strftime('%Y-%m-%d %H:%M')})")
+        elif now.weekday() == 5 and now.hour > 0:
+            # Суббота уже прошла полночь — force_recalc не нужен (уже был в 00:00)
+            pass
 
-    if is_first_run:
+    if manual_full:
+        print("  ⚙️  full_recalc_mode=True — РУЧНОЙ ПОЛНЫЙ ПЕРЕСЧЁТ всех стратегий")
+    elif is_first_run:
         print("  🌙 night_reset.json не найден — первый прогон, полный пересчёт")
     else:
-        print("  ✅ night_reset.json найден — используем чекпоинты")
+        print("  ✅ night_reset.json найден — используем чекпоинты (лайт-режим)")
 
     try:
         all_top, all_results = run_full_backtest(
@@ -304,11 +318,11 @@ if __name__ == '__main__':
             test_mode=False,
             force_recalc=FORCE_RECALC,
             incremental=True,
-            is_night_run=is_first_run
+            is_night_run=is_first_run or manual_full
         )
 
         # После первого прогона записываем night_reset.json
-        if is_first_run:
+        if is_first_run or manual_full:
             _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results))
 
     except Exception as exc:
@@ -353,7 +367,7 @@ if __name__ == '__main__':
 
     sync_active_strategies(active, datetime.now(), symbol_data, active_strategies,
                            close_order, get_deal_exit_price, record_trade,
-                           strategy_key, make_magic, bt_cfg.magic_base, len(active))
+                           strategy_key, assign_magic, bt_cfg.magic_base, len(active))
 
     write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
@@ -382,9 +396,22 @@ if __name__ == '__main__':
                 last_mode_check = now.date()
                 print(f"\n[{now}] Новый день")
 
-            # Ночной перерасчёт: один раз в сутки, начиная с 3:00
+            # Ночной пересчёт: раз в сутки с 3:00
+            # Пт 3:00 — последний пересчёт перед выходными
+            # Сб 3:00 — если auto_weekend_recalc=True, был force_recalc в 00:00, теперь лайт
+            # Вс 3:00 — пропускаем (рынок закрыт)
+            # Пн 3:00 — новый пересчёт
+            is_weeknight = now.weekday() < 5  # Пн-Пт
+            is_saturday = now.weekday() == 5
+            
             if now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
-
+                
+                # Пропускаем Вс и Сб (рынок закрыт)
+                if is_saturday:
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏸ Суббота — пересчёт пропущен (рынок закрыт)")
+                    last_full_backtest_date = now.date()
+                    continue
+                
                 print(f"\n[{now.strftime('%H:%M:%S')}] Ночной перерасчёт...")
 
                 try:
@@ -393,7 +420,7 @@ if __name__ == '__main__':
                         test_strategy=None,
                         test_mode=False,
                         force_recalc=False,
-                        is_night_run=True
+                        is_night_run=False
                     )
                 except Exception as exc:
                     print(f"\n[WARN] Ночной перерасчёт не удался: {exc!r} — "
@@ -411,7 +438,7 @@ if __name__ == '__main__':
                 write_ranking(active, all_results, JOURNAL_DIR, bt_cfg.backtest_days, len(active), None)
                 sync_active_strategies(active, now, symbol_data, active_strategies,
                                        close_order, get_deal_exit_price, record_trade,
-                                       strategy_key, make_magic, bt_cfg.magic_base, len(active))
+                                       strategy_key, assign_magic, bt_cfg.magic_base, len(active))
                 write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
                 # --- обновляем night_reset.json после ночного перерасчёта ---

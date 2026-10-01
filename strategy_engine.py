@@ -54,6 +54,50 @@ def make_magic(symbol, stype, param, extra=None):
     for ch in raw:
         h = (h * 31 + ord(ch)) & 0xFFFFFFFF
     return 770000 + (h % 100000)
+def assign_magic(symbol, stype, param_key, parabolic_max=None):
+    """Выдать magic из пула [770000..869999] для (symbol, stype, param_key[, parabolic_max]).
+
+    Сначала ищем ЖИВУЮ запись в реестре (deactivated_at пусто) с теми же
+    параметрами — возвращаем её magic: стратегия не меняет номер при
+    перезапуске/переактивации. Иначе выдаём первый свободный номер
+    диапазона. Magic деактивированных стратегий другим стратегиям не
+    выдаётся (чтобы не ломать историю сделок по magic).
+    """
+    path = _registry_path()
+    used = set()
+    live = []  # (magic, row) — только живые записи в диапазоне пула
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                try:
+                    magic = int(row['magic'])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if 770000 <= magic <= 869999:
+                    used.add(magic)
+                    if not row.get('deactivated_at'):
+                        live.append((magic, row))
+    fmt_max = f"{parabolic_max:.2f}" if parabolic_max is not None else ""
+    for magic, row in live:
+        if (row['symbol'] == symbol and row['type'] == stype and
+                row['param_key'] == param_key and
+                str(row.get('parabolic_max') or '') == fmt_max):
+            # Если в старом реестре осталась коллизия (magic живёт ещё у
+            # другой живой стратегии) — не переиспользуем, берём свободный.
+            if all(
+                r['symbol'] == row['symbol'] and r['type'] == row['type'] and
+                r['param_key'] == row['param_key'] and
+                str(r.get('parabolic_max') or '') == fmt_max
+                for m, r in live if m == magic
+            ):
+                return magic
+            break
+    for magic in range(770000, 870000):
+        if magic not in used:
+            return magic
+    print(f"  -> [WARN] Пул magic [770000..869999] исчерпан: "
+          f"{symbol}/{stype} {param_key} — fallback на хэш", flush=True)
+    return make_magic(symbol, stype, param_key, parabolic_max)
 def _short_name(r):
     pair = get_non_usd(r['symbol'])
     stype = r.get('type', 'stoch')
@@ -255,26 +299,39 @@ def _register_strategy(magic, symbol, stype, param_key, parabolic_max, activated
     _ensure_registry()
     
     # Проверяем, есть ли уже такая запись
-    existing = []
+    fmt_max = f"{parabolic_max:.2f}" if parabolic_max is not None else ""
+    rows, found, updated = [], False, False
     with open(path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
         for row in reader:
             if int(row['magic']) == magic and row['symbol'] == symbol:
-                # Параметры совпали — не дублируем
-                if (row['type'] == stype and row['param_key'] == param_key and
-                        str(row.get('parabolic_max', '')) == str(parabolic_max)):
-                    return  # Уже есть
+                found = True
+                if (str(row.get('parabolic_max') or '') == fmt_max and
+                        row['type'] == stype and row['param_key'] == param_key):
+                    continue
                 # Параметры изменились — обновляем
-                existing.append(row)
-                break
+                row['type'] = stype
+                row['param_key'] = param_key
+                row['parabolic_max'] = fmt_max
+                row['activated_at'] = activated_at
+                row['deactivated_at'] = ''
+                updated = True
+            rows.append(row)
     
-    if not existing:
+    if not found:
         # Новая стратегия — добавляем
         with open(path, 'a', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([magic, symbol, stype, param_key,
-                             f"{parabolic_max:.2f}" if parabolic_max is not None else '',
-                             activated_at, '', 0])
+            writer.writerow([magic, symbol, stype, param_key, fmt_max, activated_at, '', 0])  
+        return
+    if updated:
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+                             
+                             
 def _deregister_strategy(magic, symbol, deactivated_at):
     """Пометить стратегию как деактивированную."""
     path = _registry_path()
@@ -301,7 +358,7 @@ def _deregister_strategy(magic, symbol, deactivated_at):
 # ═══ СИНХРОНИЗАЦИЯ АКТИВНЫХ СТРАТЕГИЙ ═══
 def sync_active_strategies(top_results, now, symbol_data, active_strategies, close_order_fn,
                            get_deal_exit_price_fn, record_trade_fn, strategy_key_fn,
-                           make_magic_fn, MAGIC_BASE, TOP_N):
+                           assign_magic_fn, MAGIC_BASE, TOP_N):
     """Открывает позиции для новых топ-N, закрывает те, что выпали из топа."""
     # Текущие ключи топа
     top_keys = set()
@@ -337,7 +394,7 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
         extra = r.get('parabolic_max')
         key = strategy_key_fn(r['symbol'], param, stype, extra)
         if key not in active_strategies:
-            magic = make_magic_fn(r['symbol'], stype, param, extra)
+            magic = assign_magic_fn(r['symbol'], stype, param, extra)
             if magic in existing_magics:
                 print(f"  -> [WARN] Коллизия magic {magic} у {key} — стратегия пропущена")
                 continue
@@ -730,7 +787,7 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         elif result.retcode == mt5.TRADE_RETCODE_INVALID_VOLUME:
             print(f"  -> [WARN] Ордер {symbol} {direction}: invalid volume — "
                   f"lot={lot:.2f} вне [min, max] или шаг")
-        elif result.retcode == mt5.TRADE_RETCODE_NOT_ENOUGH_MONEY:
+        elif result.retcode == mt5.TRADE_RETCODE_NO_MONEY:
             acc = mt5.account_info()
             print(f"  -> [WARN] Ордер {symbol} {direction}: не хватает денег (free={acc.margin_free if acc else 0:.2f})")
         request["type_filling"] = mt5.ORDER_FILLING_IOC
@@ -837,20 +894,25 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
         'min_sl_distance_points': risk_cfg.min_sl_distance_points, 'max_sl_distance_points': risk_cfg.max_sl_distance_points}
     
     # ── Проверка 1: Реальные позиции MT5 (пункт 1) ──
-    # Собираем занятые (символ, тип) ИЗ РЕАЛЬНЫХ ПОЗИЦИЙ MT5
-    occupied_by_symbol = {}
+    # Собираем занятые (символ, ключ_стратегии) ИЗ РЕАЛЬНЫХ ПОЗИЦИЙ MT5
+    # Ключ = 'symbol_type_param_key' — уникальная стратегия, а не просто тип
+    occupied_by_symbol = {}  # {symbol: set(unique_keys)}
     real_positions = mt5.positions_get()
     if real_positions:
         for pos in real_positions:
             sym = pos.symbol
             if sym not in occupied_by_symbol:
                 occupied_by_symbol[sym] = set()
-            # Определяем тип по magic number
+            # Определяем ключ стратегии по magic number
+            matched_key = None
             for key, s in active_strategies.items():
                 if pos.magic == s['magic']:
-                    occupied_by_symbol[sym].add(s.get('type', 'stoch'))
+                    # Уникальный ключ: symbol + type + param_key
+                    strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
+                    occupied_by_symbol[sym].add(strat_key)
+                    matched_key = key
                     break
-            else:
+            if not matched_key:
                 # Если magic не найден в active_strategies, считаем как 'unknown'
                 occupied_by_symbol[sym].add('unknown')
     
@@ -906,11 +968,13 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_stoch_fn(prev_k, last_k)
                     if entry_dir:
+                        # Уникальный ключ стратегии для проверки дублирования
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         # Проверка лимитов
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and stype in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/{stype}")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -967,10 +1031,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_parabolic_fn(prev_sar, current_sar, prev_close, current_close)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'parabolic' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/parabolic")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1025,10 +1090,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_ma_fn(prev_ma, prev_close, curr_ma, curr_close)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'ma' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ma")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1085,10 +1151,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_rf_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'rf' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rf")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1145,10 +1212,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_logreg_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'logreg' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/logreg")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1197,10 +1265,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_macd_cross_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'macd_cross' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/macd_cross")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1253,10 +1322,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_rsi_reversal_fn(prev_signal, curr_signal, curr_trend)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'rsi_rev' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rsi_rev")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1303,10 +1373,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_bollinger_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'bollinger' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/bollinger")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1353,10 +1424,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_ema_crossover_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'ema_cross' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ema_cross")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1403,10 +1475,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_rsi_divergence_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'rsi_div' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/rsi_div")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1453,10 +1526,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_ichimoku_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'ichimoku' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/ichimoku")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1503,10 +1577,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_zscore_fn(prev_signal, curr_signal, s.get('z_threshold', 2.0))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'zscore' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/zscore")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1553,10 +1628,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_autocorr_fn(prev_signal, curr_signal, s.get('threshold', 0.3))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'autocorr' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/autocorr")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1605,10 +1681,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_hurst_fn(prev_up, prev_down, curr_up, curr_down)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'hurst' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/hurst")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1655,10 +1732,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_lrc_fn(prev_signal, curr_signal)
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'lrc' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/lrc")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1705,10 +1783,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_percentile_fn(prev_signal, curr_signal, s.get('pct_low', 5), s.get('pct_high', 95))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'percentile' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/percentile")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1755,10 +1834,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_runs_fn(prev_signal, curr_signal, s.get('z_threshold', 1.96))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'runs' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/runs")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1805,10 +1885,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_coint_fn(prev_signal, curr_signal, s.get('z_entry', 2.0))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'coint' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/coint")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1855,10 +1936,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_sharpe_fn(prev_signal, curr_signal, s.get('sharpe_entry', 0.5))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'sharpe' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/sharpe")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1905,10 +1987,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_skewness_fn(prev_signal, curr_signal, s.get('skew_entry', 1.0), s.get('skew_exit', 0.3))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'skewness' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/skewness")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -1955,10 +2038,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_bayesian_fn(prev_signal, curr_signal, s.get('p_entry', 0.65))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'bayesian' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/bayesian")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -2007,10 +2091,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                     entry_dir = check_entry_kurtosis_fn(prev_signal, curr_kurt, curr_sigma,
                                                         s.get('kurt_entry', 5.0), s.get('sigma_mult', 1.0))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'kurtosis' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/kurtosis")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
@@ -2057,10 +2142,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                 if s['position'] is None:
                     entry_dir = check_entry_chi_square_fn(prev_signal, curr_signal, s.get('p_entry', 0.05))
                     if entry_dir:
+                        strat_key = f"{s['symbol']}_{s.get('type', 'stoch')}_{s.get('param_key', '')}" + (f"_M{s.get('parabolic_max', '')}" if s.get('type') == 'parabolic' else "")
                         if not limits_ok:
                             print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
-                        elif s['symbol'] in occupied_by_symbol and 'chi_square' in occupied_by_symbol[s['symbol']]:
-                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {s['symbol']}/chi_square")
+                        elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
+                            print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
                         elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                             print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
                         else:
