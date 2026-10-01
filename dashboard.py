@@ -525,6 +525,9 @@ with tab_strategies:
 
         with col_pf:
             df_pf_sorted = df_wf.sort_values('profit_factor', ascending=True)
+            df_pf_sorted['profit_factor'] = df_pf_sorted['profit_factor'].replace(
+                [float('inf'), -float('inf')], 3.0
+            )
             pf_colors = make_gradient_colors(df_pf_sorted['profit_factor'].tolist())
             fig_pf = go.Figure()
             fig_pf.add_trace(go.Bar(
@@ -544,6 +547,7 @@ with tab_strategies:
                 xaxis={'categoryorder': 'total ascending'},
             )
             st.plotly_chart(fig_pf, use_container_width=True)
+
         st.caption("Красная пунктирная линия на PF = 1.0 — граница безубытка")
 
     # ── PnL по семействам ──
