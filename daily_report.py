@@ -507,11 +507,16 @@ def get_dashboard_data(days_back=30):
             trades_df = agg.sort_values('timestamp').reset_index(drop=True)
             # DEBUG: разбивка P&L Today (позиции закрытые сегодня, независимо от даты открытия)
             if 'time' in trades_df.columns:
-                d0 = datetime.datetime.combine(datetime.datetime.now().date(), datetime.datetime.min.time()).timestamp()
-                d1 = datetime.datetime.combine(datetime.datetime.now().date(), datetime.datetime.max.time()).timestamp()
-                tm = (trades_df['time'] >= d0) & (trades_df['time'] < d1)
-                print(f"  [DASHBOARD] Окно: {len(trades_df)} поз., PnL_всего={trades_df['profit_net'].sum():+.2f} | "
-                      f"Сегодня: {int(tm.sum())} поз., PnL_сегодня={trades_df.loc[tm, 'profit_net'].sum():+.2f}", flush=True)
+                _off = datetime.timedelta(hours=3)  # торговый сервер AlfaForex = UTC+3
+                _tu = pd.to_datetime(trades_df['time'], unit='s', utc=True) + _off
+                _ser_today = (pd.Timestamp.utcnow() + _off).date()
+                tm = _tu.dt.date == _ser_today
+                tm_utc = trades_df['timestamp'].dt.date == datetime.datetime.now().date()
+                
+                print(f"  [DASHBOARD] Окно: {len(trades_df)} поз., PnL_всего={trades_df['profit_net'].sum():+.2f} | TODAY(server+3)={int(tm.sum())} поз., PnL={trades_df.loc[tm, 'profit_net'].sum():+.2f} | TODAY(host)={int(tm_utc.sum())} поз., PnL={trades_df.loc[tm_utc, 'profit_net'].sum():+.2f}", flush=True)
+                for _, r in trades_df.loc[tm].iterrows():
+                    print(f"  [DASHBOARD]   {r['position_id']} {r['symbol']} {r['profit_net']:+.2f} close={pd.to_datetime(r['time'], unit='s')}", flush=True)
+                      
 
         # 4. Активные стратегии (из реестра + текущие позиции)
         registry = _load_registry()

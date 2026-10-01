@@ -241,11 +241,12 @@ with tab_overview:
     with col2:
         today_pnl = 0.0
         if not data['trades_df'].empty:
-            day_start = datetime.combine(datetime.now().date(), datetime.min.time()).timestamp()
-            day_end = datetime.combine(datetime.now().date(), datetime.max.time()).timestamp()
+            SERVER_OFFSET = timedelta(hours=3)
+            tu = pd.to_datetime(data['trades_df']['time'], unit='s', utc=True) + SERVER_OFFSET
+            ser_today = (pd.Timestamp.utcnow() + SERVER_OFFSET).date()
             today_trades = data['trades_df'][
-                (data['trades_df']['time'] >= day_start) &
-                (data['trades_df']['time'] < day_end)
+                tu.dt.date == ser_today
+                
             ]
             today_pnl = today_trades['profit_net'].sum()
         pnl_color = COL_GREEN_LT if today_pnl >= 0 else COL_RED_LT
