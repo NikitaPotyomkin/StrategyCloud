@@ -502,6 +502,7 @@ def get_dashboard_data(days_back=30):
                 profit_net=('profit_net', 'sum'),
                 magic=('magic', 'first'),
                 timestamp=('timestamp', 'max'),
+                time=('time', 'max'),
             ).reset_index()
             trades_df = agg.sort_values('timestamp').reset_index(drop=True)
 

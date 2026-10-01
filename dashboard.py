@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 
 try:
     import MetaTrader5 as mt5
-
     MT5_AVAILABLE = True
 except ImportError:
     MT5_AVAILABLE = False
@@ -15,7 +14,6 @@ except ImportError:
 try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
@@ -23,20 +21,21 @@ except ImportError:
 from daily_report import get_dashboard_data
 
 # ── Палитра (институциональная) ──
-COL_BG = '#0E1117'
-COL_PANEL = '#161B22'
-COL_TEXT = '#C9D1D9'
-COL_MUTED = '#8B949E'
-COL_GREEN = '#2EA043'
+COL_BG       = '#0E1117'
+COL_PANEL    = '#161B22'
+COL_TEXT     = '#C9D1D9'
+COL_MUTED    = '#8B949E'
+COL_GREEN    = '#2EA043'
 COL_GREEN_LT = '#3FB950'
-COL_RED = '#DA3633'
-COL_RED_LT = '#F85149'
-COL_BLUE = '#388bfd'
-COL_AMBER = '#D29922'
-COL_GRID = '#30363D'
-COL_NAVY = '#1F2A3A'
+COL_RED      = '#DA3633'
+COL_RED_LT   = '#F85149'
+COL_BLUE     = '#388bfd'
+COL_AMBER    = '#D29922'
+COL_GRID     = '#30363D'
+COL_NAVY     = '#1F2A3A'
 
 st.set_page_config(page_title="Strategy Cloud — Terminal", layout="wide")
+
 
 # ── Кастомный CSS ──
 st.markdown("""
@@ -150,7 +149,7 @@ def make_gradient_colors(values, positive_hex='#2EA043', negative_hex='#DA3633')
 
     def hex_to_rgb(h):
         h = h.lstrip('#')
-        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
     pos_base = hex_to_rgb(positive_hex)
     pos_light = (30, 40, 30)
@@ -179,24 +178,27 @@ def plotly_dark_layout(fig, height=400):
         template='plotly_dark',
         paper_bgcolor=COL_PANEL,
         plot_bgcolor=COL_PANEL,
-        font=dict(color=COL_TEXT, family='SF Mono, Cascadia Code, Consolas, monospace', size=11),
-        margin=dict(l=50, r=20, t=30, b=40),
+        font=dict(color=COL_TEXT, family='SF Mono, Cascadia Code, Consolas, monospace', size=18),
+        margin=dict(l=60, r=60, t=30, b=50),
         coloraxis_colorbar=dict(
-            tickfont=dict(size=9, color=COL_MUTED),
-            title_font=dict(size=9, color=COL_MUTED),
+            tickfont=dict(size=16, color=COL_MUTED),
+            title_font=dict(size=16, color=COL_MUTED),
         ),
+        legend=dict(font=dict(size=16)),
     )
-    fig.update_xaxes(gridcolor=COL_GRID, zerolinecolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED))
-    fig.update_yaxes(gridcolor=COL_GRID, zerolinecolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED))
+    fig.update_xaxes(gridcolor=COL_GRID, zerolinecolor=COL_GRID,
+                     tickfont=dict(size=16, color=COL_MUTED),
+                     title_font=dict(size=18))
+    fig.update_yaxes(gridcolor=COL_GRID, zerolinecolor=COL_GRID,
+                     tickfont=dict(size=16, color=COL_MUTED),
+                     title_font=dict(size=18))
     return fig
 
 
 # ── Заголовок ──
 col_title, col_btn = st.columns([6, 1])
 with col_title:
-    st.markdown(
-        "<h1>STRATEGY CLOUD <span style='color:#8B949E;font-size:0.8rem;font-weight:400'>/ Terminal</span></h1>",
-        unsafe_allow_html=True)
+    st.markdown("<h1>STRATEGY CLOUD <span style='color:#8B949E;font-size:0.8rem;font-weight:400'>/ Terminal</span></h1>", unsafe_allow_html=True)
 with col_btn:
     st.write("")
     if st.button("REFRESH"):
@@ -222,6 +224,7 @@ tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_pipeline = st.t
     "Pipeline",
 ])
 
+
 # ═══════════════════════════════════════════════════════════════
 #  OVERVIEW
 # ═══════════════════════════════════════════════════════════════
@@ -235,12 +238,14 @@ with tab_overview:
 
     with col1:
         st.metric("Balance", f"{data['balance']:,.0f} RUB")
-
     with col2:
         today_pnl = 0.0
         if not data['trades_df'].empty:
+            day_start = datetime.combine(datetime.now().date(), datetime.min.time()).timestamp()
+            day_end = datetime.combine(datetime.now().date(), datetime.max.time()).timestamp()
             today_trades = data['trades_df'][
-                data['trades_df']['timestamp'].dt.date == datetime.now().date()
+                (data['trades_df']['time'] >= day_start) &
+                (data['trades_df']['time'] < day_end)
             ]
             today_pnl = today_trades['profit_net'].sum()
         pnl_color = COL_GREEN_LT if today_pnl >= 0 else COL_RED_LT
@@ -348,6 +353,7 @@ with tab_overview:
         fig.update_layout(hovermode='x unified')
         st.plotly_chart(plotly_dark_layout(fig, 380), use_container_width=True)
 
+
 # ═══════════════════════════════════════════════════════════════
 #  RISK
 # ═══════════════════════════════════════════════════════════════
@@ -418,7 +424,7 @@ with tab_risk:
             gauge={
                 'axis': {'range': [0, 150], 'tickwidth': 1,
                          'tickcolor': COL_MUTED,
-                         'tickfont': dict(size=9, color=COL_MUTED)},
+                         'tickfont': dict(size=16, color=COL_MUTED)},
                 'bar': {'color': COL_TEXT, 'thickness': 0.12},
                 'steps': [
                     {'range': [0, 30], 'color': '#1A2E1F'},
@@ -455,7 +461,7 @@ with tab_risk:
                 bargap=0.15,
             )
             st.plotly_chart(plotly_dark_layout(fig_risk, max(200, len(df_risk) * 30 + 60)),
-                            use_container_width=True)
+                           use_container_width=True)
 
         caption = f"Open: {n_positions} | Volume: {total_volume:.2f} lots | Budget: {quota:,.0f} RUB"
         if no_sl_count > 0:
@@ -512,7 +518,7 @@ with tab_risk:
             ],
             zmin=0, zmax=z_max,
             text=pivot.values, texttemplate='%{text}',
-            textfont=dict(size=9, color=COL_TEXT),
+            textfont=dict(size=16, color=COL_TEXT),
             hovertemplate='Symbol: %{y}<br>Time: %{x}<br>Trades: %{z}<extra></extra>',
         ))
         fig_heat.update_layout(
@@ -521,6 +527,7 @@ with tab_risk:
         )
         st.plotly_chart(plotly_dark_layout(fig_heat, 320), use_container_width=True)
         st.caption("Scale: 0 — dark, 1-2 — green, 3 (limit) — amber, >3 — red")
+
 
 # ═══════════════════════════════════════════════════════════════
 #  STRATEGIES
@@ -537,8 +544,8 @@ with tab_strategies:
             ['symbol', 'strategy_type', 'param_key']
         ).agg(pnl=('profit_net', 'sum'), trades=('profit_net', 'count')).reset_index()
         df_strat['name'] = (
-                df_strat['symbol'].str.replace('rfd', '') + ' | ' +
-                df_strat['strategy_type'] + ' | ' + df_strat['param_key']
+            df_strat['symbol'].str.replace('rfd', '') + ' | ' +
+            df_strat['strategy_type'] + ' | ' + df_strat['param_key']
         )
         df_strat = df_strat.sort_values('pnl', ascending=True).reset_index(drop=True)
         colors_strat = make_gradient_colors(df_strat['pnl'].tolist())
@@ -554,7 +561,7 @@ with tab_strategies:
         ))
         fig1.update_layout(xaxis_title='P&L (RUB)', bargap=0.12)
         st.plotly_chart(plotly_dark_layout(fig1, max(450, len(df_strat) * 24)),
-                        use_container_width=True)
+                       use_container_width=True)
 
     # ── Win Rate + Profit Factor ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
@@ -587,7 +594,7 @@ with tab_strategies:
             ))
             fig_wr.update_layout(xaxis_title='Win Rate (%)', bargap=0.15)
             st.plotly_chart(plotly_dark_layout(fig_wr, max(250, len(df_wr_sorted) * 30 + 40)),
-                            use_container_width=True)
+                           use_container_width=True)
 
         with col_pf:
             df_pf_sorted = df_wf.sort_values('profit_factor', ascending=True)
@@ -608,7 +615,7 @@ with tab_strategies:
             fig_pf.update_layout(xaxis_title='Family', yaxis_title='Profit Factor',
                                  bargap=0.2, xaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(plotly_dark_layout(fig_pf, max(250, len(df_pf_sorted) * 30 + 40)),
-                            use_container_width=True)
+                           use_container_width=True)
         st.caption("Dotted line at PF = 1.0 — breakeven threshold")
 
     # ── P&L by family ──
@@ -631,7 +638,7 @@ with tab_strategies:
         ))
         fig2.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
         fig2.update_layout(xaxis_title='Family', yaxis_title='P&L (RUB)',
-                           bargap=0.2, xaxis={'categoryorder': 'total ascending'})
+                            bargap=0.2, xaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(plotly_dark_layout(fig2, 380), use_container_width=True)
 
     # ── Active strategies table ──
@@ -685,6 +692,7 @@ with tab_strategies:
     else:
         st.info("No trades in history for selected period.")
 
+
 # ═══════════════════════════════════════════════════════════════
 #  3D LANDSCAPE
 # ═══════════════════════════════════════════════════════════════
@@ -714,10 +722,10 @@ with tab_3d:
         for pf in pf_vals:
             if pf >= 1.0:
                 ratio = min((pf - 1.0) / 2.0, 1.0)
-                colors_3d.append(f'rgb({int(46 + 20 * ratio)}, {int(160 + 10 * ratio)}, {int(67 + 20 * ratio)})')
+                colors_3d.append(f'rgb({int(46 + 20*ratio)}, {int(160 + 10*ratio)}, {int(67 + 20*ratio)})')
             else:
                 ratio = min((1.0 - pf) / 1.0, 1.0)
-                colors_3d.append(f'rgb({int(218)}, {int(54 + 20 * ratio)}, {int(51 + 10 * ratio)})')
+                colors_3d.append(f'rgb({int(218)}, {int(54 + 20*ratio)}, {int(51 + 10*ratio)})')
 
         sizes = df_3d['trades'].clip(lower=1) * 9
 
@@ -728,7 +736,7 @@ with tab_3d:
             marker=dict(size=sizes, color=colors_3d, line=dict(width=0.5, color=COL_PANEL),
                         opacity=0.85),
             text=df_3d['name'], textposition='top center',
-            textfont=dict(size=7, color=COL_MUTED),
+            textfont=dict(size=14, color=COL_MUTED),
             hovertemplate='<b>%{text}</b><br>PnL: %{x:,.1f}<br>Vol: %{y:,.1f}<br>Trades: %{z}<extra></extra>',
             name='',
         ))
@@ -743,16 +751,16 @@ with tab_3d:
         fig_3d.update_layout(
             scene=dict(
                 xaxis=dict(title='P&L', backgroundcolor=COL_PANEL, gridcolor=COL_GRID, showbackground=True,
-                           tickfont=dict(size=9, color=COL_MUTED)),
+                           tickfont=dict(size=16, color=COL_MUTED), title_font=dict(size=18)),
                 yaxis=dict(title='Volatility', backgroundcolor=COL_PANEL, gridcolor=COL_GRID, showbackground=True,
-                           tickfont=dict(size=9, color=COL_MUTED)),
+                           tickfont=dict(size=16, color=COL_MUTED), title_font=dict(size=18)),
                 zaxis=dict(title='Trades', backgroundcolor=COL_PANEL, gridcolor=COL_GRID, showbackground=True,
-                           tickfont=dict(size=9, color=COL_MUTED)),
+                           tickfont=dict(size=16, color=COL_MUTED), title_font=dict(size=18)),
                 camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)),
             ),
             paper_bgcolor=COL_PANEL, height=650,
             margin=dict(l=0, r=0, t=10, b=0),
-            font=dict(color=COL_TEXT, size=10),
+            font=dict(color=COL_TEXT, size=16),
             showlegend=False,
         )
         st.plotly_chart(fig_3d, use_container_width=True)
@@ -774,6 +782,7 @@ with tab_3d:
 
     else:
         st.info("No data for 3D model.")
+
 
 # ═══════════════════════════════════════════════════════════════
 #  3D SURFACE
@@ -798,10 +807,8 @@ with tab_surface:
             df_agg['win_rate'] = df_agg['wins'] / df_agg['trades'] * 100
             df_agg['volatility'] = df_agg['volatility'].fillna(0)
 
-
             def extract_numbers(key):
                 return [float(x) for x in re.findall(r'[-+]?\d*\.?\d+', str(key))]
-
 
             sample_nums = extract_numbers(df_agg['param_key'].iloc[0]) if len(df_agg) > 0 else []
 
@@ -831,14 +838,12 @@ with tab_surface:
                 z_axis = st.selectbox("Z axis (height)", list(z_options.keys()),
                                       format_func=lambda k: z_options[k], key="surf_z")
 
-
             def get_axis_values(df, axis):
                 if axis.startswith('param_'):
                     idx = int(axis.split('_')[1])
                     nums_list = df['param_key'].apply(lambda k: extract_numbers(k))
                     return nums_list.apply(lambda nums: nums[idx] if len(nums) > idx else 0.0).values
                 return df[axis].values
-
 
             x_vals = get_axis_values(df_agg, x_axis)
             y_vals = get_axis_values(df_agg, y_axis)
@@ -856,7 +861,6 @@ with tab_surface:
 
                 if use_surface:
                     from scipy.interpolate import griddata
-
                     xi = np.linspace(x_vals.min(), x_vals.max(), max(len(x_unique), 20))
                     yi = np.linspace(y_vals.min(), y_vals.max(), max(len(y_unique), 20))
                     X_grid, Y_grid = np.meshgrid(xi, yi)
@@ -873,27 +877,30 @@ with tab_surface:
                         contours={"z": {"show": True, "usecolormap": True,
                                         "highlightcolor": "#ffffff", "project": {"z": True}}},
                         colorbar=dict(title=z_options[z_axis], x=1.02,
-                                      tickfont=dict(size=9, color=COL_MUTED)),
+                                      tickfont=dict(size=16, color=COL_MUTED),
+                                      title_font=dict(size=16)),
                         hovertemplate=f'{all_x_options[x_axis]}: %{{x:.1f}}<br>{all_y_options[y_axis]}: %{{y:.1f}}<br>{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>',
                         name='',
                     ))
                     fig_surf.update_layout(
                         scene=dict(
                             xaxis=dict(title=all_x_options[x_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
+                                       title_font=dict(size=18)),
                             yaxis=dict(title=all_y_options[y_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
+                                       title_font=dict(size=18)),
                             zaxis=dict(title=z_options[z_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
+                                       title_font=dict(size=18)),
                             camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
                         ),
                         paper_bgcolor=COL_PANEL, height=650,
                         margin=dict(l=0, r=0, t=10, b=0),
-                        font=dict(color=COL_TEXT, size=10),
+                        font=dict(color=COL_TEXT, size=16),
                     )
                     st.plotly_chart(fig_surf, use_container_width=True)
-                    st.caption(
-                        f"Interpolated {n_points} points onto {len(xi)}x{len(yi)} grid. Ridges = profitable zones.")
+                    st.caption(f"Interpolated {n_points} points onto {len(xi)}x{len(yi)} grid. Ridges = profitable zones.")
                 else:
                     st.info(f"Insufficient grid for surface ({n_points} points). Showing triangulated mesh.")
 
@@ -903,7 +910,8 @@ with tab_surface:
                         colorscale=[[0, '#DA3633'], [0.5, '#161B22'], [1, '#2EA043']],
                         intensity=z_vals,
                         colorbar=dict(title=z_options[z_axis], x=1.02,
-                                      tickfont=dict(size=9, color=COL_MUTED)),
+                                      tickfont=dict(size=16, color=COL_MUTED),
+                                      title_font=dict(size=16)),
                         hovertemplate=f'{all_x_options[x_axis]}: %{{x:.1f}}<br>{all_y_options[y_axis]}: %{{y:.1f}}<br>{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>',
                         name='',
                     ))
@@ -911,22 +919,25 @@ with tab_surface:
                         x=x_vals, y=y_vals, z=z_vals, mode='markers+text',
                         marker=dict(size=4, color=COL_TEXT, line=dict(width=0.5, color=COL_PANEL)),
                         text=labels, textposition='top center',
-                        textfont=dict(size=6, color=COL_MUTED),
+                        textfont=dict(size=12, color=COL_MUTED),
                         hoverinfo='skip', name='',
                     ))
                     fig_mesh.update_layout(
                         scene=dict(
                             xaxis=dict(title=all_x_options[x_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
+                                       title_font=dict(size=18)),
                             yaxis=dict(title=all_y_options[y_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
+                                       title_font=dict(size=18)),
                             zaxis=dict(title=z_options[z_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=9, color=COL_MUTED)),
+                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
+                                       title_font=dict(size=18)),
                             camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
                         ),
                         paper_bgcolor=COL_PANEL, height=650,
                         margin=dict(l=0, r=0, t=10, b=0),
-                        font=dict(color=COL_TEXT, size=10),
+                        font=dict(color=COL_TEXT, size=16),
                         showlegend=False,
                     )
                     st.plotly_chart(fig_mesh, use_container_width=True)
@@ -942,6 +953,7 @@ with tab_surface:
     st.markdown("---")
     st.caption("Select a family, set X/Y to parameter axes, Z to P&L. Ridges indicate optimal parameter zones.")
 
+
 # ═══════════════════════════════════════════════════════════════
 #  PIPELINE
 # ═══════════════════════════════════════════════════════════════
@@ -950,13 +962,13 @@ with tab_pipeline:
 
     items = [
         ("Drawdown Chart", "Peak-to-trough equity drawdown. Identifies maximum portfolio stress periods. "
-                           "Area chart with red fill in drawdown zones."),
+         "Area chart with red fill in drawdown zones."),
         ("Hourly P&L Heatmap", "Matrix: rows = symbols/strategies, columns = hours. Cell color = cumulative P&L. "
-                               "Identifies time windows with consistent alpha or bleeding."),
+         "Identifies time windows with consistent alpha or bleeding."),
         ("Backtest vs Live", "Compares expected backtest metrics with live trading results. "
-                             "Columns: backtest / actual / deviation / verdict."),
+         "Columns: backtest / actual / deviation / verdict."),
         ("Sharpe by Family", "Risk-adjusted return ranking. Mean daily P&L divided by daily volatility. "
-                             "Higher Sharpe = better return per unit of risk."),
+         "Higher Sharpe = better return per unit of risk."),
     ]
 
     for title, desc in items:
