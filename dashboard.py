@@ -243,7 +243,7 @@ with tab_overview:
         if not data['trades_df'].empty:
             SERVER_OFFSET = timedelta(hours=3)
             tu = pd.to_datetime(data['trades_df']['time'], unit='s', utc=True) + SERVER_OFFSET
-            ser_today = (pd.Timestamp.utcnow() + SERVER_OFFSET).date()
+            ser_today = (pd.Timestamp.now('UTC') + SERVER_OFFSET).date()
             today_trades = data['trades_df'][
                 tu.dt.date == ser_today
                 
