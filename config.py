@@ -307,7 +307,7 @@ class TrailParams:
     """
     enabled: bool = True
     atr_period: int = 14
-    atr_multiplier: float = 1.0
+    atr_multiplier: float = 1.5
     check_interval_sec: int = 60
     min_move_points: int = 10  # не двигать SL, если выигрыш меньше (защита от спама)
 
@@ -326,6 +326,7 @@ class SteeringParams:
     max_q: float = 0.35       # максимум доли одной стратегии
     min_trades: int = 2      # нужное число сделок для участия
     max_dd: float = 0.15      # предел просадки (15%)
+    score_mode: str = 'pnl'   # 'pnl' — вес по прибыли (как вкладка Strategies); 'sharpe' — pnl/vol
     quotas_file: str = 'steering_quotas.json'
 
 

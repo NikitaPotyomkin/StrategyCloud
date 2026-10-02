@@ -475,7 +475,17 @@ if __name__ == '__main__':
                 # ── Штурвал: плавное перераспределение квот по реальным сделкам ──
                 if steering_cfg.enabled:
                     try:
-                        metrics = build_metrics_from_journal(journal_df, n_last=steering_cfg.n_last_trades)
+                        # Семейство (type) сделок журнала — из реестра (symbol+param_key -> type)
+                        fam_map = {}
+                        _reg_path = os.path.join(JOURNAL_DIR, 'strategy_registry.csv')
+                        if os.path.exists(_reg_path):
+                            import csv as _csv
+                            with open(_reg_path, 'r', encoding='utf-8') as _f:
+                                for _row in _csv.DictReader(_f):
+                                    fam_map[f"{_row.get('symbol', '')}_{_row.get('param_key', '')}"] = \
+                                        _row.get('type', 'unknown')
+                        metrics = build_metrics_from_journal(
+                            journal_df, n_last=steering_cfg.n_last_trades, family_map=fam_map)
                         if metrics:
                             quotas_path = os.path.join(JOURNAL_DIR, steering_cfg.quotas_file)
                             prev_quotas = {}
@@ -489,6 +499,7 @@ if __name__ == '__main__':
                                 max_q=steering_cfg.max_q,
                                 min_trades=steering_cfg.min_trades,
                                 max_dd=steering_cfg.max_dd,
+                                score_mode=steering_cfg.score_mode,
                             )
                             with open(quotas_path, 'w', encoding='utf-8') as f:
                                 json.dump(new_quotas, f, ensure_ascii=False, indent=2)
@@ -498,7 +509,7 @@ if __name__ == '__main__':
                             for key, s in active_strategies.items():
                                 if s['position'] is not None:
                                     continue
-                                sid = f"{s['symbol']}_{s['param_key']}"
+                                sid = f"{s['symbol']}_{s.get('type') or s.get('param_key')}"
                                 q_new = new_quotas.get(sid)
                                 if q_new is None:
                                     continue

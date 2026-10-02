@@ -976,9 +976,12 @@ with tab_steering:
         st.warning("No data.")
         st.stop()
 
-    st.markdown("### Steering Wheel — Quota Reallocation")
+    st.markdown("### Steering Wheel — Quota by Family")
+    st.caption("Категория = «символ + семейство» (например EUR - parabolic). "
+               "Квоты считаются по реальным закрытым сделкам (entry='out').")
 
-    from wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
+    from wheel import (calculate_steering_wheel_quotas, build_metrics_from_journal,
+                       category_label)
 
     from config import SteeringParams  # ЕДИНЫЙ источник параметров штурвала (config.py)
     steering_cfg = SteeringParams()
@@ -1015,13 +1018,19 @@ with tab_steering:
         if not strategies_data:
             st.info("Нет сделок в журнале для расчёта метрик.")
         else:
-            # Текущие квоты из активных стратегий
+            # Текущие квоты из активных стратегий — ПО КАТЕГОРИЯМ «символ + семейство»
+            label_map = {s['id']: s.get('label', s['id']) for s in strategies_data}
             if data.get('active_strategies'):
                 df_active = pd.DataFrame(data['active_strategies'])
-                df_active['sid'] = df_active['symbol'].astype(str) + '_' + df_active['param_key'].astype(str)
+                if 'type' not in df_active.columns:
+                    df_active['type'] = df_active['param_key'].astype(str)
+                df_active['sid'] = (
+                    df_active['symbol'].astype(str) + '_' + df_active['type'].astype(str)
+                )
+                df_cat = df_active.groupby(['sid', 'symbol', 'type'], as_index=False)['lot'].sum()
                 total_lot = df_active['lot'].sum()
                 if total_lot > 0:
-                    current_quotas = dict(zip(df_active['sid'], df_active['lot'] / total_lot))
+                    current_quotas = dict(zip(df_cat['sid'], df_cat['lot'] / total_lot))
                 else:
                     current_quotas = {}
             else:
@@ -1041,19 +1050,44 @@ with tab_steering:
                 max_q=steering_cfg.max_q,
                 min_trades=steering_cfg.min_trades,   # из config.py (сейчас 2 — минимум, чтобы wheel рисовался на тонком журнале)
                 max_dd=steering_cfg.max_dd,
+                score_mode=steering_cfg.score_mode,   # 'pnl' — вес по прибыли, как вкладка Strategies
             )
 
-            # Сборка DataFrame
-            df_sw = pd.DataFrame(strategies_data)
-            # ПРАВКА №1: добавляем колонку name
-            df_sw['name'] = df_sw['id']
-            df_sw['current_quota'] = df_sw['id'].map(current_quotas)
-            df_sw['new_quota'] = df_sw['id'].map(new_quotas)
-            df_sw = df_sw.fillna(0.0)
+            # Сборка DataFrame по ВСЕМ категориям (активные + сделковые) — «символ + семейство»
+            metrics_by_id = {s['id']: s for s in strategies_data}
+            cat_ids = list(current_quotas.keys())
+            for sid in metrics_by_id:
+                if sid not in current_quotas:
+                    cat_ids.append(sid)
+
+            rows = []
+            for sid in cat_ids:
+                m = metrics_by_id.get(sid, {})
+                sym, fam = (sid.split('_', 1) if '_' in sid else (sid, '?'))
+                rows.append({
+                    'name': label_map.get(sid, category_label(sym, fam)),
+                    'family': m.get('family', fam),
+                    'pnl': m.get('pnl', 0.0),
+                    'vol': m.get('vol', 0.0),
+                    'trades': m.get('trades', 0),
+                    'drawdown': m.get('drawdown', 0.0),
+                    'current_quota': current_quotas.get(sid, 0.0),
+                    'new_quota': new_quotas.get(sid, 0.0),
+                })
+            df_sw = pd.DataFrame(rows)
+            
+            
+            
+            
+            
+            
             df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
             df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
             n_delta = int((df_sw['delta'].abs() > 1e-4).sum())
-            st.caption(f"Стратегий со сделками: {len(df_sw)} | с Δ ≠ 0: {n_delta} | параметры из config.SteeringParams (α={steering_cfg.alpha}, мин.сделок={steering_cfg.min_trades}, пол={steering_cfg.min_q}, потолок={steering_cfg.max_q})")
+            st.caption(f"Категорий (символ+семейство): {len(df_sw)} | с Δ ≠ 0: {n_delta} | параметры из config.SteeringParams (α={steering_cfg.alpha}, мин.сделок={steering_cfg.min_trades}, пол={steering_cfg.min_q}, потолок={steering_cfg.max_q}, скоринг={steering_cfg.score_mode})")
+
+            # Для бара Δ берём ТОЛЬКО категории с ненулевым перераспределением
+            df_sw_nz = df_sw[df_sw['delta'].abs() > 1e-4].copy()
 
             # ── Цвета ──
             def quota_color(row):
@@ -1111,17 +1145,20 @@ with tab_steering:
                                 key="steering_pie_after")
 
             # ── Bar chart: Δ ──
-            st.markdown("#### Quota Delta (Δ)")
+            st.markdown(f"#### Quota Delta (Δ) — категорий с перераспределением: {len(df_sw_nz)}")
+            if df_sw_nz.empty:
+                st.info("Перераспределения нет: ни одна категория не набрала порог "
+                        f"(мин. сделок = {steering_cfg.min_trades}).")
             bar_colors = [COL_GREEN_LT if d > 0 else COL_RED_LT
-                          for d in df_sw['delta']]
+                          for d in df_sw_nz['delta']]
 
             fig_delta = go.Figure()
             fig_delta.add_trace(go.Bar(
-                x=df_sw['delta'] * 100,
-                y=df_sw['name'],
+                x=df_sw_nz['delta'] * 100,
+                y=df_sw_nz['name'],
                 orientation='h',
                 marker_color=bar_colors,
-                text=df_sw['delta'].apply(lambda x: f"{x*100:+.1f}%"),
+                text=df_sw_nz['delta'].apply(lambda x: f"{x*100:+.1f}%"),
                 textposition='outside',
                 texttemplate='%{text}',
                 hovertemplate='<b>%{y}</b><br>Δ quota: %{text}<extra></extra>',
@@ -1129,7 +1166,7 @@ with tab_steering:
             ))
             fig_delta.add_vline(x=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
             fig_delta.update_layout(xaxis_title='Δ quota (%)', bargap=0.12)
-            st.plotly_chart(plotly_dark_layout(fig_delta, max(300, len(df_sw) * 24)),
+            st.plotly_chart(plotly_dark_layout(fig_delta, max(280, len(df_sw_nz) * 26)),
                             use_container_width=True, key="steering_delta_bar")
 
             # ── Таблица ──
@@ -1144,11 +1181,11 @@ with tab_steering:
             st.dataframe(df_display, use_container_width=True, hide_index=True)
 
             st.caption(
-                "Зелёные — стратегии, получающие больше квоты. "
+                "Зелёные — категории (символ + семейство), получающие больше квоты. "
                 "Красные — теряющие долю (α из config.py). "
-                f"Режим: min_trades={steering_cfg.min_trades} для скоринга, max_dd≤{steering_cfg.max_dd}. "
-                "Для стратегий с 1 сделкой: score = clipped(pnl), не pnl/vol. "
-                "Фильтр: max_dd ≤ 0.15, pnl > 0."
+                f"Режим: min_trades={steering_cfg.min_trades}, max_dd≤{steering_cfg.max_dd}, скоринг={steering_cfg.score_mode} ('pnl' — прибыльные растут, как P&L на вкладке Strategies). "
+                "Категории без сделок сохраняют текущую квоту (EMA к базовой доле). "
+                "enabled=False — лоты не меняются, расчёт индикативный."
             )
 
     else:
