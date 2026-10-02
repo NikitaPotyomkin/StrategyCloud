@@ -20,9 +20,9 @@ def category_label(symbol: str, family: str) -> str:
 def calculate_steering_wheel_quotas(
         strategies_data: List[Dict[str, Any]],
         current_quotas: Dict[str, float],
-        alpha: float = 0.2,
-        min_q: float = 0.05,
-        max_q: float = 0.35,
+        alpha: float = 0.5,
+        min_q: float = 0.02,
+        max_q: float = 0.5,
         min_trades: int = 10,
         max_dd: float = 0.15,
         score_mode: str = 'pnl',
