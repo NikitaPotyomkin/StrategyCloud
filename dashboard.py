@@ -215,12 +215,13 @@ with st.sidebar:
 data = load_dashboard_data(days_back)
 
 # ── Табы ──
-tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_pipeline = st.tabs([
+tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_steering, tab_pipeline = st.tabs([
     "Overview",
     "Risk",
     "Strategies",
     "3D Landscape",
     "3D Surface",
+    "Steering Wheel",
     "Pipeline",
 ])
 
@@ -246,7 +247,6 @@ with tab_overview:
             ser_today = (pd.Timestamp.now('UTC') + SERVER_OFFSET).date()
             today_trades = data['trades_df'][
                 tu.dt.date == ser_today
-                
             ]
             today_pnl = today_trades['profit_net'].sum()
         pnl_color = COL_GREEN_LT if today_pnl >= 0 else COL_RED_LT
@@ -306,7 +306,8 @@ with tab_overview:
                 legend=dict(orientation='h', y=1.12, x=0),
                 bargap=0.15,
             )
-            st.plotly_chart(plotly_dark_layout(fig_vol, 260), use_container_width=True)
+            st.plotly_chart(plotly_dark_layout(fig_vol, 260), use_container_width=True,
+                           key="overview_daily_volume")
 
         with col_eq:
             st.markdown("### Equity Curve")
@@ -331,9 +332,10 @@ with tab_overview:
                 name='',
             ))
             fig_eq.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
-            st.plotly_chart(plotly_dark_layout(fig_eq, 260), use_container_width=True)
+            st.plotly_chart(plotly_dark_layout(fig_eq, 260), use_container_width=True,
+                           key="overview_equity_curve")
 
-    # ── Trade Scatter ──
+    # ── Trade scatter ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         st.markdown("### Trade Scatter")
         df_sorted = data['trades_df'].sort_values('timestamp').copy()
@@ -352,7 +354,8 @@ with tab_overview:
         ))
         fig.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
         fig.update_layout(hovermode='x unified')
-        st.plotly_chart(plotly_dark_layout(fig, 380), use_container_width=True)
+        st.plotly_chart(plotly_dark_layout(fig, 380), use_container_width=True,
+                       key="overview_trade_scatter")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -439,7 +442,7 @@ with tab_risk:
             margin=dict(l=40, r=40, t=10, b=10),
             font=dict(color=COL_TEXT, family='SF Mono, Consolas, monospace'),
         )
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        st.plotly_chart(fig_gauge, use_container_width=True, key="risk_gauge")
 
         # ── Risk by symbol ──
         if risk_by_symbol:
@@ -462,7 +465,7 @@ with tab_risk:
                 bargap=0.15,
             )
             st.plotly_chart(plotly_dark_layout(fig_risk, max(200, len(df_risk) * 30 + 60)),
-                           use_container_width=True)
+                           use_container_width=True, key="risk_by_symbol")
 
         caption = f"Open: {n_positions} | Volume: {total_volume:.2f} lots | Budget: {quota:,.0f} RUB"
         if no_sl_count > 0:
@@ -526,7 +529,8 @@ with tab_risk:
             xaxis_title='Time', yaxis_title='Symbol',
             xaxis=dict(tickangle=-45),
         )
-        st.plotly_chart(plotly_dark_layout(fig_heat, 320), use_container_width=True)
+        st.plotly_chart(plotly_dark_layout(fig_heat, 320), use_container_width=True,
+                       key="risk_exposure_heatmap")
         st.caption("Scale: 0 — dark, 1-2 — green, 3 (limit) — amber, >3 — red")
 
 
@@ -562,7 +566,7 @@ with tab_strategies:
         ))
         fig1.update_layout(xaxis_title='P&L (RUB)', bargap=0.12)
         st.plotly_chart(plotly_dark_layout(fig1, max(450, len(df_strat) * 24)),
-                       use_container_width=True)
+                       use_container_width=True, key="strat_pnl_bar")
 
     # ── Win Rate + Profit Factor ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
@@ -595,7 +599,7 @@ with tab_strategies:
             ))
             fig_wr.update_layout(xaxis_title='Win Rate (%)', bargap=0.15)
             st.plotly_chart(plotly_dark_layout(fig_wr, max(250, len(df_wr_sorted) * 30 + 40)),
-                           use_container_width=True)
+                           use_container_width=True, key="strat_winrate_bar")
 
         with col_pf:
             df_pf_sorted = df_wf.sort_values('profit_factor', ascending=True)
@@ -616,7 +620,7 @@ with tab_strategies:
             fig_pf.update_layout(xaxis_title='Family', yaxis_title='Profit Factor',
                                  bargap=0.2, xaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(plotly_dark_layout(fig_pf, max(250, len(df_pf_sorted) * 30 + 40)),
-                           use_container_width=True)
+                           use_container_width=True, key="strat_pf_bar")
         st.caption("Dotted line at PF = 1.0 — breakeven threshold")
 
     # ── P&L by family ──
@@ -640,7 +644,8 @@ with tab_strategies:
         fig2.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
         fig2.update_layout(xaxis_title='Family', yaxis_title='P&L (RUB)',
                             bargap=0.2, xaxis={'categoryorder': 'total ascending'})
-        st.plotly_chart(plotly_dark_layout(fig2, 380), use_container_width=True)
+        st.plotly_chart(plotly_dark_layout(fig2, 380), use_container_width=True,
+                       key="strat_family_pnl_bar")
 
     # ── Active strategies table ──
     st.markdown("### Active Strategies")
@@ -700,6 +705,10 @@ with tab_strategies:
 with tab_3d:
     st.markdown("### Strategy Landscape — 3D")
 
+    if not data:
+        st.warning("No data.")
+        st.stop()
+
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         df_3d = data['trades_df'].groupby(
             ['symbol', 'strategy_type', 'param_key']
@@ -737,7 +746,7 @@ with tab_3d:
             marker=dict(size=sizes, color=colors_3d, line=dict(width=0.5, color=COL_PANEL),
                         opacity=0.85),
             text=df_3d['name'], textposition='top center',
-            textfont=dict(size=10, color=COL_MUTED),
+            textfont=dict(size=28, color=COL_MUTED),
             hovertemplate='<b>%{text}</b><br>PnL: %{x:,.1f}<br>Vol: %{y:,.1f}<br>Trades: %{z}<extra></extra>',
             name='',
         ))
@@ -764,7 +773,7 @@ with tab_3d:
             font=dict(color=COL_TEXT, size=16),
             showlegend=False,
         )
-        st.plotly_chart(fig_3d, use_container_width=True)
+        st.plotly_chart(fig_3d, use_container_width=True, key="3d_landscape")
 
         with st.expander("Reading the chart"):
             st.markdown("""
@@ -790,6 +799,10 @@ with tab_3d:
 # ═══════════════════════════════════════════════════════════════
 with tab_surface:
     st.markdown("### Parametric Surface — 3D")
+
+    if not data:
+        st.warning("No data.")
+        st.stop()
 
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         df_surf_src = data['trades_df'].copy()
@@ -900,7 +913,7 @@ with tab_surface:
                         margin=dict(l=0, r=0, t=10, b=0),
                         font=dict(color=COL_TEXT, size=16),
                     )
-                    st.plotly_chart(fig_surf, use_container_width=True)
+                    st.plotly_chart(fig_surf, use_container_width=True, key="3d_surface")
                     st.caption(f"Interpolated {n_points} points onto {len(xi)}x{len(yi)} grid. Ridges = profitable zones.")
                 else:
                     st.info(f"Insufficient grid for surface ({n_points} points). Showing triangulated mesh.")
@@ -941,7 +954,7 @@ with tab_surface:
                         font=dict(color=COL_TEXT, size=16),
                         showlegend=False,
                     )
-                    st.plotly_chart(fig_mesh, use_container_width=True)
+                    st.plotly_chart(fig_mesh, use_container_width=True, key="3d_mesh")
 
             with st.expander("Source data"):
                 display_df = df_agg[['symbol', 'param_key', 'pnl', 'trades',
@@ -953,6 +966,176 @@ with tab_surface:
 
     st.markdown("---")
     st.caption("Select a family, set X/Y to parameter axes, Z to P&L. Ridges indicate optimal parameter zones.")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  STEERING WHEEL
+# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  STEERING WHEEL
+# ═══════════════════════════════════════════════════════════════
+with tab_steering:
+    if not data:
+        st.warning("No data.")
+        st.stop()
+
+    st.markdown("### Steering Wheel — Quota Reallocation - (!!еще нет отбора по 10 сделкам, мин квота =1")
+
+    from steering_wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
+
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        # ── Адаптер: trades_df → формат журнала ──
+        df_src = data['trades_df'].copy().reset_index(drop=True)
+        if 'profit' in df_src.columns and 'profit_net' in df_src.columns:
+            df_src = df_src.drop(columns=['profit'])
+        df_src = df_src.rename(columns={'profit_net': 'profit'})
+        if 'exit_time' not in df_src.columns and 'timestamp' in df_src.columns:
+            df_src['exit_time'] = df_src['timestamp']
+        df_src['symbol'] = df_src['symbol'].astype(str)
+        df_src['param_key'] = df_src['param_key'].astype(str)
+
+        # ── Боевые функции ──
+        strategies_data = build_metrics_from_journal(df_src, n_last=10)
+
+        if not strategies_data:
+            st.info("Нет сделок в журнале для расчёта метрик.")
+        else:
+            # Текущие квоты из активных стратегий
+            if data.get('active_strategies'):
+                df_active = pd.DataFrame(data['active_strategies'])
+                df_active['sid'] = df_active['symbol'].astype(str) + '_' + df_active['param_key'].astype(str)
+                total_lot = df_active['lot'].sum()
+                if total_lot > 0:
+                    current_quotas = dict(zip(df_active['sid'], df_active['lot'] / total_lot))
+                else:
+                    current_quotas = {}
+            else:
+                current_quotas = {}
+
+            # Заглушка, если нет активных
+            if not current_quotas and strategies_data:
+                n = len(strategies_data)
+                current_quotas = {s['id']: 1.0 / n for s in strategies_data}
+
+            # ПРАВКА №3: min_trades=1 для индикативного режима
+            new_quotas = calculate_steering_wheel_quotas(
+                strategies_data,
+                current_quotas,
+                alpha=0.2,
+                min_q=0.05,
+                max_q=0.35,
+                min_trades=1,   # ← было 10, теперь считает с 1 сделки
+                max_dd=0.15
+            )
+
+            # Сборка DataFrame
+            df_sw = pd.DataFrame(strategies_data)
+            # ПРАВКА №1: добавляем колонку name
+            df_sw['name'] = df_sw['id']
+            df_sw['current_quota'] = df_sw['id'].map(current_quotas)
+            df_sw['new_quota'] = df_sw['id'].map(new_quotas)
+            df_sw = df_sw.fillna(0.0)
+            df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
+            df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
+
+            # ── Цвета ──
+            def quota_color(row):
+                d = row['delta']
+                if d > 0.01:
+                    return COL_GREEN_LT
+                elif d > 0:
+                    return '#2EA043'
+                elif d < -0.01:
+                    return COL_RED_LT
+                else:
+                    return COL_MUTED
+
+            df_sw['color'] = df_sw.apply(quota_color, axis=1)
+
+            # ── Pie charts ──
+            col_before, col_after = st.columns(2)
+
+            with col_before:
+                st.markdown("#### Current Allocation")
+                fig_before = go.Figure(data=[go.Pie(
+                    labels=df_sw['name'],
+                    values=df_sw['current_quota'],
+                    marker=dict(colors=[COL_MUTED] * len(df_sw),
+                                line=dict(color=COL_PANEL, width=2)),
+                    textinfo='label+percent',
+                    textfont=dict(size=13, color=COL_TEXT),
+                    hole=0.4, sort=False,
+                )])
+                fig_before.update_layout(
+                    paper_bgcolor=COL_PANEL, height=450,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    showlegend=False, font=dict(color=COL_TEXT, size=13),
+                )
+                st.plotly_chart(fig_before, use_container_width=True,
+                                key="steering_pie_before")
+
+            with col_after:
+                st.markdown("#### After Steering (indicative)")
+                fig_after = go.Figure(data=[go.Pie(
+                    labels=df_sw['name'],
+                    values=df_sw['new_quota'],
+                    marker=dict(colors=df_sw['color'].tolist(),
+                                line=dict(color=COL_PANEL, width=2)),
+                    textinfo='label+percent',
+                    textfont=dict(size=13, color=COL_TEXT),
+                    hole=0.4, sort=False,
+                )])
+                fig_after.update_layout(
+                    paper_bgcolor=COL_PANEL, height=450,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    showlegend=False, font=dict(color=COL_TEXT, size=13),
+                )
+                st.plotly_chart(fig_after, use_container_width=True,
+                                key="steering_pie_after")
+
+            # ── Bar chart: Δ ──
+            st.markdown("#### Quota Delta (Δ)")
+            bar_colors = [COL_GREEN_LT if d > 0 else COL_RED_LT
+                          for d in df_sw['delta']]
+
+            fig_delta = go.Figure()
+            fig_delta.add_trace(go.Bar(
+                x=df_sw['delta'] * 100,
+                y=df_sw['name'],
+                orientation='h',
+                marker_color=bar_colors,
+                text=df_sw['delta'].apply(lambda x: f"{x*100:+.1f}%"),
+                textposition='outside',
+                texttemplate='%{text}',
+                hovertemplate='<b>%{y}</b><br>Δ quota: %{text}<extra></extra>',
+                name='',
+            ))
+            fig_delta.add_vline(x=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+            fig_delta.update_layout(xaxis_title='Δ quota (%)', bargap=0.12)
+            st.plotly_chart(plotly_dark_layout(fig_delta, max(300, len(df_sw) * 24)),
+                            use_container_width=True, key="steering_delta_bar")
+
+            # ── Таблица ──
+            st.markdown("#### Detail")
+            # ПРАВКА №2: убран target_quota, которого не существует
+            df_display = df_sw[['name', 'pnl', 'trades', 'vol', 'drawdown',
+                                'current_quota', 'new_quota', 'delta']].copy()
+            df_display.columns = ['Strategy', 'P&L', 'Trades', 'Vol', 'Max DD',
+                                 'Current Q', 'New Q', 'Δ']
+            for col in ['Current Q', 'New Q', 'Δ']:
+                df_display[col] = (df_display[col] * 100).round(2)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+            st.caption(
+                "Зелёные — стратегии, получающие больше квоты. "
+                "Красные — теряющие долю. alpha=0.2. "
+                "Индикативный режим: расчёт с 1 сделки (min_trades=1). "
+                "Фильтр: max_dd ≤ 0.15, pnl > 0."
+            )
+
+    else:
+        st.info("Нет данных для работы штурвала.")
+
 
 
 # ═══════════════════════════════════════════════════════════════

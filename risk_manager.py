@@ -261,8 +261,7 @@ def distribute_lots(ranked_results, symbol_data, balance,
             lot = max(vol, min_lot) if vol is not None else min_lot
         else:
             lot = max(math.floor(raw_lot * 100) / 100, min_lot)
-        if lot < min_lot:
-            break
+        # Не прерываем цикл — добавляем даже если lot < min_lot (будет отфильтровано позже)
         active.append(c)
 
     if not active:
@@ -285,7 +284,6 @@ def distribute_lots(ranked_results, symbol_data, balance,
         if total_risk <= quota:
             break
         scale = quota / total_risk
-        any_floor = False
         for x in active:
             info = symbol_data.get(x['symbol'], {}).get('info')
             scaled_raw = x['lot'] * scale
@@ -294,11 +292,10 @@ def distribute_lots(ranked_results, symbol_data, balance,
                 scaled = max(vol, min_lot) if vol is not None else min_lot
             else:
                 scaled = max(math.floor(scaled_raw * 100) / 100, min_lot)
-            if scaled <= min_lot:
-                any_floor = True
             x['lot'] = scaled
-        if not any_floor:
-            break
+
+    # Финальная фильтрация: оставляем только стратегии с lot >= min_lot
+    active = [x for x in active if x['lot'] >= min_lot]
 
     return active
 

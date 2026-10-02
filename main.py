@@ -12,6 +12,8 @@ warnings.filterwarnings('ignore')
 
 from functions import terminal_on, run_full_backtest, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports
+from trail_manager import TrailManager
+from steering_wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots, check_integration_budget,
     check_daily_loss_limit, check_equity_stop, realtime_quota_recalc,
@@ -117,6 +119,26 @@ from strategies.chi_square_distribution import (
     calc_chi_square, backtest as backtest_chi_square,
     check_entry as check_entry_chi_square, check_exit as check_exit_chi_square,
 )
+from strategies.vwap_reversion import (
+    calc_vwap, backtest as backtest_vwap,
+    check_entry as check_entry_vwap, check_exit as check_exit_vwap,
+)
+from strategies.momentum_breakout import (
+    calc_momentum, backtest as backtest_momentum,
+    check_entry as check_entry_momentum, check_exit as check_exit_momentum,
+)
+from strategies.pin_bar_reversal import (
+    calc_pin_bar, backtest as backtest_pin_bar,
+    check_entry as check_entry_pin_bar, check_exit as check_exit_pin_bar,
+)
+from strategies.prev_daily_candle_direction import (
+    calc_prev_daily_direction, backtest as backtest_prev_daily,
+    check_entry as check_entry_prev_daily, check_exit as check_exit_prev_daily,
+)
+from strategies.rolling_correlation_momentum import (
+    calc_rolling_correlation, backtest as backtest_corr,
+    check_entry as check_entry_corr, check_exit as check_exit_corr,
+)
 from data_loader import (
     symbol_data, load_h1, update_symbol_bar,
     load_journal, save_journal, record_trade,
@@ -160,6 +182,12 @@ if __name__ == '__main__':
     strategy_params = app.strategy_params
     bt_cfg = app.backtest_config
     risk_cfg = app.risk_params
+    trail_cfg = app.trail_params
+    steering_cfg = app.steering_params
+    trail_mgr = TrailManager(trail_cfg)
+    print(f"[TRAIL] {'ВКЛЮЧЁН' if trail_cfg.enabled else 'ВЫКЛЮЧЕН'} | "
+          f"ATR(D1,{trail_cfg.atr_period}) x {trail_cfg.atr_multiplier} | "
+          f"интервал {trail_cfg.check_interval_sec}с | мин.сдвиг {trail_cfg.min_move_points} пт")
 
     # ═══ ВЫЧИСЛИТЕЛЬНЫЙ БЮДЖЕТ ═══
     def _combo(*args):
@@ -201,7 +229,11 @@ if __name__ == '__main__':
         'Bayesian':       _combo(len(sp.bayes_window_list), len(sp.bayes_threshold_list), len(sp.bayes_prior_list), len(sp.sl_points_list), len(sp.tp_points_list)),
         'ChiSq': _combo(len(sp.chisq_window_list), len(sp.chisq_entry_list), len(sp.chisq_exit_list),
                         len(sp.chisq_vol_period_list), len(sp.sl_points_list), len(sp.tp_points_list)),
-
+        'VWAP': _combo(len(sp.vwap_vol_period_list), len(sp.vwap_std_mult_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'Momentum': _combo(len(sp.momentum_period_list), len(sp.momentum_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'PinBar': _combo(len(sp.pin_bar_body_ratio_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'PrevDaily': _combo(len(sp.prev_daily_hold_bars_list), len(sp.sl_points_list), len(sp.tp_points_list)),
+        'CorrMomentum': _combo(len(sp.corr_window_list), len(sp.corr_threshold_list), len(sp.sl_points_list), len(sp.tp_points_list)),
 
     }
 
@@ -439,6 +471,49 @@ if __name__ == '__main__':
                 sync_active_strategies(active, now, symbol_data, active_strategies,
                                        close_order, get_deal_exit_price, record_trade,
                                        strategy_key, assign_magic, bt_cfg.magic_base, len(active))
+
+                # ── Штурвал: плавное перераспределение квот по реальным сделкам ──
+                if steering_cfg.enabled:
+                    try:
+                        metrics = build_metrics_from_journal(journal_df, n_last=steering_cfg.n_last_trades)
+                        if metrics:
+                            quotas_path = os.path.join(JOURNAL_DIR, steering_cfg.quotas_file)
+                            prev_quotas = {}
+                            if os.path.exists(quotas_path):
+                                with open(quotas_path, 'r', encoding='utf-8') as f:
+                                    prev_quotas = json.load(f)
+                            new_quotas = calculate_steering_wheel_quotas(
+                                metrics, prev_quotas,
+                                alpha=steering_cfg.alpha,
+                                min_q=steering_cfg.min_q,
+                                max_q=steering_cfg.max_q,
+                                min_trades=steering_cfg.min_trades,
+                                max_dd=steering_cfg.max_dd,
+                            )
+                            with open(quotas_path, 'w', encoding='utf-8') as f:
+                                json.dump(new_quotas, f, ensure_ascii=False, indent=2)
+                            # Плавная корректировка лотов активных стратегий без открытых позиций
+                            n_act = max(len(active_strategies), 1)
+                            changed = 0
+                            for key, s in active_strategies.items():
+                                if s['position'] is not None:
+                                    continue
+                                sid = f"{s['symbol']}_{s['param_key']}"
+                                q_new = new_quotas.get(sid)
+                                if q_new is None:
+                                    continue
+                                q_prev = prev_quotas.get(sid, 1.0 / n_act)
+                                factor = q_new / q_prev if q_prev > 0 else 1.0
+                                new_lot = max(risk_cfg.min_lot, s['lot'] * factor)
+                                if abs(new_lot - s['lot']) > 1e-9:
+                                    print(f"  [STEERING] {key}: lot {s['lot']:.3f} -> {new_lot:.3f} "
+                                          f"(q {q_prev:.3f} -> {q_new:.3f})")
+                                    s['lot'] = new_lot
+                                    changed += 1
+                            print(f"  [STEERING] Квоты обновлены: {len(new_quotas)} стратегий, "
+                                  f"лоты скорректированы: {changed}", flush=True)
+                    except Exception as se:
+                        print(f"\n[WARN] Ошибка штурвала: {se!r} — квоты не изменены", flush=True)
                 write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
                 # --- обновляем night_reset.json после ночного перерасчёта ---
@@ -546,6 +621,12 @@ if __name__ == '__main__':
                     except Exception as e:
                         print(f"\n[WARN] Ошибка обновления бара {sym}: {e!r}", flush=True)
 
+            # Трейлинг-стоп (ATR chandelier) — независимо от стратегий
+            try:
+                trail_mgr.update(symbol_data, ticks)
+            except Exception as e:
+                print(f"\n[WARN] Ошибка трейлинг-стопа: {e!r}", flush=True)
+
             # Проверка сигналов
             if any_finalized:
                 try:
@@ -577,6 +658,11 @@ if __name__ == '__main__':
                         calc_bayesian_trend, check_exit_bayesian, check_entry_bayesian,
                         calc_kurtosis, check_exit_kurtosis, check_entry_kurtosis,
                         calc_chi_square, check_exit_chi_square, check_entry_chi_square,
+                        calc_vwap, check_exit_vwap, check_entry_vwap,
+                        calc_momentum, check_exit_momentum, check_entry_momentum,
+                        calc_pin_bar, check_exit_pin_bar, check_entry_pin_bar,
+                        calc_prev_daily_direction, check_exit_prev_daily, check_entry_prev_daily,
+                        calc_rolling_correlation, check_exit_corr, check_entry_corr,
                         risk_cfg=risk_cfg,
                     )
                 except Exception as e:

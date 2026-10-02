@@ -272,6 +272,46 @@ def _backtest_chi_square(df, window, entry_threshold, exit_threshold, vol_period
                                sim_lot=0.01, spread_points=spread_points)
 
 
+def _backtest_vwap(df, vol_period, std_mult, sl_points, tp_points,
+                   point, tick_value, tick_size, spread_points=0):
+    """Backtest для VWAP Reversion."""
+    from strategies.vwap_reversion import backtest as backtest_vwap
+    return backtest_vwap(df, vol_period, std_mult, sl_points, tp_points, point,
+                         tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_momentum(df, momentum_period, threshold, sl_points, tp_points,
+                       point, tick_value, tick_size, spread_points=0):
+    """Backtest для Momentum Breakout."""
+    from strategies.momentum_breakout import backtest as backtest_momentum
+    return backtest_momentum(df, momentum_period, threshold, sl_points, tp_points, point,
+                             tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_pin_bar(df, body_ratio, sl_points, tp_points,
+                      point, tick_value, tick_size, spread_points=0):
+    """Backtest для Pin Bar Reversal."""
+    from strategies.pin_bar_reversal import backtest as backtest_pin_bar
+    return backtest_pin_bar(df, body_ratio, True, sl_points, tp_points, point,
+                            tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_prev_daily(df, hold_bars, sl_points, tp_points,
+                         point, tick_value, tick_size, spread_points=0):
+    """Backtest для Prev Daily Candle Direction."""
+    from strategies.prev_daily_candle_direction import backtest as backtest_prev_daily
+    return backtest_prev_daily(df, hold_bars, sl_points, tp_points, point,
+                               tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_corr(df, window, corr_threshold, sl_points, tp_points,
+                   point, tick_value, tick_size, spread_points=0):
+    """Backtest для Rolling Correlation Momentum."""
+    from strategies.rolling_correlation_momentum import backtest as backtest_corr
+    return backtest_corr(df, window, corr_threshold, sl_points, tp_points, point,
+                         tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
 # ═══ УТИЛИТЫ ВРЕМЕНИ И ДАТЫ ═══
 def curr_time():
     """Текущее время в формате ЧЧ:ММ."""
@@ -439,6 +479,8 @@ def _backtest_symbol(args):
      BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
      KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
      CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+     VWAP_VOL_PERIOD_LIST, VWAP_STD_MULT_LIST, MOMENTUM_PERIOD_LIST, MOMENTUM_THRESHOLD_LIST,
+     PIN_BAR_BODY_RATIO_LIST, PREV_DAILY_HOLD_BARS_LIST, CORR_WINDOW_LIST, CORR_THRESHOLD_LIST,
      BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
 
      family_fp, recalc_families) = args
@@ -480,6 +522,11 @@ def _backtest_symbol(args):
     bayesian_per_symbol = len(BAYES_WINDOW_LIST) * len(BAYES_THRESHOLD_LIST) * len(BAYES_PRIOR_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     kurtosis_per_symbol = len(KURT_WINDOW_LIST) * len(KURT_THRESHOLD_LIST) * len(KURT_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     chi_square_per_symbol = len(CHISQ_WINDOW_LIST) * len(CHISQ_ENTRY_LIST) * len(CHISQ_EXIT_LIST) * len(CHISQ_VOL_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    vwap_per_symbol = len(VWAP_VOL_PERIOD_LIST) * len(VWAP_STD_MULT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    momentum_per_symbol = len(MOMENTUM_PERIOD_LIST) * len(MOMENTUM_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    pin_bar_per_symbol = len(PIN_BAR_BODY_RATIO_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    prev_daily_per_symbol = len(PREV_DAILY_HOLD_BARS_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    corr_per_symbol = len(CORR_WINDOW_LIST) * len(CORR_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     _strategy_map = {
         'stoch': stoch_per_symbol,
@@ -505,6 +552,11 @@ def _backtest_symbol(args):
         'bayesian': bayesian_per_symbol,
         'kurtosis': kurtosis_per_symbol,
         'chi_square': chi_square_per_symbol,
+        'vwap': vwap_per_symbol,
+        'momentum': momentum_per_symbol,
+        'pin_bar': pin_bar_per_symbol,
+        'prev_daily': prev_daily_per_symbol,
+        'corr_momentum': corr_per_symbol,
     }
 
     if test_strategy in _strategy_map:
@@ -1157,6 +1209,8 @@ def _backtest_symbol(args):
     if not test_strategy or test_strategy == 'chi_square':
         for win, entry_th, exit_th, vol_p, sl, tp in product(
             CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+     
+     
             SL_POINTS_LIST, TP_POINTS_LIST
         ):
             profit, n_trades, trade_profits = _safe_backtest('ChiSq', _backtest_chi_square,
@@ -1181,6 +1235,151 @@ def _backtest_symbol(args):
             })
             combos_done += 1
         completed_strategies.append('ChiSq')
+
+    # ── VWAP Reversion ──
+    if not test_strategy or test_strategy == 'vwap':
+        for vol_p, std_m, sl, tp in product(
+            VWAP_VOL_PERIOD_LIST, VWAP_STD_MULT_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('VWAP', _backtest_vwap,
+                df_window, vol_p, std_m, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'vwap',
+                'param_key': f"vol{vol_p}_std{std_m:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('VWAP')
+
+    # ── Momentum Breakout ──
+    if not test_strategy or test_strategy == 'momentum':
+        for per, mom_th, sl, tp in product(
+            MOMENTUM_PERIOD_LIST, MOMENTUM_THRESHOLD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('Momentum', _backtest_momentum,
+                df_window, per, mom_th, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'momentum',
+                'param_key': f"per{per}_th{mom_th:.2f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Momentum')
+
+    # ── Pin Bar Reversal ──
+    if not test_strategy or test_strategy == 'pin_bar':
+        for br, sl, tp in product(
+            PIN_BAR_BODY_RATIO_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('PinBar', _backtest_pin_bar,
+                df_window, br, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'pin_bar',
+                'param_key': f"br{br:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('PinBar')
+
+    # ── Prev Daily Candle Direction ──
+    if not test_strategy or test_strategy == 'prev_daily':
+        for hb, sl, tp in product(
+            PREV_DAILY_HOLD_BARS_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('PrevDaily', _backtest_prev_daily,
+                df_window, hb, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'prev_daily',
+                'param_key': f"hb{hb}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('PrevDaily')
+
+    # ── Rolling Correlation Momentum ──
+    if not test_strategy or test_strategy == 'corr_momentum':
+        for win, corr_th, sl, tp in product(
+            CORR_WINDOW_LIST, CORR_THRESHOLD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('CorrMomentum', _backtest_corr,
+                df_window, win, corr_th, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'corr_momentum',
+                'param_key': f"win{win}_th{corr_th:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('CorrMomentum')
 
     # ── Сохраняем чекпойнт после каждого символа ──
     last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
@@ -1276,6 +1475,14 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     CHISQ_ENTRY_LIST = strategy_params.chisq_entry_list
     CHISQ_EXIT_LIST = strategy_params.chisq_exit_list
     CHISQ_VOL_PERIOD_LIST = strategy_params.chisq_vol_period_list
+    VWAP_VOL_PERIOD_LIST = strategy_params.vwap_vol_period_list
+    VWAP_STD_MULT_LIST = strategy_params.vwap_std_mult_list
+    MOMENTUM_PERIOD_LIST = strategy_params.momentum_period_list
+    MOMENTUM_THRESHOLD_LIST = strategy_params.momentum_threshold_list
+    PIN_BAR_BODY_RATIO_LIST = strategy_params.pin_bar_body_ratio_list
+    PREV_DAILY_HOLD_BARS_LIST = strategy_params.prev_daily_hold_bars_list
+    CORR_WINDOW_LIST = strategy_params.corr_window_list
+    CORR_THRESHOLD_LIST = strategy_params.corr_threshold_list
     BACKTEST_DAYS = backtest_config.backtest_days
     TOP_N = backtest_config.top_n
 
@@ -1341,6 +1548,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     chi_square_per_symbol = (len(CHISQ_WINDOW_LIST) * len(CHISQ_ENTRY_LIST) *
                              len(CHISQ_EXIT_LIST) * len(CHISQ_VOL_PERIOD_LIST) *
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    vwap_per_symbol = (len(VWAP_VOL_PERIOD_LIST) * len(VWAP_STD_MULT_LIST) *
+                       len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    momentum_per_symbol = (len(MOMENTUM_PERIOD_LIST) * len(MOMENTUM_THRESHOLD_LIST) *
+                           len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    pin_bar_per_symbol = (len(PIN_BAR_BODY_RATIO_LIST) *
+                          len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    prev_daily_per_symbol = (len(PREV_DAILY_HOLD_BARS_LIST) *
+                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    corr_per_symbol = (len(CORR_WINDOW_LIST) * len(CORR_THRESHOLD_LIST) *
+                       len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
     # ── Карта: test_strategy → кол-во комбинаций ──
     strat_combo_map = {
@@ -1367,6 +1584,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'bayesian': bayesian_per_symbol,
         'kurtosis': kurtosis_per_symbol,
         'chi_square': chi_square_per_symbol,
+        'vwap': vwap_per_symbol,
+        'momentum': momentum_per_symbol,
+        'pin_bar': pin_bar_per_symbol,
+        'prev_daily': prev_daily_per_symbol,
+        'corr_momentum': corr_per_symbol,
     }
 
     if test_strategy and test_strategy in strat_combo_map:
@@ -1404,6 +1626,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'bayesian': _fp(BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'kurtosis': _fp(KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'chi_square': _fp(CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'vwap': _fp(VWAP_VOL_PERIOD_LIST, VWAP_STD_MULT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'momentum': _fp(MOMENTUM_PERIOD_LIST, MOMENTUM_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'pin_bar': _fp(PIN_BAR_BODY_RATIO_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'prev_daily': _fp(PREV_DAILY_HOLD_BARS_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'corr_momentum': _fp(CORR_WINDOW_LIST, CORR_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
     }
 
     # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
@@ -1601,6 +1828,10 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             BAYES_WINDOW_LIST, BAYES_THRESHOLD_LIST, BAYES_PRIOR_LIST,
             KURT_WINDOW_LIST, KURT_THRESHOLD_LIST, KURT_VOL_PERIOD_LIST,
             CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
+            VWAP_VOL_PERIOD_LIST, VWAP_STD_MULT_LIST, MOMENTUM_PERIOD_LIST, MOMENTUM_THRESHOLD_LIST,
+            PIN_BAR_BODY_RATIO_LIST, PREV_DAILY_HOLD_BARS_LIST, CORR_WINDOW_LIST, CORR_THRESHOLD_LIST,
+
+
             BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
             family_fp, partial_recalc.get(symbol, (None, None))[1]
         ))
@@ -1665,6 +1896,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         strategies_to_run.append(("Kurtosis", kurtosis_per_symbol))
     if not test_strategy or test_strategy == 'chi_square':
         strategies_to_run.append(("ChiSq", chi_square_per_symbol))
+    if not test_strategy or test_strategy == 'vwap':
+        strategies_to_run.append(("VWAP", vwap_per_symbol))
+    if not test_strategy or test_strategy == 'momentum':
+        strategies_to_run.append(("Momentum", momentum_per_symbol))
+    if not test_strategy or test_strategy == 'pin_bar':
+        strategies_to_run.append(("PinBar", pin_bar_per_symbol))
+    if not test_strategy or test_strategy == 'prev_daily':
+        strategies_to_run.append(("PrevDaily", prev_daily_per_symbol))
+    if not test_strategy or test_strategy == 'corr_momentum':
+        strategies_to_run.append(("CorrMomentum", corr_per_symbol))
 
     print("  Стратегии на 1 символ:")
     for name, count in sorted(strategies_to_run, key=lambda x: x[1], reverse=True):

@@ -585,6 +585,42 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                         strat_dict['p_entry'] = float(p[1:])
                     elif p.startswith('x'):
                         strat_dict['p_exit'] = float(p[1:])
+            # VWAP Reversion-specific params
+            elif stype == 'vwap':
+                k = param  # "vol20_std2.0"
+                for p in k.split('_'):
+                    if p.startswith('vol'):
+                        strat_dict['vol_period'] = int(p[3:])
+                    elif p.startswith('std'):
+                        strat_dict['std_mult'] = float(p[3:])
+            # Momentum Breakout-specific params
+            elif stype == 'momentum':
+                k = param  # "per20_th0.05"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['momentum_period'] = int(p[3:])
+                    elif p.startswith('th'):
+                        strat_dict['threshold'] = float(p[2:])
+            # Pin Bar Reversal-specific params
+            elif stype == 'pin_bar':
+                k = param  # "br0.3"
+                for p in k.split('_'):
+                    if p.startswith('br'):
+                        strat_dict['body_ratio'] = float(p[2:])
+            # Prev Daily Candle Direction-specific params
+            elif stype == 'prev_daily':
+                k = param  # "hb12"
+                for p in k.split('_'):
+                    if p.startswith('hb'):
+                        strat_dict['hold_bars'] = int(p[2:])
+            # Rolling Correlation Momentum-specific params
+            elif stype == 'corr_momentum':
+                k = param  # "win20_th0.5"
+                for p in k.split('_'):
+                    if p.startswith('win'):
+                        strat_dict['window'] = int(p[3:])
+                    elif p.startswith('th'):
+                        strat_dict['corr_threshold'] = float(p[2:])
             active_strategies[key] = strat_dict
             existing_magics.add(magic)
             # ── Регистрируем новую стратегию ──
@@ -881,6 +917,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          calc_bayesian_trend_fn=None, check_exit_bayesian_fn=None, check_entry_bayesian_fn=None,
                          calc_kurtosis_fn=None, check_exit_kurtosis_fn=None, check_entry_kurtosis_fn=None,
                          calc_chi_square_fn=None, check_exit_chi_square_fn=None, check_entry_chi_square_fn=None,
+                         calc_vwap_fn=None, check_exit_vwap_fn=None, check_entry_vwap_fn=None,
+                         calc_momentum_fn=None, check_exit_momentum_fn=None, check_entry_momentum_fn=None,
+                         calc_pin_bar_fn=None, check_exit_pin_bar_fn=None, check_entry_pin_bar_fn=None,
+                         calc_prev_daily_fn=None, check_exit_prev_daily_fn=None, check_entry_prev_daily_fn=None,
+                         calc_corr_fn=None, check_exit_corr_fn=None, check_entry_corr_fn=None,
                          risk_cfg=None):
     """Проверяет сигналы для активных стратегий на закрытом баре.
     
@@ -1130,6 +1171,46 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             lambda v, s, d: check_exit_chi_square_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down'], d),
             lambda v, s: check_entry_chi_square_fn(v['prev_up'], v['prev_down'], v['curr_up'], v['curr_down']),
             lambda s: f"{s['symbol']}, ChiSq",
+        ),
+        'vwap': _spec(
+            (lambda df, s: calc_vwap_fn(df, s.get('vol_period', 20), s.get('std_mult', 2.0))) if calc_vwap_fn is not None else None,
+            "VWAP — модуль не передан", 2,
+            lambda df: {'prev': df['vwap_signal'].iloc[-2], 'curr': df['vwap_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_vwap_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_vwap_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, VWAP",
+        ),
+        'momentum': _spec(
+            (lambda df, s: calc_momentum_fn(df, s.get('momentum_period', 20), s.get('threshold', 0.05))) if calc_momentum_fn is not None else None,
+            "Momentum — модуль не передан", 2,
+            lambda df: {'prev': df['momentum_signal'].iloc[-2], 'curr': df['momentum_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_momentum_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_momentum_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, Momentum",
+        ),
+        'pin_bar': _spec(
+            (lambda df, s: calc_pin_bar_fn(df, s.get('body_ratio', 0.3), s.get('confirmation', True))) if calc_pin_bar_fn is not None else None,
+            "PinBar — модуль не передан", 2,
+            lambda df: {'prev': df['pin_bar_signal'].iloc[-2], 'curr': df['pin_bar_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_pin_bar_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_pin_bar_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, PinBar",
+        ),
+        'prev_daily': _spec(
+            (lambda df, s: calc_prev_daily_fn(df, s.get('hold_bars', 12))) if calc_prev_daily_fn is not None else None,
+            "PrevDaily — модуль не передан", 2,
+            lambda df: {'prev': df['daily_signal'].iloc[-2], 'curr': df['daily_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_prev_daily_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_prev_daily_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, PrevDaily",
+        ),
+        'corr_momentum': _spec(
+            (lambda df, s: calc_corr_fn(df, s.get('window', 20), s.get('corr_threshold', 0.5))) if calc_corr_fn is not None else None,
+            "CorrMomentum — модуль не передан", 2,
+            lambda df: {'prev': df['corr_signal'].iloc[-2], 'curr': df['corr_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_corr_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_corr_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, CorrMomentum",
         ),
     }
 

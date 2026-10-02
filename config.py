@@ -136,6 +136,24 @@ CHISQ_ENTRY_RANGE = (0.03, 0.07, 0.02)
 CHISQ_EXIT_RANGE = (0.15, 0.25, 0.05)
 CHISQ_VOL_PERIOD_RANGE = (15, 25, 5)
 
+# VWAP Reversion
+VWAP_VOL_PERIOD_RANGE = (15, 25, 5)
+VWAP_STD_MULT_RANGE = (1.5, 2.5, 0.5)
+
+# Momentum Breakout
+MOMENTUM_PERIOD_RANGE = (15, 25, 5)
+MOMENTUM_THRESHOLD_RANGE = (0.03, 0.07, 0.01)
+
+# Pin Bar Reversal
+PIN_BAR_BODY_RATIO_RANGE = (0.2, 0.4, 0.1)
+
+# Prev Daily Candle Direction
+PREV_DAILY_HOLD_BARS_RANGE = (6, 18, 6)
+
+# Rolling Correlation Momentum
+CORR_WINDOW_RANGE = (15, 25, 5)
+CORR_THRESHOLD_RANGE = (0.3, 0.7, 0.1)
+
 
 # ═══════════════ DATACLASS-КОНТЕЙНЕРЫ ═══════════════
 @dataclass(frozen=True)
@@ -232,6 +250,19 @@ class StrategyParams:
     chisq_entry_list: Tuple[float, ...]
     chisq_exit_list: Tuple[float, ...]
     chisq_vol_period_list: Tuple[int, ...]
+    # VWAP Reversion
+    vwap_vol_period_list: Tuple[int, ...]
+    vwap_std_mult_list: Tuple[float, ...]
+    # Momentum Breakout
+    momentum_period_list: Tuple[int, ...]
+    momentum_threshold_list: Tuple[float, ...]
+    # Pin Bar Reversal
+    pin_bar_body_ratio_list: Tuple[float, ...]
+    # Prev Daily Candle Direction
+    prev_daily_hold_bars_list: Tuple[int, ...]
+    # Rolling Correlation Momentum
+    corr_window_list: Tuple[int, ...]
+    corr_threshold_list: Tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -245,7 +276,7 @@ class RiskParams:
     quota_recalc_interval_sec: int = 300
     min_sl_distance_points: int = 10
     max_sl_distance_points: int = 5000
-    max_risk_pct: float = 0.05
+    max_risk_pct: float = 0.2
     min_lot: float = 0.01
     min_score: float = 1.0
 
@@ -265,6 +296,37 @@ class BacktestConfig:
     connection_warn_every_sec: int = 600
     journal_save_every_sec: int = 300
     magic_base: int = 770000
+
+
+@dataclass(frozen=True)
+class TrailParams:
+    """Параметры трейлинг-стопа (ATR chandelier, модуль trail_manager.py).
+
+    enabled=False — трейл выключен: SL остаётся как задан стратегией.
+    Дистанция трейла = ATR(D1, atr_period) * atr_multiplier.
+    """
+    enabled: bool = True
+    atr_period: int = 14
+    atr_multiplier: float = 1.0
+    check_interval_sec: int = 60
+    min_move_points: int = 10  # не двигать SL, если выигрыш меньше (защита от спама)
+
+
+@dataclass(frozen=True)
+class SteeringParams:
+    """Параметры «штурвала» — плавного перераспределения квот (steering_wheel.py).
+
+    Считается на основе РЕАЛЬНЫХ сделок из журнала (последние n_last_trades),
+    вызывается в конце ночного пересчёта. Флаг enabled=False — квоты не трогаем.
+    """
+    enabled: bool = False
+    alpha: float = 0.05       # очень плавная EMA-корректировка квот
+    n_last_trades: int = 10   # окно: последние N сделок на стратегию
+    min_q: float = 0.05       # минимум доли стратегии
+    max_q: float = 0.35       # максимум доли одной стратегии
+    min_trades: int = 10      # нужное число сделок для участия
+    max_dd: float = 0.15      # предел просадки (15%)
+    quotas_file: str = 'steering_quotas.json'
 
 
 # ═══════════════ ФАБРИКА ПО УМОЛЧАНИЮ ═══════════════
@@ -362,6 +424,19 @@ def build_default_strategy_params() -> StrategyParams:
         chisq_entry_list=float_range(*CHISQ_ENTRY_RANGE),
         chisq_exit_list=float_range(*CHISQ_EXIT_RANGE),
         chisq_vol_period_list=int_range(*CHISQ_VOL_PERIOD_RANGE),
+        # VWAP Reversion
+        vwap_vol_period_list=int_range(*VWAP_VOL_PERIOD_RANGE),
+        vwap_std_mult_list=float_range(*VWAP_STD_MULT_RANGE),
+        # Momentum Breakout
+        momentum_period_list=int_range(*MOMENTUM_PERIOD_RANGE),
+        momentum_threshold_list=float_range(*MOMENTUM_THRESHOLD_RANGE),
+        # Pin Bar Reversal
+        pin_bar_body_ratio_list=float_range(*PIN_BAR_BODY_RATIO_RANGE),
+        # Prev Daily Candle Direction
+        prev_daily_hold_bars_list=int_range(*PREV_DAILY_HOLD_BARS_RANGE),
+        # Rolling Correlation Momentum
+        corr_window_list=int_range(*CORR_WINDOW_RANGE),
+        corr_threshold_list=float_range(*CORR_THRESHOLD_RANGE),
     )
 
 
@@ -372,6 +447,8 @@ def build_default_configs() -> "AppContext":
         strategy_params=build_default_strategy_params(),
         risk_params=RiskParams(),
         backtest_config=BacktestConfig(),
+        trail_params=TrailParams(),
+        steering_params=SteeringParams(),
     )
 
 
@@ -382,3 +459,5 @@ class AppContext:
     strategy_params: StrategyParams
     risk_params: RiskParams
     backtest_config: BacktestConfig
+    trail_params: TrailParams
+    steering_params: SteeringParams
