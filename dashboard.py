@@ -1174,7 +1174,7 @@ with tab_steering:
             # ПРАВКА №2: убран target_quota, которого не существует
             df_display = df_sw[['name', 'pnl', 'trades', 'vol', 'drawdown',
                                 'current_quota', 'new_quota', 'delta']].copy()
-            df_display.columns = ['Strategy', 'P&L', 'Trades', 'Vol', 'Max DD',
+            df_display.columns = ['Strategy', 'P&L', 'Trades', 'Vol', 'DD/PnL',
                                  'Current Q', 'New Q', 'Δ']
             for col in ['Current Q', 'New Q', 'Δ']:
                 df_display[col] = (df_display[col] * 100).round(2)
@@ -1183,7 +1183,7 @@ with tab_steering:
             st.caption(
                 "Зелёные — категории (символ + семейство), получающие больше квоты. "
                 "Красные — теряющие долю (α из config.py). "
-                f"Режим: min_trades={steering_cfg.min_trades}, max_dd≤{steering_cfg.max_dd}, скоринг={steering_cfg.score_mode} ('pnl' — прибыльные растут, как P&L на вкладке Strategies). "
+                f"Режим: min_trades={steering_cfg.min_trades}, скоринг={steering_cfg.score_mode} ('pnl' — вес по прибыли, max_dd не применяется). "
                 "Категории без сделок сохраняют текущую квоту (EMA к базовой доле). "
                 "enabled=False — лоты не меняются, расчёт индикативный."
             )

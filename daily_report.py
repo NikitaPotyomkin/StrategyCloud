@@ -20,6 +20,8 @@ import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
 
+from config import RiskParams
+
 
 def _reports_dir():
     """Путь к папке отчётов."""
@@ -424,7 +426,7 @@ def get_dashboard_data(days_back=30):
 
         balance = acc.balance
         equity = acc.equity
-        quota = balance * 0.05  # MAX_RISK_PCT = 0.05
+        quota = balance *  RiskParams.max_risk_pct  # MAX_RISK_PCT = 0.05
 
         # 3. История сделок — от max(1 сентября 2026, today - days_back)
         date_to = datetime.datetime.now() + datetime.timedelta(hours=6)  # запас: часы хоста могут отставать от сервера UTC+3

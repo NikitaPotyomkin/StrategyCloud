@@ -37,7 +37,10 @@ def calculate_steering_wheel_quotas(
                score = max(pnl, 0), нормализация к сумме 1. Убыточные получают
                score=0 и плавно сползают к полу min_q через EMA. Картина совпадает
                с вкладкой Strategies (P&L by Family): кто выигрывает — тот растёт.
-      'sharpe' — старое поведение: score = pnl / (vol + eps).
+               Фильтр max_dd в этом режиме НЕ применяется (просадка в рублях
+               не имеет смысла как порог).
+      'sharpe' — риск-скорректированный вес: score = pnl / (vol + eps).
+               Здесь фильтр max_dd работает (drawdown считается долей от PnL).
 
     Устойчивость перераспределения:
       * пол min_q автоматически ограничивается средней долей (1/N) — иначе
@@ -46,14 +49,20 @@ def calculate_steering_wheel_quotas(
         квоты не уходят в отрицательные значения;
       * итоговая сумма всегда равна 1.0 (с точностью округления).
     """
-    # 1. Фильтр только для расчёта СКОРА (для скоринга берем только надежные)
-    valid_strategies = [
-        s for s in strategies_data
-        if s.get("trades", 0) >= min_trades
-           and s.get("drawdown", 1.0) <= max_dd
-           and s.get("pnl") is not None
-           and s.get("vol") is not None
-    ]
+    # 1. Фильтр только для расчёта СКОРА (для скоринга берем только надежные).
+    #    max_dd применяется ТОЛЬКО в режиме 'sharpe': в 'pnl' фильтр по просадке
+    #    в рублях бессмысленен — любая серия убытков дороже max_dd (0.15 руб.)
+    #    выбивает категорию, score_map пустеет, и все квоты сползаются к равным
+    #    долям: лидеры теряют, аутсайдеры растут (ровно обратный желаемому).
+    valid_strategies = []
+    for s in strategies_data:
+        if s.get("trades", 0) < min_trades:
+            continue
+        if s.get("pnl") is None or s.get("vol") is None:
+            continue
+        if score_mode == 'sharpe' and s.get("drawdown", 1.0) > max_dd:
+            continue
+        valid_strategies.append(s)
 
     # 2. Скоринг категорий: id -> нормализованный вес (только для валидных)
     score_map = {}
@@ -73,6 +82,8 @@ def calculate_steering_wheel_quotas(
 
         total_score = sum(score for _, score in scores)
         if total_score > 0:
+            # Убыточные попадают в score_map со значением 0.0 — их цель = 0,
+            # они НЕ получают base_share и плавно уходят вниз к полу.
             score_map = {sid: score / total_score for sid, score in scores}
 
     # 3. Расчет новых квот для ВСЕХ категорий (включая невалидные).
@@ -144,6 +155,8 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None):
 
     Каждая метрика: id = f"{symbol}_{family}", label = 'EUR - rf',
     family, symbol, pnl, vol, trades, drawdown.
+    drawdown — максимальная просадка серии как ДОЛЯ от модуля PnL
+    (0.15 = 15%), чтобы порог max_dd имел смысл в режиме 'sharpe'.
     """
     if journal_df is None or journal_df.empty:
         return []
@@ -191,15 +204,16 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None):
         # Защита от std на 1 сделке
         vol = float(profits.std(ddof=0)) if trades > 1 else 0.0
 
-        # Просадка
+        # Просадка как ДОЛЯ от модуля PnL (в рублях порог max_dd не имеет смысла)
         cum = profits.cumsum()
         if cum.empty:
             drawdown = 0.0
         else:
             peak = cum.cummax()
-            drawdown = float((peak - cum).max())
-            if drawdown < 0:
-                drawdown = 0.0
+            dd_abs = float((peak - cum).max())
+            if dd_abs < 0:
+                dd_abs = 0.0
+            drawdown = dd_abs / max(1.0, abs(pnl))
 
         metrics.append({
             'id': f"{symbol}_{fam}",
