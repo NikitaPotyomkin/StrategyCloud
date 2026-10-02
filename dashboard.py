@@ -980,19 +980,26 @@ with tab_steering:
 
     from wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
 
+    from config import SteeringParams  # ЕДИНЫЙ источник параметров штурвала (config.py)
+    steering_cfg = SteeringParams()
+
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         # ── Адаптер: trades_df → формат журнала ──
         df_src = data['trades_df'].copy().reset_index(drop=True)
         if 'profit' in df_src.columns and 'profit_net' in df_src.columns:
             df_src = df_src.drop(columns=['profit'])
         df_src = df_src.rename(columns={'profit_net': 'profit'})
+        # Считаем ТОЛЬКО закрывающие сделки (entry='out') — входящие несут profit=0
+        # и удваивают счёт, размазывая реальный PnL по группам
+        if 'entry' in df_src.columns:
+            df_src = df_src[df_src['entry'] == 'out']
         if 'exit_time' not in df_src.columns and 'timestamp' in df_src.columns:
             df_src['exit_time'] = df_src['timestamp']
         df_src['symbol'] = df_src['symbol'].astype(str)
         df_src['param_key'] = df_src['param_key'].astype(str)
 
         # ── Боевые функции ──
-        strategies_data = build_metrics_from_journal(df_src, n_last=10)
+        strategies_data = build_metrics_from_journal(df_src, n_last=steering_cfg.n_last_trades)
 
         if not strategies_data:
             st.info("Нет сделок в журнале для расчёта метрик.")
@@ -1014,15 +1021,15 @@ with tab_steering:
                 n = len(strategies_data)
                 current_quotas = {s['id']: 1.0 / n for s in strategies_data}
 
-            # ПРАВКА №3: min_trades=5 для стабильной оценки (не 1 и не 10)
+            # ПРАВКА №3: min_trades=3 — только закрывающие сделки, журнал тонкий
             new_quotas = calculate_steering_wheel_quotas(
                 strategies_data,
                 current_quotas,
-                alpha=0.2,
-                min_q=0.05,
-                max_q=0.35,
-                min_trades=5,   # ← 5 сделок для стабильной оценки, не 1 и не 10
-                max_dd=0.15
+                alpha=steering_cfg.alpha,
+                min_q=steering_cfg.min_q,
+                max_q=steering_cfg.max_q,
+                min_trades=steering_cfg.min_trades,   # из config.py (сейчас 10 — журнал тонкий, дельта пуста до накопления)
+                max_dd=steering_cfg.max_dd,
             )
 
             # Сборка DataFrame
@@ -1034,6 +1041,8 @@ with tab_steering:
             df_sw = df_sw.fillna(0.0)
             df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
             df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
+            n_delta = int((df_sw['delta'].abs() > 1e-4).sum())
+            st.caption(f"Стратегий со сделками: {len(df_sw)} | с Δ ≠ 0: {n_delta} | параметры из config.SteeringParams (α={steering_cfg.alpha}, мин.сделок={steering_cfg.min_trades}, пол={steering_cfg.min_q}, потолок={steering_cfg.max_q})")
 
             # ── Цвета ──
             def quota_color(row):
@@ -1125,7 +1134,7 @@ with tab_steering:
 
             st.caption(
                 "Зелёные — стратегии, получающие больше квоты. "
-                "Красные — теряющие долю. alpha=0.2. "
+                "Красные — теряющие долю (α из config.py). "
                 "Режим: min_trades=5 для скоринга, max_dd≤0.15. "
                 "Для стратегий с 1 сделкой: score = clipped(pnl), не pnl/vol. "
                 "Фильтр: max_dd ≤ 0.15, pnl > 0."
