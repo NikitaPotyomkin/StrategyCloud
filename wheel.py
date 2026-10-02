@@ -16,81 +16,78 @@ def category_label(symbol: str, family: str) -> str:
     """Имя категории «символ + семейство»: 'EUR - parabolic'."""
     return f"{_ccy_base(symbol)} - {family}"
 
-
 def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cfg):
     """
     Расчёт квот с усилением лидеров (Power Law).
+    Стратегии без сделок сохраняют текущую долю (консервативный режим).
+    Финальная нормализация гарантирует сумму = 1.0.
     """
-    # Безопасное получение параметров
     gamma = steering_cfg.get('gamma', 1.5)
     min_q = steering_cfg.get('min_q', 0.01)
     max_q = steering_cfg.get('max_q', 0.5)
     alpha = steering_cfg.get('alpha', 0.3)
-
-    # ИСПРАВЛЕНО: безопасное получение режима через .get()
     score_mode = steering_cfg.get('score_mode', 'pnl')
 
-    scores =[]
-
-    # 1. Считаем сырые баллы с усилением
+    # ── 1. Сырые баллы с усилением Power Law ──
+    scores = []
     for s in strategies_data:
-        # Защита от отсутствия данных
         if not isinstance(s, dict):
             continue
 
-        pnl_raw = s.get("pnl", 0)
-        if pnl_raw is None:
-            pnl_raw = 0.0
+        sid = s.get("id")
+        if sid is None:
+            continue
+
+        pnl_raw = s.get("pnl", 0) or 0.0
 
         if score_mode == 'sharpe':
-            vol = s.get("vol", 0)
-            # Защита от деления на ноль и бесконечного Sharpe на одной сделке
+            vol = s.get("vol", 0) or 0.0
             if vol <= 0:
-                # Умеренный вес вместо бесконечности
                 score = pnl_raw * 10.0
             else:
                 score = pnl_raw / vol
         else:
             score = max(float(pnl_raw), 0.0)
 
-        # Применяем "Power Law": лучшие получают непропорционально много
         if score > 0:
             score = score ** gamma
 
-        # Защита от отсутствия ID
-        sid = s.get("id")
-        if sid is not None:
-            scores.append((sid, score))
+        scores.append((sid, score))
 
-    # 2. Нормализуем в доли
     total_score = sum(sc for _, sc in scores)
 
-    # Если все стратегии в минусе или нет данных — возвращаем текущие квоты
-    if total_score <= 0 or len(scores) == 0:
+    # Все в минусе или нет данных — возвращаем текущие квоты как есть
+    if total_score <= 0 or not scores:
         return current_quotas
 
     target_weights = {sid: sc / total_score for sid, sc in scores}
 
-    # 3. Применяем EMA и ограничения (Floor/Ceiling)
+    # ── 2. EMA + Floor/Ceiling для стратегий со сделками ──
     new_quotas = {}
-
-    # Обрабатываем только активные стратегии (те, что есть в scores)
     for sid, target in target_weights.items():
         current = current_quotas.get(sid, 0.0)
-
-        # Плавный переход к цели (EMA)
         raw_new = alpha * target + (1.0 - alpha) * current
+        new_quotas[sid] = max(min_q, min(max_q, raw_new))
 
-        # Ограничиваем снизу (min_q) и сверху (max_q)
-        final_new = max(min_q, min(max_q, raw_new))
+    # ── 3. Стратегии БЕЗ сделок — сохраняем текущую долю ──
+    # (консервативный режим: не обнуляем, а оставляем как было)
+    scored_ids = set(target_weights.keys())
+    base_share = 1.0 / len(current_quotas) if current_quotas else 0.0
+    for sid in current_quotas:
+        if sid not in scored_ids:
+            new_quotas[sid] = current_quotas[sid]
 
-        new_quotas[sid] = final_new
-
-    # Стратегии, которые не торговали сегодня (нет в scores),
-    # НЕ получают min_q автоматически. Их доля перераспределяется лидерам.
-    # Это ключевой момент для агрессивного роста EUR-rf.
+    # ── 4. Финальная нормализация к 1.0 ──
+    total = sum(new_quotas.values())
+    if total > 0:
+        new_quotas = {k: v / total for k, v in new_quotas.items()}
+    else:
+        n = len(new_quotas)
+        if n > 0:
+            new_quotas = {k: 1.0 / n for k in new_quotas}
 
     return new_quotas
+
 
 
 def build_metrics_from_journal(journal_df, n_last=10, family_map=None, min_trades_filter=3):

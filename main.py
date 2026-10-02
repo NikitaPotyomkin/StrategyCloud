@@ -485,7 +485,8 @@ if __name__ == '__main__':
                                     fam_map[f"{_row.get('symbol', '')}_{_row.get('param_key', '')}"] = \
                                         _row.get('type', 'unknown')
                         metrics = build_metrics_from_journal(
-                            journal_df, n_last=steering_cfg.n_last_trades, family_map=fam_map)
+                            journal_df, n_last=steering_cfg.n_last_trades,
+                            family_map=fam_map, min_trades_filter=steering_cfg.min_trades)
                         if metrics:
                             quotas_path = os.path.join(JOURNAL_DIR, steering_cfg.quotas_file)
                             prev_quotas = {}
@@ -493,14 +494,18 @@ if __name__ == '__main__':
                                 with open(quotas_path, 'r', encoding='utf-8') as f:
                                     prev_quotas = json.load(f)
                             new_quotas = calculate_steering_wheel_quotas(
-                                metrics, prev_quotas,
-                                alpha=steering_cfg.alpha,
-                                min_q=steering_cfg.min_q,
-                                max_q=steering_cfg.max_q,
-                                min_trades=steering_cfg.min_trades,
-                                max_dd=steering_cfg.max_dd,
-                                score_mode=steering_cfg.score_mode,
+                                metrics,
+                                prev_quotas,
+                                {
+                                    'alpha': steering_cfg.alpha,
+                                    'min_q': steering_cfg.min_q,
+                                    'max_q': steering_cfg.max_q,
+                                    'score_mode': steering_cfg.score_mode,
+                                    'gamma': getattr(steering_cfg, 'gamma', 1.5),
+                                    # если gamma ещё нет в cfg — подставим дефолт
+                                }
                             )
+
                             with open(quotas_path, 'w', encoding='utf-8') as f:
                                 json.dump(new_quotas, f, ensure_ascii=False, indent=2)
                             # Плавная корректировка лотов активных стратегий без открытых позиций

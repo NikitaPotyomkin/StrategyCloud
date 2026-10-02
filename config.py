@@ -320,11 +320,13 @@ class SteeringParams:
     вызывается в конце ночного пересчёта. Флаг enabled=False — квоты не трогаем.
     """
     enabled: bool = False
-    alpha: float = 0.05       # очень плавная EMA-корректировка квот
-    n_last_trades: int = 10   # окно: последние N сделок на стратегию
-    min_q: float = 0.05       # минимум доли стратегии
-    max_q: float = 0.35       # максимум доли одной стратегии
-    min_trades: int = 2      # нужное число сделок для участия
+    alpha = 0.3
+    min_q = 0.005       # снижаем пол
+    max_q = 0.5         # поднимаем потолок
+    score_mode = 'pnl'
+    gamma = 1.5          # <-- НОВЫЙ ПАРАМЕТР: усиление лидеров
+    n_last_trades = 10
+    min_trades = 3      # <-- подними с 2 до 3 (для фильтра шума)
     max_dd: float = 0.15      # предел просадки (15%)
     score_mode: str = 'pnl'   # 'pnl' — вес по прибыли (как вкладка Strategies); 'sharpe' — pnl/vol
     quotas_file: str = 'steering_quotas.json'

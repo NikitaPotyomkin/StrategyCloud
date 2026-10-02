@@ -1013,7 +1013,8 @@ with tab_steering:
         df_src['param_key'] = df_src['param_key'].astype(str)
 
         # ── Боевые функции ──
-        strategies_data = build_metrics_from_journal(df_src, n_last=steering_cfg.n_last_trades)
+        strategies_data = build_metrics_from_journal(df_src, n_last=steering_cfg.n_last_trades,
+                                                  min_trades_filter=steering_cfg.min_trades)
 
         if not strategies_data:
             st.info("Нет сделок в журнале для расчёта метрик.")
@@ -1042,15 +1043,17 @@ with tab_steering:
                 current_quotas = {s['id']: 1.0 / n for s in strategies_data}
 
             # min_trades для скоринга берётся из config.SteeringParams (сейчас 2)
+
             new_quotas = calculate_steering_wheel_quotas(
                 strategies_data,
                 current_quotas,
-                alpha=steering_cfg.alpha,
-                min_q=steering_cfg.min_q,
-                max_q=steering_cfg.max_q,
-                min_trades=steering_cfg.min_trades,   # из config.py (сейчас 2 — минимум, чтобы wheel рисовался на тонком журнале)
-                max_dd=steering_cfg.max_dd,
-                score_mode=steering_cfg.score_mode,   # 'pnl' — вес по прибыли, как вкладка Strategies
+                {
+                    'alpha': steering_cfg.alpha,
+                    'min_q': steering_cfg.min_q,
+                    'max_q': steering_cfg.max_q,
+                    'score_mode': steering_cfg.score_mode,
+                    'gamma': getattr(steering_cfg, 'gamma', 1.5),
+                }
             )
 
             # Сборка DataFrame по ВСЕМ категориям (активные + сделковые) — «символ + семейство»
@@ -1076,13 +1079,19 @@ with tab_steering:
                 })
             df_sw = pd.DataFrame(rows)
 
-            
-            
-            
-            
-            
-            
+            # ── НОРМАЛИЗАЦИЯ: приводим обе колонки к сумме = 1.0 ──
+            # Без этого Plotly pie chart пересчитывает проценты сам,
+            # и они не совпадают с таблицей.
+            sum_new = df_sw['new_quota'].sum()
+            sum_cur = df_sw['current_quota'].sum()
+            if sum_new > 0:
+                df_sw['new_quota'] = df_sw['new_quota'] / sum_new
+            if sum_cur > 0:
+                df_sw['current_quota'] = df_sw['current_quota'] / sum_cur
+
             df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
+            
+
             df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
             n_delta = int((df_sw['delta'].abs() > 1e-4).sum())
             st.caption(f"Категорий (символ+семейство): {len(df_sw)} | с Δ ≠ 0: {n_delta} | параметры из config.SteeringParams (α={steering_cfg.alpha}, мин.сделок={steering_cfg.min_trades}, пол={steering_cfg.min_q}, потолок={steering_cfg.max_q}, скоринг={steering_cfg.score_mode})")
