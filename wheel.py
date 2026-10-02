@@ -17,149 +17,90 @@ def category_label(symbol: str, family: str) -> str:
     return f"{_ccy_base(symbol)} - {family}"
 
 
-def calculate_steering_wheel_quotas(
-        strategies_data: List[Dict[str, Any]],
-        current_quotas: Dict[str, float],
-        alpha: float = 0.5,
-        min_q: float = 0.02,
-        max_q: float = 0.5,
-        min_trades: int = 10,
-        max_dd: float = 0.15,
-        score_mode: str = 'pnl',
-        eps: float = 0.01,
-) -> Dict[str, float]:
+def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cfg):
     """
-    Новые квоты ДЛЯ ВСЕХ категорий из current_quotas.
-    Категория = «символ + семейство» (id = f"{symbol}_{type}"), например 'EURUSDrfd_rf'.
-
-    score_mode:
-      'pnl'    (по умолчанию) — вес получают только ПРИБЫЛЬНЫЕ категории:
-               score = max(pnl, 0), нормализация к сумме 1. Убыточные получают
-               score=0 и плавно сползают к полу min_q через EMA. Картина совпадает
-               с вкладкой Strategies (P&L by Family): кто выигрывает — тот растёт.
-               Фильтр max_dd в этом режиме НЕ применяется (просадка в рублях
-               не имеет смысла как порог).
-      'sharpe' — риск-скорректированный вес: score = pnl / (vol + eps).
-               Здесь фильтр max_dd работает (drawdown считается долей от PnL).
-
-    Устойчивость перераспределения:
-      * пол min_q автоматически ограничивается средней долей (1/N) — иначе
-        при N*min_q > 1 квоты физически не могут суммироваться в 100%;
-      * у доноров никогда не отнимается больше, чем у них есть сверх пола —
-        квоты не уходят в отрицательные значения;
-      * итоговая сумма всегда равна 1.0 (с точностью округления).
+    Расчёт квот с усилением лидеров (Power Law).
     """
-    # 1. Фильтр только для расчёта СКОРА (для скоринга берем только надежные).
-    #    max_dd применяется ТОЛЬКО в режиме 'sharpe': в 'pnl' фильтр по просадке
-    #    в рублях бессмысленен — любая серия убытков дороже max_dd (0.15 руб.)
-    #    выбивает категорию, score_map пустеет, и все квоты сползаются к равным
-    #    долям: лидеры теряют, аутсайдеры растут (ровно обратный желаемому).
-    valid_strategies = []
+    # Безопасное получение параметров
+    gamma = steering_cfg.get('gamma', 1.5)
+    min_q = steering_cfg.get('min_q', 0.01)
+    max_q = steering_cfg.get('max_q', 0.5)
+    alpha = steering_cfg.get('alpha', 0.3)
+
+    # ИСПРАВЛЕНО: безопасное получение режима через .get()
+    score_mode = steering_cfg.get('score_mode', 'pnl')
+
+    scores =[]
+
+    # 1. Считаем сырые баллы с усилением
     for s in strategies_data:
-        if s.get("trades", 0) < min_trades:
+        # Защита от отсутствия данных
+        if not isinstance(s, dict):
             continue
-        if s.get("pnl") is None or s.get("vol") is None:
-            continue
-        if score_mode == 'sharpe' and s.get("drawdown", 1.0) > max_dd:
-            continue
-        valid_strategies.append(s)
 
-    # 2. Скоринг категорий: id -> нормализованный вес (только для валидных)
-    score_map = {}
-    if valid_strategies:
-        scores = []
-        for s in valid_strategies:
-            if score_mode == 'sharpe':
-                # Риск-скорректированный вес; для 1-2 сделок (vol=0) — просто pnl
-                if s["vol"] > 0:
-                    score = s["pnl"] / (s["vol"] + eps)
-                else:
-                    score = np.clip(s["pnl"], -1000, 10000)
+        pnl_raw = s.get("pnl", 0)
+        if pnl_raw is None:
+            pnl_raw = 0.0
+
+        if score_mode == 'sharpe':
+            vol = s.get("vol", 0)
+            # Защита от деления на ноль и бесконечного Sharpe на одной сделке
+            if vol <= 0:
+                # Умеренный вес вместо бесконечности
+                score = pnl_raw * 10.0
             else:
-                # 'pnl': вес только у прибыльных (как P&L by Family на Strategies)
-                score = max(float(s["pnl"]), 0.0)
-            scores.append((s["id"], score))
+                score = pnl_raw / vol
+        else:
+            score = max(float(pnl_raw), 0.0)
 
-        total_score = sum(score for _, score in scores)
-        if total_score > 0:
-            # Убыточные попадают в score_map со значением 0.0 — их цель = 0,
-            # они НЕ получают base_share и плавно уходят вниз к полу.
-            score_map = {sid: score / total_score for sid, score in scores}
+        # Применяем "Power Law": лучшие получают непропорционально много
+        if score > 0:
+            score = score ** gamma
 
-    # 3. Расчет новых квот для ВСЕХ категорий (включая невалидные).
-    #    Если текущих квот нет — выходим (нечего обновлять).
-    if not current_quotas:
-        return {}
+        # Защита от отсутствия ID
+        sid = s.get("id")
+        if sid is not None:
+            scores.append((sid, score))
 
-    n = len(current_quotas)
-    base_share = 1.0 / max(n, 1)
+    # 2. Нормализуем в доли
+    total_score = sum(sc for _, sc in scores)
 
+    # Если все стратегии в минусе или нет данных — возвращаем текущие квоты
+    if total_score <= 0 or len(scores) == 0:
+        return current_quotas
+
+    target_weights = {sid: sc / total_score for sid, sc in scores}
+
+    # 3. Применяем EMA и ограничения (Floor/Ceiling)
     new_quotas = {}
-    for sid, prev_q in current_quotas.items():
-        # Получаем целевой вес из скоринга, если категория валидна
-        target_weight = score_map.get(sid, base_share)
-        # Плавное обновление (EMA); квота не ниже нуля
-        new_q = alpha * target_weight + (1.0 - alpha) * max(prev_q, 0.0)
-        new_q = max(new_q, 0.0)
-        new_quotas[sid] = new_q
 
-    # 4. Применение ограничений min_q / max_q.
-    # Пол не может превышать среднюю долю (1/N) — иначе полы не влезают в 100%.
-    effective_min = min(min_q, base_share)
-    effective_max = max(max_q, effective_min)
+    # Обрабатываем только активные стратегии (те, что есть в scores)
+    for sid, target in target_weights.items():
+        current = current_quotas.get(sid, 0.0)
 
-    # Клип к [effective_min, effective_max]
-    clipped = {sid: min(max(q, effective_min), effective_max)
-               for sid, q in new_quotas.items()}
+        # Плавный переход к цели (EMA)
+        raw_new = alpha * target + (1.0 - alpha) * current
 
-    # Нормализация к сумме 1.0
-    total = sum(clipped.values())
-    if total <= 0:
-        # Аварийный фоллбэк: равные доли
-        return {sid: base_share for sid in current_quotas}
+        # Ограничиваем снизу (min_q) и сверху (max_q)
+        final_new = max(min_q, min(max_q, raw_new))
 
-    result = {sid: q / total for sid, q in clipped.items()}
+        new_quotas[sid] = final_new
 
-    # 5. Докрутка: поднимаем выпавших ниже пола, забирая у остальных строго
-    # в пределах их излишка над полом (квоты не уходят в минус).
-    for _ in range(20):
-        below = [sid for sid, q in result.items() if q < effective_min]
-        if not below:
-            break
-        deficit = sum(effective_min - result[sid] for sid in below)
-        above = [sid for sid, q in result.items() if q > effective_min]
-        avail = sum(result[sid] - effective_min for sid in above)
-        if avail <= 0:
-            break
-        take = min(deficit, avail)
-        for sid in below:
-            result[sid] = effective_min
-        for sid in above:
-            share = (result[sid] - effective_min) / avail
-            result[sid] -= take * share
+    # Стратегии, которые не торговали сегодня (нет в scores),
+    # НЕ получают min_q автоматически. Их доля перераспределяется лидерам.
+    # Это ключевой момент для агрессивного роста EUR-rf.
 
-    # 6. Финальная нормализация (гарантия суммы = 1.0)
-    total = sum(result.values())
-    if total > 0:
-        result = {k: v / total for k, v in result.items()}
-    return result
+    return new_quotas
 
 
-def build_metrics_from_journal(journal_df, n_last=10, family_map=None):
-    """Метрики по КАТЕГОРИЯМ «символ + семейство» (type из реестра).
-
-    Приоритет определения семейства:
-      1) колонка strategy_type в df (есть в trades_df из daily_report);
-      2) family_map: ключ f"{symbol}_{param_key}" -> type (для журнала main.py);
-      3) фоллбэк: семейством считается param_key (максимальная совместимость).
-
-    Каждая метрика: id = f"{symbol}_{family}", label = 'EUR - rf',
-    family, symbol, pnl, vol, trades, drawdown.
-    drawdown — максимальная просадка серии как ДОЛЯ от модуля PnL
-    (0.15 = 15%), чтобы порог max_dd имел смысл в режиме 'sharpe'.
+def build_metrics_from_journal(journal_df, n_last=10, family_map=None, min_trades_filter=3):
     """
+    min_trades_filter: минимальное кол-во сделок для попадания в штурвал.
+    """
+    # ИСПРАВЛЕНО: Всегда возвращаем список, даже если данных нет.
+    # Если вернуть None, calculate_steering_wheel_quotas упадет с ошибкой.
     if journal_df is None or journal_df.empty:
-        return []
+        return
 
     df = journal_df.copy()
     df = df.reset_index(drop=True)
@@ -167,12 +108,13 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None):
 
     required_cols = ['symbol', 'param_key', 'profit']
     if not all(col in df.columns for col in required_cols):
-        return []
+        return
 
     df = df[df['profit'].notna()]
     if df.empty:
-        return []
+        return
 
+        # ИСПРАВЛЕНО: Убран лишний отступ у этого блока кода
     # Семейство (type): 1) готовая колонка, 2) реестр, 3) фоллбэк на param_key
     if 'strategy_type' in df.columns:
         fam_col = 'strategy_type'
@@ -188,23 +130,22 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None):
     if 'exit_time' in df.columns:
         df = df.sort_values('exit_time')
     else:
-        # Если нет времени выхода, сортируем по индексу (предполагаем хронологию)
         df = df.sort_index()
 
-    metrics = []
+    metrics =[]
     for (symbol, fam), grp in df.groupby(['symbol', fam_col]):
         grp = grp.tail(n_last)
         profits = grp['profit'].astype(float)
         trades = int(len(profits))
 
-        if trades == 0:
+        # ФИЛЬТР: Игнорируем стратегии с малым количеством сделок
+        if trades < min_trades_filter:
             continue
 
         pnl = float(profits.sum())
-        # Защита от std на 1 сделке
         vol = float(profits.std(ddof=0)) if trades > 1 else 0.0
 
-        # Просадка как ДОЛЯ от модуля PnL (в рублях порог max_dd не имеет смысла)
+        # Просадка как ДОЛЯ от модуля PnL
         cum = profits.cumsum()
         if cum.empty:
             drawdown = 0.0
@@ -225,4 +166,5 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None):
             'trades': trades,
             'drawdown': drawdown,
         })
+
     return metrics
