@@ -156,19 +156,32 @@ class TrailManager:
         if extreme is None:
             return
 
+        # Минимальная дистанция SL от цены (stops/freeze level брокера)
+        sl_min_dist = 0.0
+        sym_info = mt5.symbol_info(sym)
+        if sym_info is not None and sym_info.point and sym_info.point > 0:
+            sl_level = max(sym_info.trade_stops_level, sym_info.trade_freeze_level, 0)
+            sl_min_dist = sl_level * sym_info.point
+
         # ── Новый SL ──
         if pos.type == mt5.POSITION_TYPE_BUY:
             new_sl = extreme - dist
             if pos.sl > 0 and new_sl <= pos.sl + self._min_move(sym):  # трейл только вверх
                 return
-            if new_sl >= bid:                                          # SL не может быть выше цены
+            new_sl = self._norm_price(sym, sym_info, new_sl)          # нормализация к шагу цены
+            if new_sl >= bid - sl_min_dist:                           # SL слишком близко к цене (stops/freeze)
                 return
+
         else:
             new_sl = extreme + dist
             if pos.sl > 0 and new_sl >= pos.sl - self._min_move(sym):  # трейл только вниз
                 return
-            if new_sl <= ask:                                          # SL не может быть ниже цены
+
+            new_sl = self._norm_price(sym, sym_info, new_sl)          # нормализация к шагу цены
+            if new_sl <= ask + sl_min_dist:                           # SL слишком близко к цене (stops/freeze)
                 return
+
+
 
         # ── Модификация SLTP (TP сохраняем) ──
         # Проверяем что новый SL отличается от текущего более чем на min_move
@@ -198,6 +211,13 @@ class TrailManager:
         if info is not None and info.point:
             point = info.point
         return self.cfg.min_move_points * point
+
+    @staticmethod
+    def _norm_price(symbol, sym_info, price):
+        """Округление цены к шагу инструмента (защита от суб-тиковых остатков)."""
+        if sym_info is None or not sym_info.point or sym_info.point <= 0:
+            return price
+        return round(price / sym_info.point) * sym_info.point
 
     def _warn(self, symbol, msg):
         if (symbol, msg) not in _WARNED:

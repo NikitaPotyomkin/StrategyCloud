@@ -324,7 +324,7 @@ class SteeringParams:
     n_last_trades: int = 10   # окно: последние N сделок на стратегию
     min_q: float = 0.05       # минимум доли стратегии
     max_q: float = 0.35       # максимум доли одной стратегии
-    min_trades: int = 10      # нужное число сделок для участия
+    min_trades: int = 2      # нужное число сделок для участия
     max_dd: float = 0.15      # предел просадки (15%)
     quotas_file: str = 'steering_quotas.json'
 
