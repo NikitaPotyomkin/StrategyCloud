@@ -990,9 +990,20 @@ with tab_steering:
             df_src = df_src.drop(columns=['profit'])
         df_src = df_src.rename(columns={'profit_net': 'profit'})
         # Считаем ТОЛЬКО закрывающие сделки (entry='out') — входящие несут profit=0
-        # и удваивают счёт, размазывая реальный PnL по группам
+        # и удваивают счёт, размазывая реальный PnL по группам.
+        # ВАЖНО: trades_df из daily_report уже агрегирован по position_id (строка =
+        # одна закрытая позиция), а entry там — ЧИСЛО (MT5 enum, DEAL_ENTRY_OUT=1),
+        # а не строка 'out'. Сравнение с 'out' давало всегда False → df пустой →
+        # wheel не рисовался. Ловим оба формата, чтобы адаптер был устойчивым.
         if 'entry' in df_src.columns:
-            df_src = df_src[df_src['entry'] == 'out']
+            def _is_closing(v):
+                if isinstance(v, str):
+                    return v.strip().lower() == 'out'
+                try:
+                    return int(v) == 1  # mt5.DEAL_ENTRY_OUT
+                except (TypeError, ValueError):
+                    return False
+            df_src = df_src[df_src['entry'].apply(_is_closing)]
         if 'exit_time' not in df_src.columns and 'timestamp' in df_src.columns:
             df_src['exit_time'] = df_src['timestamp']
         df_src['symbol'] = df_src['symbol'].astype(str)
@@ -1021,14 +1032,14 @@ with tab_steering:
                 n = len(strategies_data)
                 current_quotas = {s['id']: 1.0 / n for s in strategies_data}
 
-            # ПРАВКА №3: min_trades=3 — только закрывающие сделки, журнал тонкий
+            # min_trades для скоринга берётся из config.SteeringParams (сейчас 2)
             new_quotas = calculate_steering_wheel_quotas(
                 strategies_data,
                 current_quotas,
                 alpha=steering_cfg.alpha,
                 min_q=steering_cfg.min_q,
                 max_q=steering_cfg.max_q,
-                min_trades=steering_cfg.min_trades,   # из config.py (сейчас 10 — журнал тонкий, дельта пуста до накопления)
+                min_trades=steering_cfg.min_trades,   # из config.py (сейчас 2 — минимум, чтобы wheel рисовался на тонком журнале)
                 max_dd=steering_cfg.max_dd,
             )
 
@@ -1135,7 +1146,7 @@ with tab_steering:
             st.caption(
                 "Зелёные — стратегии, получающие больше квоты. "
                 "Красные — теряющие долю (α из config.py). "
-                "Режим: min_trades=5 для скоринга, max_dd≤0.15. "
+                f"Режим: min_trades={steering_cfg.min_trades} для скоринга, max_dd≤{steering_cfg.max_dd}. "
                 "Для стратегий с 1 сделкой: score = clipped(pnl), не pnl/vol. "
                 "Фильтр: max_dd ≤ 0.15, pnl > 0."
             )
