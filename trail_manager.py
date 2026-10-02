@@ -182,15 +182,14 @@ class TrailManager:
             "tp": pos.tp,
         }
 
-        #ниже принты закомменчены, чтобы избежать флуда
-        #result = mt5.order_send(request)
-        # if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-        #     side = 'LONG ' if pos.type == mt5.POSITION_TYPE_BUY else 'SHORT'
-        #     print(f"  [TRAIL] {sym} {side} ticket={pos.ticket}: "
-        #           f"SL {pos.sl:.5f} -> {new_sl:.5f} (ATR={atr:.5f})", flush=True)
-        # elif result is not None and result.retcode != mt5.TRADE_RETCODE_PLACED:
-        #     self._warn(sym, f"модификация SL ticket={pos.ticket} отклонена: "
-        #                     f"retcode={result.retcode} ({result.comment})")
+        result = mt5.order_send(request)
+        if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+            side = 'LONG ' if pos.type == mt5.POSITION_TYPE_BUY else 'SHORT'
+            print(f"  [TRAIL] {sym} {side} ticket={pos.ticket}: "
+                  f"SL {pos.sl:.5f} -> {new_sl:.5f} (ATR={atr:.5f})", flush=True)
+        elif result is not None and result.retcode != mt5.TRADE_RETCODE_PLACED:
+            self._warn(sym, f"модификация SL ticket={pos.ticket} отклонена: "
+                            f"retcode={result.retcode} ({result.comment})")
 
     def _min_move(self, symbol):
         """Минимальный сдвиг SL в пунктах (чтобы не спамить модификациями)."""

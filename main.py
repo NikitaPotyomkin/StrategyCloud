@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore')
 from functions import terminal_on, run_full_backtest, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports
 from trail_manager import TrailManager
-from steering_wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
+from wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots, check_integration_budget,
     check_daily_loss_limit, check_equity_stop, realtime_quota_recalc,

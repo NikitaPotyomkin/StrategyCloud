@@ -746,7 +746,7 @@ with tab_3d:
             marker=dict(size=sizes, color=colors_3d, line=dict(width=0.5, color=COL_PANEL),
                         opacity=0.85),
             text=df_3d['name'], textposition='top center',
-            textfont=dict(size=28, color=COL_MUTED),
+            textfont=dict(size=12, color=COL_MUTED),
             hovertemplate='<b>%{text}</b><br>PnL: %{x:,.1f}<br>Vol: %{y:,.1f}<br>Trades: %{z}<extra></extra>',
             name='',
         ))
@@ -971,17 +971,14 @@ with tab_surface:
 # ═══════════════════════════════════════════════════════════════
 #  STEERING WHEEL
 # ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
-#  STEERING WHEEL
-# ═══════════════════════════════════════════════════════════════
 with tab_steering:
     if not data:
         st.warning("No data.")
         st.stop()
 
-    st.markdown("### Steering Wheel — Quota Reallocation - (!!еще нет отбора по 10 сделкам, мин квота =1")
+    st.markdown("### Steering Wheel — Quota Reallocation")
 
-    from steering_wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
+    from wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
 
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         # ── Адаптер: trades_df → формат журнала ──
@@ -1017,14 +1014,14 @@ with tab_steering:
                 n = len(strategies_data)
                 current_quotas = {s['id']: 1.0 / n for s in strategies_data}
 
-            # ПРАВКА №3: min_trades=1 для индикативного режима
+            # ПРАВКА №3: min_trades=5 для стабильной оценки (не 1 и не 10)
             new_quotas = calculate_steering_wheel_quotas(
                 strategies_data,
                 current_quotas,
                 alpha=0.2,
                 min_q=0.05,
                 max_q=0.35,
-                min_trades=1,   # ← было 10, теперь считает с 1 сделки
+                min_trades=5,   # ← 5 сделок для стабильной оценки, не 1 и не 10
                 max_dd=0.15
             )
 
@@ -1129,7 +1126,8 @@ with tab_steering:
             st.caption(
                 "Зелёные — стратегии, получающие больше квоты. "
                 "Красные — теряющие долю. alpha=0.2. "
-                "Индикативный режим: расчёт с 1 сделки (min_trades=1). "
+                "Режим: min_trades=5 для скоринга, max_dd≤0.15. "
+                "Для стратегий с 1 сделкой: score = clipped(pnl), не pnl/vol. "
                 "Фильтр: max_dd ≤ 0.15, pnl > 0."
             )
 
