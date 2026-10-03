@@ -417,6 +417,8 @@ if __name__ == '__main__':
     write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
     print(f"\nЗапуск цикла. Ctrl+F2 для остановки.\n")
+    print("✅ Расчёты завершены. Запущен минимальный режим ожидания рынка.\n"
+          "   В будни: мониторинг сигналов. Выходные: полный пересчёт + ожидание открытия (Пн).\n")
 
     # ═══ ГЛАВНЫЙ ЦИКЛ ═══
     last_full_backtest_date = datetime.now().date()
@@ -441,6 +443,8 @@ if __name__ == '__main__':
             if now.date() != last_mode_check:
                 last_mode_check = now.date()
                 print(f"\n[{now}] Новый день")
+                if now.weekday() >= 5:  # Сб=5, Вс=6
+                    print("  ℹ Расчёты завершены. Ожидание открытия рынка (Пн) — минимальный режим.")
 
             # Ночной пересчёт: раз в сутки с 3:00 (будни — инкремент, выходные — ПОЛНЫЙ)
             # Будни — лайт (чекпойнты/инкремент); выходные — полный пересчёт
@@ -645,14 +649,14 @@ if __name__ == '__main__':
                     print(f"\n[{now}] ВНИМАНИЕ: тиков нет уже {int(idle_sec // 60)} мин — "
                           f"проверь терминал (отключение/рынок закрыт).", flush=True)
                     last_conn_warn_time = now
-                time.sleep(bt_cfg.poll_interval)
+                time.sleep(60 if is_weekend else bt_cfg.poll_interval)  # выходной — тиков нет, реже
                 continue
             last_ticks_time = now
 
             # Обновление баров
             any_finalized = False
             for sym in ticks:
-                if sym in symbol_data:
+                if is_weekend or sym not in symbol_data:  # выходной — бары не обновляем
                     bid, ask = ticks[sym]
                     try:
                         if update_symbol_bar(sym, bid, ask, now):
@@ -748,7 +752,7 @@ if __name__ == '__main__':
             #       f"активных {len(active_strategies)} | позиций {active_pos} | "
             #       f"{status_str} | ждём...", end='', flush=True)
 
-            time.sleep(bt_cfg.poll_interval)
+            time.sleep(60 if is_weekend else bt_cfg.poll_interval)  # выходной — тиков нет, реже
 
     except KeyboardInterrupt:
         print("\nОстановка по Ctrl+F2...")

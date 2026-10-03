@@ -51,9 +51,9 @@ def calc_pin_bar(df, body_ratio=0.3, confirmation=True):
                 next_high = df['high'].iloc[i + 1]
                 next_low = df['low'].iloc[i + 1]
                 
-                if detected_signal == 1 and next_close > next_high:
+                if detected_signal == 1 and next_close > high:
                     df.loc[df.index[i], 'pin_bar_signal'] = 1
-                elif detected_signal == -1 and next_close < next_low:
+                elif detected_signal == -1 and next_close < low:
                     df.loc[df.index[i], 'pin_bar_signal'] = -1
             else:
                 df.loc[df.index[i], 'pin_bar_signal'] = detected_signal
