@@ -992,10 +992,9 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
         'parabolic': _spec(
             lambda df, s: calc_parabolic_fn(df, s['param_key'], s.get('parabolic_max', 0.2)),
             None, 2,
-            lambda df: {'prev_sar': df['sar'].iloc[-2], 'curr_sar': df['sar'].iloc[-1],
-                        'prev_close': df['close'].iloc[-2], 'curr_close': df['close'].iloc[-1]},
-            lambda v, s, d: check_exit_parabolic_fn(v['prev_sar'], v['curr_sar'], v['prev_close'], v['curr_close'], d),
-            lambda v, s: check_entry_parabolic_fn(v['prev_sar'], v['curr_sar'], v['prev_close'], v['curr_close']),
+            lambda df: {'prev_trend': df['sar_trend'].iloc[-2], 'curr_trend': df['sar_trend'].iloc[-1]},
+            lambda v, s, d: check_exit_parabolic_fn(v['prev_trend'], v['curr_trend'], d),
+            lambda v, s: check_entry_parabolic_fn(v['prev_trend'], v['curr_trend']),
             lambda s: f"{s['symbol']}, Step={s['param_key']}, Max={s.get('parabolic_max', 0.2)}",
         ),
         'ma': _spec(

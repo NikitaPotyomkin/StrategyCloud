@@ -1650,9 +1650,18 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # Ночной прогон или force_recalc — всегда полный пересчёт.
     # Иначе: есть night_reset.json — используем чекпоинты, пересчёт не нужен.
     # Нет night_reset.json — первый запуск, полный пересчёт.
-    if is_night_run or force_recalc:
+    # 
+    # ЛОГИКА:
+    # force_recalc=True  → лайт в будни (force_full_recalc=False), полный на выходных (force_full_recalc=True)
+    # force_recalc=False → полный пересчёт НЕ ЗАПУСКАЕТСЯ НИКОГДА (только лайт-пересчёты в 3:00)
+    if not force_recalc:
+        # force_recalc=False — полный пересчёт отключён, только лайт
+        force_full_recalc = False
+    elif is_night_run:
+        # force_recalc=True + ночной прогон → полный пересчёт
         force_full_recalc = True
     else:
+        # Не ночной прогон — проверяем night_reset
         force_full_recalc = last_night_reset is None
 
     # ═══ МАРКЕР СТАРТА НОЧНОГО ПРОГОНА ═══

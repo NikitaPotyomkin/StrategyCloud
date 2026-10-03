@@ -418,6 +418,7 @@ if __name__ == '__main__':
     initial_equity = None
     daily_start_balance = None
     daily_start_date = None
+    first_run = True  # Флаг первого запуска — нужен для полного пересчёта
 
     try:
         while True:
@@ -429,30 +430,39 @@ if __name__ == '__main__':
                 print(f"\n[{now}] Новый день")
 
             # Ночной пересчёт: раз в сутки с 3:00
-            # Пт 3:00 — последний пересчёт перед выходными
-            # Сб 3:00 — если auto_weekend_recalc=True, был force_recalc в 00:00, теперь лайт
-            # Вс 3:00 — пропускаем (рынок закрыт)
-            # Пн 3:00 — новый пересчёт
-            is_weeknight = now.weekday() < 5  # Пн-Пт
-            is_saturday = now.weekday() == 5
+            # force_recalc=True  → лайт-пересчёт в будни + полный на выходных
+            # force_recalc=False → полный пересчёт НЕ ЗАПУСКАЕТСЯ НИКОГДА (только лайт в 3:00)
+            is_weekday = now.weekday() < 5  # Пн=0 ... Пт=4
+            is_weekend = now.weekday() >= 5  # Сб=5, Вс=6
             
-            if now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
+            # Полный пересчёт: ТОЛЬКО если force_recalc=True
+            # - В будни: только лайт-пересчёт в 3:00 (is_night_run=True, force_full_recalc=False)
+            # - На выходных: полный пересчёт в 3:00 (is_night_run=True, force_full_recalc=True)
+            should_run_backtest = False
+            if bt_cfg.force_recalc and now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
+                should_run_backtest = True
+            
+            if should_run_backtest:
                 
-                # Пропускаем Вс и Сб (рынок закрыт)
-                if is_saturday:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏸ Суббота — пересчёт пропущен (рынок закрыт)")
+                # Пропускаем выходные (рынок закрыт)
+                if is_weekend:
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏸ Выходной ({now.strftime('%A')}) — пересчёт пропущен (рынок закрыт)")
                     last_full_backtest_date = now.date()
                     continue
                 
-                print(f"\n[{now.strftime('%H:%M:%S')}] Ночной перерасчёт...")
+                # Определяем причину запуска
+                if first_run or (now.hour != 3):  # Первый запуск или не 3:00
+                    print(f"\n[{now.strftime('%H:%M:%S')}] 🔄 Полный пересчёт всех стратегий...")
+                else:
+                    print(f"\n[{now.strftime('%H:%M:%S')}] 🌙 Ночной перерасчёт...")
 
                 try:
                     _, all_results = run_full_backtest(
                         bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
                         test_strategy=None,
                         test_mode=False,
-                        force_recalc=False,
-                        is_night_run=False
+                        force_recalc=bt_cfg.force_recalc,
+                        is_night_run=True
                     )
                 except Exception as exc:
                     print(f"\n[WARN] Ночной перерасчёт не удался: {exc!r} — "
@@ -643,8 +653,8 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"\n[WARN] Ошибка трейлинг-стопа: {e!r}", flush=True)
 
-            # Проверка сигналов
-            if any_finalized:
+            # Проверка сигналов — ТОЛЬКО в будни (Пн-Пт), рынок закрыт Сб-Вс
+            if any_finalized and now.weekday() < 5:  # Пн=0 ... Пт=4
                 try:
                     check_active_signals(
                         now, active_strategies, symbol_data,
