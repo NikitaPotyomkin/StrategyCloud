@@ -325,16 +325,29 @@ if __name__ == '__main__':
     is_first_run = not os.path.exists(night_reset_path)
     manual_full = bool(bt_cfg.full_recalc_mode)   # ручной полный пересчёт при запуске
     
-    # ═══ АВТОМАТИЧЕСКИЙ ПЕРЕСЧЁТ ПОСЛЕ ЗАКРЫТИЯ РЫНКА (Сб 00:00) ═══
+    # ═══ АВТОМАТИЧЕСКИЙ ПОЛНЫЙ ПЕРЕСЧЁТ НА ВЫХОДНЫХ (Сб/Вс) ═══
     now = datetime.now()
-    if bt_cfg.auto_weekend_recalc:
-        # Проверяем, наступила ли суббота после пятницы
-        if now.weekday() == 5 and now.hour == 0:  # Суббота 00:00+
+    weekend_full_due = False
+    if bt_cfg.auto_weekend_recalc and now.weekday() >= 5:  # Сб=5, Вс=6 (рынок закрыт)
+        # Полный пересчёт, если сегодня ещё не выполнялся (по night_reset.json)
+        if not is_first_run:
+            try:
+                with open(night_reset_path, 'r', encoding='utf-8') as _f:
+                    _reset_ts = json.load(_f).get('timestamp', '')
+                if _reset_ts:
+                    weekend_full_due = datetime.fromisoformat(_reset_ts).date() < now.date()
+                else:
+                    # Не можем подтвердить, что сегодня уже считали — считаем заново
+                    weekend_full_due = True
+            except (OSError, ValueError, json.JSONDecodeError):
+                weekend_full_due = True
+        if is_first_run or weekend_full_due:
             FORCE_RECALC = True
-            print(f"  🌙 АВТОМАТИЧЕСКИЙ force_recalc после закрытия рынка ({now.strftime('%Y-%m-%d %H:%M')})")
-        elif now.weekday() == 5 and now.hour > 0:
-            # Суббота уже прошла полночь — force_recalc не нужен (уже был в 00:00)
-            pass
+            weekend_full_due = True
+            print(f"  🌙 ВЫХОДНОЙ ({now.strftime('%A')}) — автоматический ПОЛНЫЙ пересчёт ({now.strftime('%Y-%m-%d %H:%M')})")
+        
+            
+            
 
     if manual_full:
         print("  ⚙️  full_recalc_mode=True — РУЧНОЙ ПОЛНЫЙ ПЕРЕСЧЁТ всех стратегий")
@@ -348,13 +361,13 @@ if __name__ == '__main__':
             bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
             test_strategy=None,
             test_mode=False,
-            force_recalc=FORCE_RECALC,
+            force_recalc=FORCE_RECALC or manual_full or weekend_full_due,
             incremental=True,
-            is_night_run=is_first_run or manual_full
+            is_night_run=is_first_run or manual_full or weekend_full_due
         )
 
         # После первого прогона записываем night_reset.json
-        if is_first_run or manual_full:
+        if is_first_run or manual_full or weekend_full_due:
             _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results))
 
     except Exception as exc:
@@ -429,39 +442,39 @@ if __name__ == '__main__':
                 last_mode_check = now.date()
                 print(f"\n[{now}] Новый день")
 
-            # Ночной пересчёт: раз в сутки с 3:00
-            # force_recalc=True  → лайт-пересчёт в будни + полный на выходных
-            # force_recalc=False → полный пересчёт НЕ ЗАПУСКАЕТСЯ НИКОГДА (только лайт в 3:00)
+            # Ночной пересчёт: раз в сутки с 3:00 (будни — инкремент, выходные — ПОЛНЫЙ)
+            # Будни — лайт (чекпойнты/инкремент); выходные — полный пересчёт
+            # Выходной полный пересчёт управляется auto_weekend_recalc (True по умолчанию)
             is_weekday = now.weekday() < 5  # Пн=0 ... Пт=4
             is_weekend = now.weekday() >= 5  # Сб=5, Вс=6
             
-            # Полный пересчёт: ТОЛЬКО если force_recalc=True
-            # - В будни: только лайт-пересчёт в 3:00 (is_night_run=True, force_full_recalc=False)
-            # - На выходных: полный пересчёт в 3:00 (is_night_run=True, force_full_recalc=True)
+            # Ночной прогон: раз в день после 3:00, повторно в тот же день не запускается
+            # force_recalc=True (полный) ставится только на выходных; в будни — лайт
+            
             should_run_backtest = False
-            if bt_cfg.force_recalc and now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
+            if now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
                 should_run_backtest = True
             
             if should_run_backtest:
                 
-                # Пропускаем выходные (рынок закрыт)
-                if is_weekend:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏸ Выходной ({now.strftime('%A')}) — пересчёт пропущен (рынок закрыт)")
+                # auto_weekend_recalc=False — в выходной пересчёт не запускаем
+                if is_weekend and not bt_cfg.auto_weekend_recalc:
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏸ Выходной ({now.strftime('%A')}) — авто-пересчёт отключён (auto_weekend_recalc=False)")
                     last_full_backtest_date = now.date()
                     continue
                 
                 # Определяем причину запуска
-                if first_run or (now.hour != 3):  # Первый запуск или не 3:00
-                    print(f"\n[{now.strftime('%H:%M:%S')}] 🔄 Полный пересчёт всех стратегий...")
+                if is_weekday:
+                    print(f"\n[{now.strftime('%H:%M:%S')}] 🌙 Ночной лайт-пересчёт (инкремент по чекпойнтам)...")
                 else:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] 🌙 Ночной перерасчёт...")
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Выходной ({now.strftime('%A')}) — ПОЛНЫЙ пересчёт всех стратегий...")
 
                 try:
                     _, all_results = run_full_backtest(
                         bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
                         test_strategy=None,
                         test_mode=False,
-                        force_recalc=bt_cfg.force_recalc,
+                        force_recalc=is_weekend,  # полный на выходных, лайт в будни
                         is_night_run=True
                     )
                 except Exception as exc:

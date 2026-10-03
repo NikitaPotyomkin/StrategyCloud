@@ -289,8 +289,8 @@ class BacktestConfig:
     poll_interval: int = 5
     top_n: Optional[int] = 9999        # None = без ограничения
     force_recalc: bool = False
-    full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (выходной/когда удобно); False = только лёгкие пересчёты
-    auto_weekend_recalc: bool = True  # True = автоматический force_recalc в Сб 00:00 (после закрытия рынка); False = только ручной запуск
+    full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни лайт, выходные полный)
+    auto_weekend_recalc: bool = True  # True = автоматический ПОЛНЫЙ пересчёт в выходные (Сб/Вс); False = только ручной запуск
     night_backtest_hour: int = 3
     connection_timeout_sec: int = 300
     connection_warn_every_sec: int = 600
