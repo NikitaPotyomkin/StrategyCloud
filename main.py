@@ -174,7 +174,7 @@ def _write_night_reset(night_reset_path, start_time, symbols_count, results_coun
 
 # ═══ Утилита: маркер последнего ПОЛНОГО пересчёта (правило «не чаще, чем раз в N дней») ═══
 def _read_last_full_recalc(marker_path):
-    """Возвращает date последнего ПОЛНОГО пересчёта или None (файла нет / битый / ещё не считали)."""
+    """date последнего ПОЛНОГО пересчёта: из маркера, иначе фолбэк по night_reset.json / mtime чекпойнтов."""
     try:
         with open(marker_path, 'r', encoding='utf-8') as f:
             ts = json.load(f).get('last_full_recalc', '')
@@ -182,7 +182,25 @@ def _read_last_full_recalc(marker_path):
             return datetime.fromisoformat(ts).date()
     except (OSError, ValueError, json.JSONDecodeError):
         pass
-    return None
+    # Фолбэк (маркера ещё нет, напр. сразу после обновления): самая свежая дата из
+    # night_reset.json и mtime чекпойнтов — чтобы НЕ запускать лишний ПОЛНЫЙ пересчёт.
+    _dates = []
+    try:
+        with open(os.path.join(_checkpoint_dir(), 'night_reset.json'), 'r', encoding='utf-8') as _f2:
+            _ts2 = json.load(_f2).get('timestamp', '')
+        if _ts2:
+            _dates.append(datetime.fromisoformat(_ts2).date())
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    try:
+        _ck = _checkpoint_dir()
+        _skip2 = ('night_reset.json', 'last_run.json', 'last_full_recalc.json')
+        for _name in os.listdir(_ck):
+            if _name.endswith('.json') and _name not in _skip2:
+                _dates.append(datetime.fromtimestamp(os.path.getmtime(os.path.join(_ck, _name))).date())
+    except OSError:
+        pass
+    return max(_dates) if _dates else None
 
 
 def _full_recalc_due(now, marker_path, gap_days, is_first_run=False):
@@ -263,7 +281,7 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
     print(f"  Чекпойнты символов: {len(sym_files)} шт | последний изменён: {last_sym_mtime}")
     print("  ── решение ──")
     print(f"  is_first_run={is_first_run} | дней с последнего ПОЛНОГО = {days_since_full} | weekend_full_due={weekend_full_due}")
-    if now.weekday() >= 5:
+    if weekend_full_due or now.weekday() >= 5:
         if weekend_full_due:
             print("  → ПОЛНЫЙ пересчёт ЗАПУСКАЕМ (окно выходных / догон)")
         else:
@@ -461,6 +479,14 @@ if __name__ == '__main__':
         
             
             
+
+    # Маркера нет (напр. сразу после обновления) — фиксируем лучшую известную дату,
+    # чтобы не запускать ПОЛНЫЙ пересчёт «вслепую» на каждом старте.
+    if not os.path.exists(full_recalc_marker_path):
+        _seed = _read_last_full_recalc(full_recalc_marker_path)
+        if _seed is not None:
+            _write_full_recalc_marker(full_recalc_marker_path,
+                                      ts=datetime.combine(_seed, datetime.min.time()))
 
     _log_recalc_chain(now, night_reset_path, full_recalc_marker_path, is_first_run,
                       bt_cfg.full_recalc_min_gap_days, days_since_full, weekend_full_due)
