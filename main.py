@@ -363,8 +363,8 @@ if __name__ == '__main__':
                     _days = (now.date() - _last_full_date).days
                     weekend_full_due = _days >= bt_cfg.full_recalc_min_gap_days
                     if not weekend_full_due:
-                        print(f"  ✅ ПОЛНЫЙ пересчёт был {_days} дн. назад (< {bt_cfg.full_recalc_min_gap_days}) — "
-                              f"выходной пропускаем (лайт-режим)")
+                        print(f"  ℹ️  Полный пересчёт уже выполнялся {_days} дн. назад (< {bt_cfg.full_recalc_min_gap_days} дн.) — повторно НЕ запускаем. "
+                              f"Переход в режим ожидания открытия рынка (Пн).")
                 else:
                     # Не можем подтвердить, что сегодня уже считали — считаем заново
                     weekend_full_due = True
@@ -448,8 +448,11 @@ if __name__ == '__main__':
     write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
     print(f"\nЗапуск цикла. Ctrl+F2 для остановки.\n")
+    if now.weekday() >= 5 and not weekend_full_due:
+        print("⏳ Выходной: полный пересчёт уже был выполнен ранее — повторно НЕ считаем.\n"
+              "   Режим ожидания открытия рынка (Пн). Торговли в выходные нет.\n")
     print("✅ Расчёты завершены. Запущен минимальный режим ожидания рынка.\n"
-          "   В будни: мониторинг сигналов. Выходные: полный пересчёт + ожидание открытия (Пн).\n")
+          "   В будни: мониторинг сигналов. Выходные: один полный пересчёт (если ещё не было) + ожидание открытия (Пн).\n")
 
     # ═══ ГЛАВНЫЙ ЦИКЛ ═══
     last_full_backtest_date = datetime.now().date()
