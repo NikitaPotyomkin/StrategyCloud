@@ -172,6 +172,27 @@ def _write_night_reset(night_reset_path, start_time, symbols_count, results_coun
     print(f"\n  ✅ night_reset.json записан ({fake_timestamp.strftime('%H:%M')}) — старт: {start_time}")
 
 
+# ═══ Утилита: маркер последнего ПОЛНОГО пересчёта (правило «не чаще, чем раз в N дней») ═══
+def _read_last_full_recalc(marker_path):
+    """Возвращает date последнего ПОЛНОГО пересчёта или None (файла нет / битый / ещё не считали)."""
+    try:
+        with open(marker_path, 'r', encoding='utf-8') as f:
+            ts = json.load(f).get('last_full_recalc', '')
+        if ts:
+            return datetime.fromisoformat(ts).date()
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _write_full_recalc_marker(marker_path, ts=None):
+    """Фиксирует дату последнего ПОЛНОГО пересчёта. Лайт-прогоны этот файл не перезаписывают."""
+    if ts is None:
+        ts = datetime.now()
+    with open(marker_path, 'w', encoding='utf-8') as f:
+        json.dump({'last_full_recalc': ts.isoformat()}, f, ensure_ascii=False, indent=2)
+
+
 if __name__ == '__main__':
     start_time = datetime.now()
     print(f"🚀 ЗАПУСК СИСТЕМЫ: {start_time.strftime('%H:%M:%S')}")
@@ -322,6 +343,7 @@ if __name__ == '__main__':
 
     FORCE_RECALC = bt_cfg.force_recalc
     night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
+    full_recalc_marker_path = os.path.join(_checkpoint_dir(), 'last_full_recalc.json')
     is_first_run = not os.path.exists(night_reset_path)
     manual_full = bool(bt_cfg.full_recalc_mode)   # ручной полный пересчёт при запуске
     
@@ -329,13 +351,20 @@ if __name__ == '__main__':
     now = datetime.now()
     weekend_full_due = False
     if bt_cfg.auto_weekend_recalc and now.weekday() >= 5:  # Сб=5, Вс=6 (рынок закрыт)
-        # Полный пересчёт, если сегодня ещё не выполнялся (по night_reset.json)
+        # Полный пересчёт, только если ПОЛНОГО прогона не было в пределах full_recalc_min_gap_days дней
+        # (Сб→Вс: два выходных подряд не считаем). Источник даты — last_full_recalc.json,
+        # а не night_reset.json: последний перезаписывают в том числе лайт-прогоны в будни.
         if not is_first_run:
             try:
-                with open(night_reset_path, 'r', encoding='utf-8') as _f:
-                    _reset_ts = json.load(_f).get('timestamp', '')
+                with open(full_recalc_marker_path, 'r', encoding='utf-8') as _f:
+                    _reset_ts = json.load(_f).get('last_full_recalc', '')
                 if _reset_ts:
-                    weekend_full_due = datetime.fromisoformat(_reset_ts).date() < now.date()
+                    _last_full_date = datetime.fromisoformat(_reset_ts).date()
+                    _days = (now.date() - _last_full_date).days
+                    weekend_full_due = _days >= bt_cfg.full_recalc_min_gap_days
+                    if not weekend_full_due:
+                        print(f"  ✅ ПОЛНЫЙ пересчёт был {_days} дн. назад (< {bt_cfg.full_recalc_min_gap_days}) — "
+                              f"выходной пропускаем (лайт-режим)")
                 else:
                     # Не можем подтвердить, что сегодня уже считали — считаем заново
                     weekend_full_due = True
@@ -369,6 +398,8 @@ if __name__ == '__main__':
         # После первого прогона записываем night_reset.json
         if is_first_run or manual_full or weekend_full_due:
             _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results))
+            # Маркер последнего ПОЛНОГО пересчёта (лайт-прогоны этот файл не трогают)
+            _write_full_recalc_marker(full_recalc_marker_path)
 
     except Exception as exc:
         print(f"\n[КРИТИЧНО] Первый бэктест не завершился: {exc!r}", flush=True)
@@ -561,6 +592,8 @@ if __name__ == '__main__':
 
                 # --- обновляем night_reset.json после ночного перерасчёта ---
                 _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results), ts=now)
+                if is_weekend:
+                    _write_full_recalc_marker(full_recalc_marker_path, ts=now)
 
                 yesterday = now.date() - timedelta(days=1)
                 report = generate_daily_report(yesterday)
