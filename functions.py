@@ -1689,11 +1689,12 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         if last_night_reset:
             print(f"\n  ✅ Ночной пересчёт выполнен {last_night_reset.strftime('%H:%M')} — кэш + инкремент новых стратегий")
         else:
-            print(f"\n  🌙 Нет night_reset.json — считаем ВСЕ стратегии заново")
+            print(f"\n  🌙 нет кэша прошлого прогона — считаем ВСЕ стратегии заново")
 
     # ═══ ЗАГРУЗКА ЧЕКПОЙНТОВ ═══
     existing_checkpoints = list_checkpoints()
     skipped_symbols = {}
+    incomplete_symbols = []   # символы с НЕПОЛНЫМ чекпойнтом (меньше комбинаций, чем ожидается)
     partial_recalc = {}
     reuse_stale = []
     cached_results = []
@@ -1707,6 +1708,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             continue
 
         cached, cached_bar_time, cached_families = load_checkpoint(symbol)
+        # ЧЕКПОЙНТ НЕПОЛНЫЙ: сохранено меньше комбинаций, чем ожидается (напр. прогон прервался).
+        # Такой кэш НЕ считаем валидным — символ будет пересчитан целиком.
+        if cached is not None and len(cached) < combos_per_symbol:
+            incomplete_symbols.append(symbol)
+            cached = None
         if cached is None:
             continue
 
@@ -1759,6 +1765,12 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     if not force_full_recalc and not existing_checkpoints:
         actions_summary.append("ℹ Чекпойнтов нет — будет полный пересчёт")
 
+    if incomplete_symbols:
+        actions_summary.append(
+            f"⚠️ Чекпойнты НЕПОЛНЫЕ у {len(incomplete_symbols)} симв.: "
+            f"{', '.join(incomplete_symbols)} — считаем их заново"
+        )
+
     if partial_recalc:
         count = len(partial_recalc)
         actions_summary.append(f"🔄 Частичный пересчёт: {count} символа(ов) с изменёнными семействами")
@@ -1770,8 +1782,10 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     if skipped_symbols and not partial_recalc:
         # Только если всё из кэша и ничего не пересчитываем
         total_results = sum(skipped_symbols.values())
+        _ck_expected = len(skipped_symbols) * combos_per_symbol
+        _ck_status = "ПОЛНЫЕ ✅" if total_results >= _ck_expected else "НЕПОЛНЫЕ ⚠"
         actions_summary.append(
-            f"📦 Кэш валиден: {len(skipped_symbols)} символов, {total_results:,} результатов (пересчёт не нужен)"
+            f"📦 Чекпойнты: {len(skipped_symbols)} символов, {total_results:,} из {_ck_expected:,} комб. — {_ck_status}"
         )
 
     # Вывод: либо список действий, либо тишина (если всё ок и без шума)

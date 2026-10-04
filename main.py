@@ -169,7 +169,7 @@ def _write_night_reset(night_reset_path, start_time, symbols_count, results_coun
             'symbols': symbols_count,
             'total_results': results_count,
         }, f, ensure_ascii=False, indent=2)
-    print(f"\n  ✅ night_reset.json записан ({fake_timestamp.strftime('%H:%M')}) — старт: {start_time}")
+    print(f"\n  ✅ Маркер прогона записан ({fake_timestamp.strftime('%H:%M')}) — старт: {start_time}")
 
 
 # ═══ Утилита: маркер последнего ПОЛНОГО пересчёта (правило «не чаще, чем раз в N дней») ═══
@@ -245,7 +245,16 @@ def _file_info(path):
 
 def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days,
                       days_since_full, weekend_full_due):
-    """Печатает всю цепочку фактов, по которой принимается решение о полном пересчёте."""
+    """Краткий вывод: включаем ли ПОЛНЫЙ пересчёт и по какой причине (триггер в скобках).
+    Подробная цепочка (файлы/mtime/чекпойнты) печатается только при FULL_RECALC_DEBUG=True."""
+    if weekend_full_due:
+        _trg = 'первый запуск — чекпойнтов нет' if is_first_run else \
+               f'окно выходных / догон (последний ПОЛНЫЙ {days_since_full} дн. назад, порог {gap_days} дн.)'
+        print(f"  🔁 ПОЛНЫЙ пересчёт: ДА ({_trg})")
+    else:
+        print(f"  🔁 ПОЛНЫЙ пересчёт: НЕТ (уже был {days_since_full} дн. назад — окно выходных закрыто)")
+    if not globals().get('FULL_RECALC_DEBUG', False):
+        return
     ckpt_dir = _checkpoint_dir()
     sym_files = []
     try:
@@ -464,9 +473,9 @@ if __name__ == '__main__':
                     # Пора ли ПОЛНЫЙ: окно выходных (Сб–Вс) либо догон, если окно пропущено
                     weekend_full_due, days_since_full, _last_full_date = _full_recalc_due(
                         now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days)
-                    if not weekend_full_due:
+                    if False and not weekend_full_due:  # краткое решение печатает _log_recalc_chain()
                         print(f"  ℹ️  ПОЛНЫЙ пересчёт уже был ({days_since_full} дн. назад / в текущем окне выходных) — повторно НЕ запускаем. "
-                              f"Переход в режим ожидания открытия рынка (Пн).")
+                              + (" Ждём открытия рынка (Пн) — торговли в выходные нет." if now.weekday() >= 5 else " Работаем в обычном режиме (мониторинг сигналов)."))
                 else:
                     # Не можем подтвердить, что сегодня уже считали — считаем заново
                     weekend_full_due = True
@@ -494,9 +503,9 @@ if __name__ == '__main__':
     if manual_full:
         print("  ⚙️  full_recalc_mode=True — РУЧНОЙ ПОЛНЫЙ ПЕРЕСЧЁТ всех стратегий")
     elif is_first_run:
-        print("  🌙 night_reset.json не найден — первый прогон, полный пересчёт")
+        print("  🆕 Нет кэша прошлого прогона — считаем ВСЕ стратегии с нуля")
     else:
-        print("  ✅ night_reset.json найден — используем чекпоинты (лайт-режим)")
+        print("  ✅ Есть кэш прошлого прогона — используем чекпоинты (лайт-режим)")
 
     try:
         # Маркер ПОЛНОГО пересчёта пишем ЗАРАНЕЕ — чтобы повторный запуск не считал его снова,
