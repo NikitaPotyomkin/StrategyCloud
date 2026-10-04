@@ -185,12 +185,92 @@ def _read_last_full_recalc(marker_path):
     return None
 
 
+def _full_recalc_due(now, marker_path, gap_days, is_first_run=False):
+    """Пора ли делать ПОЛНЫЙ пересчёт. Возвращает (due, days_since_full, last_full_date).
+
+    Правило: один ПОЛНЫЙ пересчёт на «окно выходных» (Сб–Вс). Окно определяется по субботе:
+    для Сб/Вс — текущее, для Пн–Пт — прошедшее. Если в окне ПОЛНОГО не было (уик-энд пропущен),
+    догоняем при первом же запуске/ночном прогоне, но не раньше, чем через gap_days дней
+    после прошлого ПОЛНОГО (защита от лишних повторов).
+    """
+    last_full_date = _read_last_full_recalc(marker_path)
+    days_since = (now.date() - last_full_date).days if last_full_date else None
+    if is_first_run or last_full_date is None:
+        return True, days_since, last_full_date
+    anchor = now.date() - timedelta(days=(now.weekday() - 5) % 7)  # суббота текущего/прошедшего окна
+    in_window = last_full_date >= anchor
+    gap_ok = (days_since is None) or (days_since >= gap_days)
+    return (not in_window) and gap_ok, days_since, last_full_date
+
+
 def _write_full_recalc_marker(marker_path, ts=None):
     """Фиксирует дату последнего ПОЛНОГО пересчёта. Лайт-прогоны этот файл не перезаписывают."""
     if ts is None:
         ts = datetime.now()
     with open(marker_path, 'w', encoding='utf-8') as f:
         json.dump({'last_full_recalc': ts.isoformat()}, f, ensure_ascii=False, indent=2)
+
+
+# ═══ Утилита: диагностика — что код «видит» по последним расчётам ═══
+def _file_info(path):
+    """(exists, mtime_str, первые 400 символов содержимого) — для диагностики."""
+    try:
+        if not os.path.exists(path):
+            return False, '-', '(файла нет)'
+        mt = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M:%S')
+        with open(path, 'r', encoding='utf-8') as f:
+            txt = f.read(400)
+        return True, mt, txt.replace('\n', ' ').strip()
+    except (OSError, ValueError):
+        return False, '-', '(не читается)'
+
+
+def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days,
+                      days_since_full, weekend_full_due):
+    """Печатает всю цепочку фактов, по которой принимается решение о полном пересчёте."""
+    ckpt_dir = _checkpoint_dir()
+    sym_files = []
+    try:
+        skip = ('night_reset.json', 'last_run.json', 'last_full_recalc.json')
+        sym_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.json') and f not in skip]
+    except OSError:
+        pass
+    last_sym_mtime = '-'
+    if sym_files:
+        try:
+            newest = max(os.path.getmtime(os.path.join(ckpt_dir, f)) for f in sym_files)
+            last_sym_mtime = datetime.fromtimestamp(newest).strftime('%Y-%m-%d %H:%M:%S')
+        except (OSError, ValueError):
+            pass
+
+    nr_e, nr_m, nr_c = _file_info(night_reset_path)
+    mk_e, mk_m, mk_c = _file_info(marker_path)
+    lr_e, lr_m, lr_c = _file_info(os.path.join(ckpt_dir, 'last_run.json'))
+
+    print("\n" + "═" * 66)
+    print("  ДИАГНОСТИКА РАСЧЁТОВ — что видит код на старте")
+    print("═" * 66)
+    print(f"  Время:              {now.strftime('%Y-%m-%d %H:%M:%S')} ({now.strftime('%A')}, weekday={now.weekday()})")
+    print(f"  Рабочая папка:      {os.getcwd()}")
+    print(f"  Папка чекпойнтов:   {ckpt_dir}")
+    print(f"  Авто-полный на выходных: ВКЛ, порог gap = {gap_days} дн.")
+    print(f"  night_reset.json:       exists={nr_e} | mtime={nr_m}")
+    print(f"      ↳ {nr_c}")
+    print(f"  last_full_recalc.json:  exists={mk_e} | mtime={mk_m}")
+    print(f"      ↳ {mk_c}")
+    print(f"  last_run.json:          exists={lr_e} | mtime={lr_m}")
+    print(f"      ↳ {lr_c}")
+    print(f"  Чекпойнты символов: {len(sym_files)} шт | последний изменён: {last_sym_mtime}")
+    print("  ── решение ──")
+    print(f"  is_first_run={is_first_run} | дней с последнего ПОЛНОГО = {days_since_full} | weekend_full_due={weekend_full_due}")
+    if now.weekday() >= 5:
+        if weekend_full_due:
+            print("  → ПОЛНЫЙ пересчёт ЗАПУСКАЕМ (окно выходных / догон)")
+        else:
+            print("  → ПОЛНЫЙ пересчёт НЕ запускаем — лайт из чекпойнтов")
+    else:
+        print("  → Будний день: обычный режим (лайт из чекпойнтов)")
+    print("═" * 66 + "\n")
 
 
 if __name__ == '__main__':
@@ -350,20 +430,24 @@ if __name__ == '__main__':
     # ═══ АВТОМАТИЧЕСКИЙ ПОЛНЫЙ ПЕРЕСЧЁТ НА ВЫХОДНЫХ (Сб/Вс) ═══
     now = datetime.now()
     weekend_full_due = False
-    if bt_cfg.auto_weekend_recalc and now.weekday() >= 5:  # Сб=5, Вс=6 (рынок закрыт)
-        # Полный пересчёт, только если ПОЛНОГО прогона не было в пределах full_recalc_min_gap_days дней
-        # (Сб→Вс: два выходных подряд не считаем). Источник даты — last_full_recalc.json,
-        # а не night_reset.json: последний перезаписывают в том числе лайт-прогоны в будни.
+    days_since_full = None   # для диагностики: сколько дней с последнего ПОЛНОГО пересчёта
+    if bt_cfg.auto_weekend_recalc:  # окно выходных + догон в будни, если уик-энд пропущен
+        # Один ПОЛНЫЙ пересчёт на окно выходных (Сб–Вс). Если окно пропущено — догон в будни (см. _full_recalc_due).
+        # Дата последнего ПОЛНОГО пересчёта берётся из last_full_recalc.json
+        # (night_reset.json не годится — его перезаписывают в том числе лайт-прогоны в будни).
         if not is_first_run:
             try:
                 with open(full_recalc_marker_path, 'r', encoding='utf-8') as _f:
                     _reset_ts = json.load(_f).get('last_full_recalc', '')
                 if _reset_ts:
                     _last_full_date = datetime.fromisoformat(_reset_ts).date()
-                    _days = (now.date() - _last_full_date).days
-                    weekend_full_due = _days >= bt_cfg.full_recalc_min_gap_days
+                    days_since_full = (now.date() - _last_full_date).days
+                    # Правило: один ПОЛНЫЙ на окно выходных (Сб–Вс) + догон в будни, если окно пропущено.
+                    # Пора ли ПОЛНЫЙ: окно выходных (Сб–Вс) либо догон, если окно пропущено
+                    weekend_full_due, days_since_full, _last_full_date = _full_recalc_due(
+                        now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days)
                     if not weekend_full_due:
-                        print(f"  ℹ️  Полный пересчёт уже выполнялся {_days} дн. назад (< {bt_cfg.full_recalc_min_gap_days} дн.) — повторно НЕ запускаем. "
+                        print(f"  ℹ️  ПОЛНЫЙ пересчёт уже был ({days_since_full} дн. назад / в текущем окне выходных) — повторно НЕ запускаем. "
                               f"Переход в режим ожидания открытия рынка (Пн).")
                 else:
                     # Не можем подтвердить, что сегодня уже считали — считаем заново
@@ -373,10 +457,13 @@ if __name__ == '__main__':
         if is_first_run or weekend_full_due:
             FORCE_RECALC = True
             weekend_full_due = True
-            print(f"  🌙 ВЫХОДНОЙ ({now.strftime('%A')}) — автоматический ПОЛНЫЙ пересчёт ({now.strftime('%Y-%m-%d %H:%M')})")
+            print(f"  🌙 ПОЛНЫЙ пересчёт ({now.strftime('%A')} {now.strftime('%Y-%m-%d %H:%M')}) — окно выходных / догон")
         
             
             
+
+    _log_recalc_chain(now, night_reset_path, full_recalc_marker_path, is_first_run,
+                      bt_cfg.full_recalc_min_gap_days, days_since_full, weekend_full_due)
 
     if manual_full:
         print("  ⚙️  full_recalc_mode=True — РУЧНОЙ ПОЛНЫЙ ПЕРЕСЧЁТ всех стратегий")
@@ -386,6 +473,10 @@ if __name__ == '__main__':
         print("  ✅ night_reset.json найден — используем чекпоинты (лайт-режим)")
 
     try:
+        # Маркер ПОЛНОГО пересчёта пишем ЗАРАНЕЕ — чтобы повторный запуск не считал его снова,
+        # даже если этот прогон по какой-то причине упадёт.
+        if FORCE_RECALC or manual_full or weekend_full_due:
+            _write_full_recalc_marker(full_recalc_marker_path)
         all_top, all_results = run_full_backtest(
             bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
             test_strategy=None,
@@ -452,7 +543,7 @@ if __name__ == '__main__':
         print("⏳ Выходной: полный пересчёт уже был выполнен ранее — повторно НЕ считаем.\n"
               "   Режим ожидания открытия рынка (Пн). Торговли в выходные нет.\n")
     print("✅ Расчёты завершены. Запущен минимальный режим ожидания рынка.\n"
-          "   В будни: мониторинг сигналов. Выходные: один полный пересчёт (если ещё не было) + ожидание открытия (Пн).\n")
+          "   В будни: мониторинг сигналов. Окно выходных: один полный пересчёт (с догоном в будни, если уик-энд пропущен).\n")
 
     # ═══ ГЛАВНЫЙ ЦИКЛ ═══
     last_full_backtest_date = datetime.now().date()
@@ -501,18 +592,26 @@ if __name__ == '__main__':
                     last_full_backtest_date = now.date()
                     continue
                 
+                # Пора ли ПОЛНЫЙ: окно выходных (Сб–Вс) либо догон в будни
+                _night_full_due, _, _ = _full_recalc_due(
+                    now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days)
+                if not bt_cfg.auto_weekend_recalc:
+                    _night_full_due = False
+
                 # Определяем причину запуска
-                if is_weekday:
+                if _night_full_due:
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Ночной ПОЛНЫЙ пересчёт ({now.strftime('%A')}) — окно выходных / догон...")
+                elif is_weekday:
                     print(f"\n[{now.strftime('%H:%M:%S')}] 🌙 Ночной лайт-пересчёт (инкремент по чекпойнтам)...")
                 else:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Выходной ({now.strftime('%A')}) — ПОЛНЫЙ пересчёт всех стратегий...")
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Выходной ({now.strftime('%A')}) — лайт-пересчёт (инкремент по чекпойнтам)...")
 
                 try:
                     _, all_results = run_full_backtest(
                         bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
                         test_strategy=None,
                         test_mode=False,
-                        force_recalc=is_weekend,  # полный на выходных, лайт в будни
+                        force_recalc=_night_full_due,  # полный по графику окна выходных (с догоном), иначе лайт
                         is_night_run=True
                     )
                 except Exception as exc:
@@ -595,7 +694,7 @@ if __name__ == '__main__':
 
                 # --- обновляем night_reset.json после ночного перерасчёта ---
                 _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results), ts=now)
-                if is_weekend:
+                if _night_full_due:
                     _write_full_recalc_marker(full_recalc_marker_path, ts=now)
 
                 yesterday = now.date() - timedelta(days=1)

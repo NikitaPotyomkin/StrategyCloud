@@ -291,7 +291,7 @@ class BacktestConfig:
     force_recalc: bool = False
     full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни лайт, выходные полный)
     auto_weekend_recalc: bool = True  # True = автоматический ПОЛНЫЙ пересчёт в выходные (Сб/Вс); False = только ручной запуск
-    full_recalc_min_gap_days: int = 5  # мин. интервал (дней) между АВТО-ПОЛНЫМИ пересчётами на выходных
+    full_recalc_min_gap_days: int = 5  # мин. интервал (дней) между АВТО-ПОЛНЫМИ пересчётами: если полный был в последние N дней — повторно не запускаем
     night_backtest_hour: int = 3
     connection_timeout_sec: int = 300
     connection_warn_every_sec: int = 600
