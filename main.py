@@ -826,7 +826,7 @@ if __name__ == '__main__':
             # Обновление баров
             any_finalized = False
             for sym in ticks:
-                if is_weekend or sym not in symbol_data:  # выходной — бары не обновляем
+                if not is_weekend and sym in symbol_data:  # будни — обновляем бары; выходной — не обновляем
                     bid, ask = ticks[sym]
                     try:
                         if update_symbol_bar(sym, bid, ask, now):
