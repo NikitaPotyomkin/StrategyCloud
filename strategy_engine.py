@@ -959,6 +959,19 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
     
     # ── Проверка 2: Лимиты позиций (пункт 3) ──
     # current_counts — ПО СИМВОЛАМ (не по типам стратегий!)
+    # Направленный лимит: считаем позиции по сторонам (long/short) на символ
+    # Учитываем ВСЕ реальные позиции MT5 по направлению, включая 'unknown'
+    side_counts = {}  # {symbol: {'long': n, 'short': n}}
+    if real_positions:
+        for pos in real_positions:
+            sym = pos.symbol
+            if sym not in side_counts:
+                side_counts[sym] = {'long': 0, 'short': 0}
+            if pos.type == mt5.POSITION_TYPE_BUY:
+                side_counts[sym]['long'] += 1
+            elif pos.type == mt5.POSITION_TYPE_SELL:
+                side_counts[sym]['short'] += 1
+
     current_counts = {sym: len(positions) for sym, positions in occupied_by_symbol.items()}
     limits_ok, limits_reason, limits_details = check_position_limits(
         current_counts,
@@ -1266,8 +1279,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                         print(f"  -> [{key}] Пропущен вход: лимиты позиций — {limits_reason}")
                     elif s['symbol'] in occupied_by_symbol and strat_key in occupied_by_symbol[s['symbol']]:
                         print(f"  -> [{key}] Пропущен вход: уже есть позиция {strat_key}")
+                    elif s['symbol'] in side_counts and side_counts[s['symbol']].get(entry_dir, 0) >= risk_cfg.max_per_side:
+                        print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_side} позиций {entry_dir} на {s['symbol']}")
                     elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
+                        
                     else:
                         tick = mt5.symbol_info_tick(s['symbol'])
                         if tick is not None:

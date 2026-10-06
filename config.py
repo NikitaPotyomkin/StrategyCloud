@@ -268,8 +268,10 @@ class StrategyParams:
 @dataclass(frozen=True)
 class RiskParams:
     """Параметры риск-менеджмента."""
-    max_total_positions: int = 999999   # ВРЕМЕННО отключено (было 15) — вернуть после проверки
-    max_per_symbol: int = 999999  # ВРЕМЕННО отключено (было 3) — позиции по пропорции квоты
+    max_total_positions: int = 999999   # общий лимит отменён
+    
+    max_per_symbol: int = 6             # всего на символ = max_per_side x 2 стороны (производное)
+    max_per_side: int = 3               # макс. позиций в ОДНУ сторону на символ (направленный лимит)
     daily_loss_limit_pct: float = 3.0
     equity_stop_pct: float = 10.0
     realtime_quota_recalc: bool = True
@@ -308,7 +310,7 @@ class TrailParams:
     """
     enabled: bool = True
     atr_period: int = 14
-    atr_multiplier: float = 1.5
+    atr_multiplier: float = 2.5
     check_interval_sec: int = 60
     min_move_points: int = 10  # не двигать SL, если выигрыш меньше (защита от спама)
 

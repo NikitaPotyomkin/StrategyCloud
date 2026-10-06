@@ -800,7 +800,7 @@ if __name__ == '__main__':
                         quota_ok, risk_pct, quota = realtime_quota_recalc(balance, active_positions, risk_cfg.max_risk_pct)
                         if not quota_ok:
                             print(f"  [WARN] Realtime quota exceeded: risk={risk_pct:.2f}% > quota — "
-                                  f"новые ордера не открываются до пересчёта в 3:00")
+                                  f"новые ордера сейчас НЕ блокируются (только предупреждение, см. лимиты позиций в check_active_signals)")
 
             # Тики
             ticks = {}
