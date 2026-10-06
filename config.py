@@ -269,9 +269,8 @@ class StrategyParams:
 class RiskParams:
     """Параметры риск-менеджмента."""
     max_total_positions: int = 999999   # общий лимит отменён
-    
-    max_per_symbol: int = 6             # всего на символ = max_per_side x 2 стороны (производное)
-    max_per_side: int = 3               # макс. позиций в ОДНУ сторону на символ (направленный лимит)
+    max_per_side: int = 99999               # макс. позиций в ОДНУ сторону на символ (направленный лимит)
+    max_per_symbol: int = 99999             # всего на символ = max_per_side x 2 стороны (производное)
     daily_loss_limit_pct: float = 3.0
     equity_stop_pct: float = 10.0
     realtime_quota_recalc: bool = True
