@@ -137,7 +137,7 @@ st.markdown("""
 
 
 @st.cache_data(ttl=30)
-def load_dashboard_data(days_back=30):
+def load_dashboard_data(days_back=15):
     return get_dashboard_data(days_back)
 
 
@@ -215,12 +215,13 @@ with st.sidebar:
 data = load_dashboard_data(days_back)
 
 # ── Табы ──
-tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_steering, tab_pipeline = st.tabs([
+tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_tree, tab_steering, tab_pipeline = st.tabs([
     "Overview",
     "Risk",
     "Strategies",
     "3D Landscape",
     "3D Surface",
+    "Strategy Tree",
     "Steering Wheel",
     "Pipeline",
 ])
@@ -727,15 +728,16 @@ with tab_3d:
             else (10.0 if r['wins'] > 0 else 0), axis=1,
         )
 
-        pf_vals = df_3d['profit_factor'].clip(0, 3)
+        pnl_vals = df_3d['pnl']
+        max_abs_pnl = max(1.0, float(df_3d['pnl'].abs().max()))
         colors_3d = []
-        for pf in pf_vals:
-            if pf >= 1.0:
-                ratio = min((pf - 1.0) / 2.0, 1.0)
-                colors_3d.append(f'rgb({int(46 + 20*ratio)}, {int(160 + 10*ratio)}, {int(67 + 20*ratio)})')
+        for pnl in pnl_vals:
+            if pnl >= 0:
+                ratio = min(pnl / max_abs_pnl, 1.0)
+                colors_3d.append(f'rgb({int(46 + 30*ratio)}, {int(150 + 35*ratio)}, {int(67 + 30*ratio)})')
             else:
-                ratio = min((1.0 - pf) / 1.0, 1.0)
-                colors_3d.append(f'rgb({int(218)}, {int(54 + 20*ratio)}, {int(51 + 10*ratio)})')
+                ratio = min(-pnl / max_abs_pnl, 1.0)
+                colors_3d.append(f'rgb({int(218 + 25*ratio)}, {int(54 + 40*ratio)}, {int(51 + 20*ratio)})')
 
         sizes = df_3d['trades'].clip(lower=1) * 9
 
@@ -782,11 +784,11 @@ with tab_3d:
             | P&L | X | Cumulative profit/loss |
             | Volatility | Y | Return dispersion |
             | Trades | Z | Activity volume |
-            | Color | — | PF > 1 green, PF < 1 red |
+            | Color | — | PnL >= 0 green, PnL < 0 red (яркость = величина) |
             | Size | — | Proportional to trade count |
 
             **Scale up:** green, large, low volatility (near Y=0).
-            **Scale down:** red, left of zero, high volatility.
+            **Scale down:** red (negative PnL), high volatility.
             **Unreliable:** small dots — insufficient sample size.
             """)
 
@@ -971,12 +973,189 @@ with tab_surface:
 # ═══════════════════════════════════════════════════════════════
 #  STEERING WHEEL
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  STRATEGY TREE
+# ═══════════════════════════════════════════════════════════════
+with tab_tree:
+    st.markdown("### Strategy Tree")
+
+    if not data:
+        st.warning("No data.")
+        st.stop()
+
+    trades_df = data.get('trades_df')
+    if trades_df is None or trades_df.empty or not PLOTLY_AVAILABLE:
+        st.info("No data for strategy tree.")
+        st.stop()
+
+    df_tree = trades_df.copy()
+    # Заменяем NaN на 0, чтобы не ломать расчёты и всплывашки
+    df_tree['profit_net'] = df_tree['profit_net'].fillna(0)
+    top_k = 3
+
+    # Агрегации
+    grp_fam = (
+        df_tree.groupby('strategy_type', dropna=False)['profit_net']
+        .agg(['sum', 'count'])
+        .reset_index()
+        .rename(columns={'sum': 'pnl', 'count': 'trades'})
+    )
+    grp_sym = (
+        df_tree.groupby(['strategy_type', 'symbol'], dropna=False)['profit_net']
+        .agg(['sum', 'count'])
+        .reset_index()
+        .rename(columns={'sum': 'pnl', 'count': 'trades'})
+    )
+    grp_strat = (
+        df_tree.groupby(['strategy_type', 'symbol', 'param_key'], dropna=False)['profit_net']
+        .agg(['sum', 'count'])
+        .reset_index()
+        .rename(columns={'sum': 'pnl', 'count': 'trades'})
+    )
+
+    nodes = []
+    total_pnl = float(df_tree['profit_net'].sum())
+    total_n = int(len(df_tree))
+    nodes.append({
+        'id': 'total',
+        'parent': '',
+        'label': f'Total  {total_pnl:+,.0f} ₽ · {total_n}',
+        'pnl': total_pnl,
+        'size': abs(total_pnl)
+    })
+
+    # Helper для безопасного ID
+    def safe_id(prefix, *parts):
+        s = '_'.join(str(p) for p in parts)
+        # Удаляем проблемные символы
+        s = s.replace('/', '_').replace('\\', '_').replace('.', '_').replace(' ', '_')
+        return f"{prefix}_{s}"
+
+    # Уровень: семьи
+    for _, f in grp_fam.sort_values('pnl', ascending=False).iterrows():
+        t = f['strategy_type']
+        fam_id = safe_id('fam', t)
+        nodes.append({
+            'id': fam_id,
+            'parent': 'total',
+            'label': f'{t}  {f["pnl"]:+,.0f} ₽ · {int(f["trades"])}',
+            'pnl': float(f['pnl']),
+            'size': abs(float(f['pnl']))
+        })
+
+    # Уровень: символ
+    for _, s in grp_sym.sort_values('pnl', ascending=False).iterrows():
+        t, sym = s['strategy_type'], s['symbol']
+        sym_id = safe_id('fs', t, sym)
+        parent_id = safe_id('fam', t)
+        nodes.append({
+            'id': sym_id,
+            'parent': parent_id,
+            'label': f'{sym}  {s["pnl"]:+,.0f} ₽ · {int(s["trades"])}',
+            'pnl': float(s['pnl']),
+            'size': abs(float(s['pnl']))
+        })
+
+    # Уровень: стратегия (top_k + Others)
+    for (t, sym), g in grp_strat.groupby(['strategy_type', 'symbol']):
+        parent_id = safe_id('fs', t, sym)
+        g_sorted = g.sort_values('pnl', ascending=False)
+        top = g_sorted.head(top_k)
+        rest = g_sorted.iloc[top_k:]
+
+        for _, r in top.iterrows():
+            strat_id = safe_id('st', t, sym, r['param_key'])
+            nodes.append({
+                'id': strat_id,
+                'parent': parent_id,
+                'label': f'{r["param_key"]}  {r["pnl"]:+,.0f} ₽ · {int(r["trades"])}',
+                'pnl': float(r['pnl']),
+                'size': abs(float(r['pnl']))
+            })
+
+        if not rest.empty:
+            r_pnl = float(rest['pnl'].sum())
+            r_n = int(rest['trades'].sum())
+            others_id = safe_id('st_others', t, sym)
+            nodes.append({
+                'id': others_id,
+                'parent': parent_id,
+                'label': f'Others ({len(rest)})  {r_pnl:+,.0f} ₽ · {r_n}',
+                'pnl': r_pnl,
+                'size': abs(r_pnl)
+            })
+
+    # Пересчитаем size для родителей как сумму детей (для консистентности treemap)
+    children_sum = {}
+    for n in nodes:
+        if n['parent']:
+            children_sum[n['parent']] = children_sum.get(n['parent'], 0.0) + n['size']
+
+    ids = []
+    parents = []
+    labels = []
+    values = []
+    pnls = []
+
+    for n in nodes:
+        ids.append(n['id'])
+        parents.append(n['parent'])
+        labels.append(n['label'])
+        # Если у узла есть дети — размер = сумма детей, иначе = его собственный size
+        if n['id'] in children_sum:
+            values.append(children_sum[n['id']])
+        else:
+            values.append(n['size'])
+        pnls.append(n['pnl'])
+
+    fig_tree = go.Figure(go.Treemap(
+        ids=ids,
+        parents=parents,
+        labels=labels,
+        values=values,
+        branchvalues='total',
+        maxdepth=4,
+        textinfo='label',
+        textfont=dict(size=12, color=COL_TEXT),
+        marker=dict(
+            colors=pnls,
+            colorscale=[[0.0, COL_RED], [0.5, COL_PANEL], [1.0, COL_GREEN]],
+            cmid=0,
+            showscale=True,
+            line=dict(width=1, color=COL_BG),
+        ),
+        hovertemplate='%{label}<br>PnL: %{customdata:+,.0f} ₽<extra></extra>',
+        customdata=pnls,
+    ))
+    fig_tree.update_layout(
+        paper_bgcolor=COL_PANEL,
+        height=720,
+        margin=dict(l=0, r=0, t=10, b=0),
+        font=dict(color=COL_TEXT, size=12),
+    )
+    st.plotly_chart(fig_tree, use_container_width=True, key="strategy_tree")
+
+    with st.expander("Reading the tree"):
+        st.markdown("""
+        | Level | Shown |
+        |-------|-------|
+        | Total | Net PnL of all closed trades in the period |
+        | Family | Strategy family (RF, LogReg, MA, ...) |
+        | Symbol | Family x symbol |
+        | Strategy | Top‑3 param_key by PnL + "Others" bucket |
+
+        **Size** — |PnL| (node area). **Color** — PnL gradient: green = profit, red = loss.
+        Nodes sorted by PnL descending.
+        """)
+
+
+
 with tab_steering:
     if not data:
         st.warning("No data.")
         st.stop()
 
-    st.markdown("### Steering Wheel — Quota by Family")
+    st.markdown("###Wheel — Quota by Family")
     st.caption("Категория = «символ + семейство» (например EUR - parabolic). "
                "Квоты считаются по реальным закрытым сделкам (entry='out').")
 

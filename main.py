@@ -139,6 +139,26 @@ from strategies.rolling_correlation_momentum import (
     calc_rolling_correlation, backtest as backtest_corr,
     check_entry as check_entry_corr, check_exit as check_exit_corr,
 )
+from strategies.williams_r_extreme import (
+    calc_williams_r, backtest as backtest_williams_r,
+    check_entry as check_entry_williams_r, check_exit as check_exit_williams_r,
+)
+from strategies.macd_histogram_reversal import (
+    calc_macd_histogram, backtest as backtest_macd_histogram,
+    check_entry as check_entry_macd_histogram, check_exit as check_exit_macd_histogram,
+)
+from strategies.bb_squeeze_breakout import (
+    calc_bb_squeeze, backtest as backtest_bb_squeeze,
+    check_entry as check_entry_bb_squeeze, check_exit as check_exit_bb_squeeze,
+)
+from strategies.donchian_breakout import (
+    calc_donchian, backtest as backtest_donchian,
+    check_entry as check_entry_donchian, check_exit as check_exit_donchian,
+)
+from strategies.engulfing_pattern import (
+    calc_engulfing, backtest as backtest_engulfing,
+    check_entry as check_entry_engulfing, check_exit as check_exit_engulfing,
+)
 from data_loader import (
     symbol_data, load_h1, update_symbol_bar,
     load_journal, save_journal, record_trade,
@@ -551,7 +571,7 @@ if __name__ == '__main__':
     print(f"После дедупликации: {len(deduped_results)} комбинаций")
 
     active = distribute_lots(deduped_results, symbol_data, balance,
-                             risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score)
+                             risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
 
     print(f"Активировано {len(active)} стратегий из {len(deduped_results)} комбинаций")
 
@@ -593,6 +613,7 @@ if __name__ == '__main__':
     initial_equity = None
     daily_start_balance = None
     daily_start_date = None
+    daily_stop_notified = False  # [STOP] печатаем и закрываем позиции один раз за день
     first_run = True  # Флаг первого запуска — нужен для полного пересчёта
 
     try:
@@ -658,7 +679,7 @@ if __name__ == '__main__':
                 balance = acc.balance if acc else 1_000_000
                 deduped_results = all_results
                 active = distribute_lots(deduped_results, symbol_data, balance,
-                                         risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score)
+                                         risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
                 print(f"Баланс: {balance:.0f} руб | Квота: {balance * risk_cfg.max_risk_pct:.0f} руб | "
                       f"Активировано {len(active)} из {len(deduped_results)} (всего {len(all_results)})")
 
@@ -752,6 +773,7 @@ if __name__ == '__main__':
                         daily_start_balance = balance
                         daily_start_date = now.date()
                         print(f"  [INIT] Daily start balance: {balance:.2f}")
+                        daily_stop_notified = False  # новый день — лимит снова активен
 
                     last_balance_refresh = now
 
@@ -761,7 +783,15 @@ if __name__ == '__main__':
                             daily_start_balance, equity, risk_cfg.daily_loss_limit_pct
                         )
                         if not dl_ok:
-                            print(f"\n  [STOP] Daily loss limit: {dl_reason} — остановка торговли!")
+                            # Сбой терминала (нет account_info) — позиции НЕ закрываем, ждём следующей проверки
+                            if 'account_info not available' in dl_reason:
+                                continue
+                            # Печатаем [STOP] и закрываем позиции один раз за день
+                            if daily_stop_notified:
+                                continue
+                            daily_stop_notified = True
+                            _resume_dt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                            print(f"\n  [STOP] Daily loss limit: {dl_reason} — торговля остановлена до {_resume_dt.strftime('%d.%m.%Y %H:%M')} (сброс дневного лимита в 00:00)")
                             for key, s in list(active_strategies.items()):
                                 if s['position'] is not None:
                                     print(f"  -> Закрытие {key} по daily stop-loss")
@@ -876,6 +906,11 @@ if __name__ == '__main__':
                         calc_pin_bar, check_exit_pin_bar, check_entry_pin_bar,
                         calc_prev_daily_direction, check_exit_prev_daily, check_entry_prev_daily,
                         calc_rolling_correlation, check_exit_corr, check_entry_corr,
+                        calc_williams_r, check_exit_williams_r, check_entry_williams_r,
+                        calc_macd_histogram, check_exit_macd_histogram, check_entry_macd_histogram,
+                        calc_bb_squeeze, check_exit_bb_squeeze, check_entry_bb_squeeze,
+                        calc_donchian, check_exit_donchian, check_entry_donchian,
+                        calc_engulfing, check_exit_engulfing, check_entry_engulfing,
                         risk_cfg=risk_cfg,
                     )
                 except Exception as e:

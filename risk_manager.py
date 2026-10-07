@@ -222,7 +222,7 @@ def composite_score(metrics, weights=None, profit_scale=DEFAULT_PROFIT_SCALE):
 # ═══ РАСПРЕДЕЛЕНИЕ ЛОТОВ ═══
 
 def distribute_lots(ranked_results, symbol_data, balance,
-                    max_risk_pct=0.05, min_lot=0.01, min_score=0.8):
+                    max_risk_pct=0.05, min_lot=0.01, min_score=0.8, max_per_type=None):
     """Распределяет лоты пропорционально score в рамках квоты риска.
 
     Использует _normalize_volume для округления лотов по шагу брокера
@@ -246,10 +246,24 @@ def distribute_lots(ranked_results, symbol_data, balance,
     if not candidates:
         return []
 
-    # Сортировка по score — лучшие первыми
-    candidates.sort(key=lambda x: x['score'], reverse=True)
+    # Диверсификация рейтинга: round-robin по типам (внутри типа — по score)
+    by_type = {}
+    for c in candidates:
+        by_type.setdefault(c.get('type', 'stoch'), []).append(c)
+    for lst in by_type.values():
+        lst.sort(key=lambda x: x['score'], reverse=True)
+    candidates = []
+    while by_type:
+        for stype in list(by_type.keys()):
+            lst = by_type[stype]
+            if not lst:
+                del by_type[stype]
+                continue
+            candidates.append(lst.pop(0))
 
     # Жадный отбор: добавляем, пока каждой хватает min_lot
+    # Диверсификация топа: не более max_per_type стратегий одного типа (rf, logreg, ...)
+    type_counts = {}  # {type: сколько стратегий этого типа уже в наборе}
     active = []
     for c in candidates:
         trial = active + [c]
@@ -262,7 +276,14 @@ def distribute_lots(ranked_results, symbol_data, balance,
         else:
             lot = max(math.floor(raw_lot * 100) / 100, min_lot)
         # Не прерываем цикл — добавляем даже если lot < min_lot (будет отфильтровано позже)
+        # Диверсификация топа: пропускаем типы, набравшие max_per_type
+        if max_per_type is not None:
+            _stype = c.get('type', 'stoch')
+            if type_counts.get(_stype, 0) >= max_per_type:
+                continue
+            type_counts[_stype] = type_counts.get(_stype, 0) + 1
         active.append(c)
+        
 
     if not active:
         return []

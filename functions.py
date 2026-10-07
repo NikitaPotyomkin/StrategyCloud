@@ -312,6 +312,47 @@ def _backtest_corr(df, window, corr_threshold, sl_points, tp_points,
                          tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
 
 
+def _backtest_williams_r(df, period, sl_points, tp_points,
+                         point, tick_value, tick_size, spread_points=0):
+    """Backtest для Williams %R Extreme."""
+    from strategies.williams_r_extreme import backtest as backtest_williams_r
+    return backtest_williams_r(df, period, sl_points, tp_points, point,
+                               tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_macd_histogram(df, fast_period, slow_period, signal_period,
+                             sl_points, tp_points, point, tick_value, tick_size, spread_points=0):
+    """Backtest для MACD Histogram Reversal."""
+    from strategies.macd_histogram_reversal import backtest as backtest_macd_hist
+    return backtest_macd_hist(df, fast_period, slow_period, signal_period,
+                              sl_points, tp_points, point, tick_value, tick_size,
+                              sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_bb_squeeze(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points,
+                         point, tick_value, tick_size, spread_points=0):
+    """Backtest для BB Squeeze Breakout."""
+    from strategies.bb_squeeze_breakout import backtest as backtest_bb_squeeze
+    return backtest_bb_squeeze(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points,
+                               point, tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_donchian(df, period, sl_points, tp_points,
+                       point, tick_value, tick_size, spread_points=0):
+    """Backtest для Donchian Breakout."""
+    from strategies.donchian_breakout import backtest as backtest_donchian
+    return backtest_donchian(df, period, sl_points, tp_points, point,
+                             tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_engulfing(df, sl_points, tp_points,
+                        point, tick_value, tick_size, spread_points=0):
+    """Backtest для Engulfing Pattern."""
+    from strategies.engulfing_pattern import backtest as backtest_engulfing
+    return backtest_engulfing(df, sl_points, tp_points, point,
+                              tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
 # ═══ УТИЛИТЫ ВРЕМЕНИ И ДАТЫ ═══
 def curr_time():
     """Текущее время в формате ЧЧ:ММ."""
@@ -481,6 +522,9 @@ def _backtest_symbol(args):
      CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
      VWAP_VOL_PERIOD_LIST, VWAP_STD_MULT_LIST, MOMENTUM_PERIOD_LIST, MOMENTUM_THRESHOLD_LIST,
      PIN_BAR_BODY_RATIO_LIST, PREV_DAILY_HOLD_BARS_LIST, CORR_WINDOW_LIST, CORR_THRESHOLD_LIST,
+     WILLIAMS_R_PERIOD_LIST, MACD_HISTOGRAM_FAST_LIST, MACD_HISTOGRAM_SLOW_LIST, MACD_HISTOGRAM_SIGNAL_LIST,
+     BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST,
+     DONCHIAN_PERIOD_LIST, ENGULFING_PERIOD_LIST,
      BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
 
      family_fp, recalc_families) = args
@@ -527,6 +571,13 @@ def _backtest_symbol(args):
     pin_bar_per_symbol = len(PIN_BAR_BODY_RATIO_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     prev_daily_per_symbol = len(PREV_DAILY_HOLD_BARS_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     corr_per_symbol = len(CORR_WINDOW_LIST) * len(CORR_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    williams_r_per_symbol = len(WILLIAMS_R_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    macd_histogram_per_symbol = (len(MACD_HISTOGRAM_FAST_LIST) * len(MACD_HISTOGRAM_SLOW_LIST) *
+                                 len(MACD_HISTOGRAM_SIGNAL_LIST) *
+                                 len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    bb_squeeze_per_symbol = len(BB_SQUEEZE_PERIOD_LIST) * len(BB_SQUEEZE_STD_LIST) * len(BB_SQUEEZE_PCT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    donchian_per_symbol = len(DONCHIAN_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    engulfing_per_symbol = len(ENGULFING_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     _strategy_map = {
         'stoch': stoch_per_symbol,
@@ -1381,6 +1432,150 @@ def _backtest_symbol(args):
             combos_done += 1
         completed_strategies.append('CorrMomentum')
 
+    # ── Williams %R Extreme ──
+    if not test_strategy or test_strategy == 'williams_r':
+        for period, sl, tp in product(
+            WILLIAMS_R_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('WilliamsR', _backtest_williams_r,
+                df_window, period, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'williams_r',
+                'param_key': f"per{period}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('WilliamsR')
+
+    # ── MACD Histogram Reversal ──
+    if not test_strategy or test_strategy == 'macd_histogram':
+        for mf, ms, msig, sl, tp in product(
+            MACD_HISTOGRAM_FAST_LIST, MACD_HISTOGRAM_SLOW_LIST, MACD_HISTOGRAM_SIGNAL_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('MACD-Hist', _backtest_macd_histogram,
+                df_window, mf, ms, msig, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'macd_histogram',
+                'param_key': f"mf{mf}_ms{ms}_sig{msig}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('MACD-Hist')
+
+    # ── BB Squeeze Breakout ──
+    if not test_strategy or test_strategy == 'bb_squeeze':
+        for bp, bs, sp, sl, tp in product(
+            BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('BB-Squeeze', _backtest_bb_squeeze,
+                df_window, bp, bs, sp, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'bb_squeeze',
+                'param_key': f"bp{bp}_bs{bs:.1f}_sp{sp:.1f}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('BB-Squeeze')
+
+    # ── Donchian Breakout ──
+    if not test_strategy or test_strategy == 'donchian':
+        for period, sl, tp in product(
+            DONCHIAN_PERIOD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('Donchian', _backtest_donchian,
+                df_window, period, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'donchian',
+                'param_key': f"per{period}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Donchian')
+
+    # ── Engulfing Pattern ──
+    if not test_strategy or test_strategy == 'engulfing':
+        for sl, tp in product(
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('Engulfing', _backtest_engulfing,
+                df_window, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'engulfing',
+                'param_key': 'none',
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('Engulfing')
+
     # ── Сохраняем чекпойнт после каждого символа ──
     last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
     save_checkpoint(symbol, results, last_bar_time=last_bar_time, families=family_fp)
@@ -1483,6 +1678,15 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     PREV_DAILY_HOLD_BARS_LIST = strategy_params.prev_daily_hold_bars_list
     CORR_WINDOW_LIST = strategy_params.corr_window_list
     CORR_THRESHOLD_LIST = strategy_params.corr_threshold_list
+    WILLIAMS_R_PERIOD_LIST = strategy_params.williams_r_period_list
+    MACD_HISTOGRAM_FAST_LIST = strategy_params.macd_histogram_fast_list
+    MACD_HISTOGRAM_SLOW_LIST = strategy_params.macd_histogram_slow_list
+    MACD_HISTOGRAM_SIGNAL_LIST = strategy_params.macd_histogram_signal_list
+    BB_SQUEEZE_PERIOD_LIST = strategy_params.bb_squeeze_period_list
+    BB_SQUEEZE_STD_LIST = strategy_params.bb_squeeze_std_list
+    BB_SQUEEZE_PCT_LIST = strategy_params.bb_squeeze_pct_list
+    DONCHIAN_PERIOD_LIST = strategy_params.donchian_period_list
+    ENGULFING_PERIOD_LIST = strategy_params.engulfing_dummy
     BACKTEST_DAYS = backtest_config.backtest_days
     TOP_N = backtest_config.top_n
 
@@ -1558,6 +1762,18 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                              len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
     corr_per_symbol = (len(CORR_WINDOW_LIST) * len(CORR_THRESHOLD_LIST) *
                        len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    williams_r_per_symbol = (len(WILLIAMS_R_PERIOD_LIST) *
+                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    macd_histogram_per_symbol = (len(MACD_HISTOGRAM_FAST_LIST) * len(MACD_HISTOGRAM_SLOW_LIST) *
+                                 len(MACD_HISTOGRAM_SIGNAL_LIST) *
+                                 len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    bb_squeeze_per_symbol = (len(BB_SQUEEZE_PERIOD_LIST) * len(BB_SQUEEZE_STD_LIST) *
+                             len(BB_SQUEEZE_PCT_LIST) *
+                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    donchian_per_symbol = (len(DONCHIAN_PERIOD_LIST) *
+                           len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
+    engulfing_per_symbol = (len(ENGULFING_PERIOD_LIST) *
+                            len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
     # ── Карта: test_strategy → кол-во комбинаций ──
     strat_combo_map = {
@@ -1589,6 +1805,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'pin_bar': pin_bar_per_symbol,
         'prev_daily': prev_daily_per_symbol,
         'corr_momentum': corr_per_symbol,
+        'williams_r': williams_r_per_symbol,
+        'macd_histogram': macd_histogram_per_symbol,
+        'bb_squeeze': bb_squeeze_per_symbol,
+        'donchian': donchian_per_symbol,
+        'engulfing': engulfing_per_symbol,
     }
 
     if test_strategy and test_strategy in strat_combo_map:
@@ -1631,6 +1852,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'pin_bar': _fp(PIN_BAR_BODY_RATIO_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'prev_daily': _fp(PREV_DAILY_HOLD_BARS_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'corr_momentum': _fp(CORR_WINDOW_LIST, CORR_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'williams_r': _fp(WILLIAMS_R_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'macd_histogram': _fp(MACD_HISTOGRAM_FAST_LIST, MACD_HISTOGRAM_SLOW_LIST, MACD_HISTOGRAM_SIGNAL_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'bb_squeeze': _fp(BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'donchian': _fp(DONCHIAN_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'engulfing': _fp(ENGULFING_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
     }
 
     # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
@@ -1708,11 +1934,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             continue
 
         cached, cached_bar_time, cached_families = load_checkpoint(symbol)
-        # ЧЕКПОЙНТ НЕПОЛНЫЙ: сохранено меньше комбинаций, чем ожидается (напр. прогон прервался).
-        # Такой кэш НЕ считаем валидным — символ будет пересчитан целиком.
-        if cached is not None and len(cached) < combos_per_symbol:
-            incomplete_symbols.append(symbol)
-            cached = None
+        # Полнота проверяется посерийно ниже (см. _broken): кэш НЕ обнуляем,
+        # недостающие/оборванные семейства досчитываем, остальные берём из кэша.
+        
+            
+            
         if cached is None:
             continue
 
@@ -1735,6 +1961,18 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             recalc_set = set(missing_families + changed_families)
         else:
             recalc_set = set()
+
+        # Полнота по числу комбинаций: семейство могло оборваться в середине (прогон прервался).
+        # Досчитываем ТОЛЬКО оборванные семейства, остальной кэш сохраняем (инкремент).
+        _type_counts = {}
+        for _r in cached:
+            _t = _r.get('type', 'stoch')
+            _type_counts[_t] = _type_counts.get(_t, 0) + 1
+        _broken = [f for f, _exp in strat_combo_map.items()
+                   if f in cached_fams and _type_counts.get(f, 0) < _exp]
+        if _broken:
+            incomplete_symbols.append(symbol)
+            recalc_set.update(_broken)
 
         if cached_bar_time == current_bar_time:
             # Данные не изменились с ночного пересчёта
@@ -1767,8 +2005,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     if incomplete_symbols:
         actions_summary.append(
-            f"⚠️ Чекпойнты НЕПОЛНЫЕ у {len(incomplete_symbols)} симв.: "
-            f"{', '.join(incomplete_symbols)} — считаем их заново"
+            f"⚠️ Кэш оборван у {len(incomplete_symbols)} симв.: "
+            f"{', '.join(incomplete_symbols)} — досчитываем оборванные семейства"
         )
 
     if partial_recalc:
@@ -1853,6 +2091,9 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             CHISQ_WINDOW_LIST, CHISQ_ENTRY_LIST, CHISQ_EXIT_LIST, CHISQ_VOL_PERIOD_LIST,
             VWAP_VOL_PERIOD_LIST, VWAP_STD_MULT_LIST, MOMENTUM_PERIOD_LIST, MOMENTUM_THRESHOLD_LIST,
             PIN_BAR_BODY_RATIO_LIST, PREV_DAILY_HOLD_BARS_LIST, CORR_WINDOW_LIST, CORR_THRESHOLD_LIST,
+            WILLIAMS_R_PERIOD_LIST, MACD_HISTOGRAM_FAST_LIST, MACD_HISTOGRAM_SLOW_LIST, MACD_HISTOGRAM_SIGNAL_LIST,
+            BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST,
+            DONCHIAN_PERIOD_LIST, ENGULFING_PERIOD_LIST,
 
 
             BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
@@ -1929,6 +2170,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         strategies_to_run.append(("PrevDaily", prev_daily_per_symbol))
     if not test_strategy or test_strategy == 'corr_momentum':
         strategies_to_run.append(("CorrMomentum", corr_per_symbol))
+    if not test_strategy or test_strategy == 'williams_r':
+        strategies_to_run.append(("WilliamsR", williams_r_per_symbol))
+    if not test_strategy or test_strategy == 'macd_histogram':
+        strategies_to_run.append(("MACD-Hist", macd_histogram_per_symbol))
+    if not test_strategy or test_strategy == 'bb_squeeze':
+        strategies_to_run.append(("BB-Squeeze", bb_squeeze_per_symbol))
+    if not test_strategy or test_strategy == 'donchian':
+        strategies_to_run.append(("Donchian", donchian_per_symbol))
+    if not test_strategy or test_strategy == 'engulfing':
+        strategies_to_run.append(("Engulfing", engulfing_per_symbol))
 
     print("  Стратегии на 1 символ:")
     for name, count in sorted(strategies_to_run, key=lambda x: x[1], reverse=True):
@@ -2022,7 +2273,20 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # ── Дедупликация и сортировка ──
     print(f"\n  Дедупликация {len(all_results)} результатов...")
     all_results = deduplicate_results(all_results)
-    all_results.sort(key=lambda x: x['score'], reverse=True)
+    # Диверсификация рейтинга: стратегии одного типа разносим по рейтингу
+    # (round-robin по типам), чтобы в топе не стоял сплошной RF/LogReg и т.п.
+    _by_type = {}
+    for r in all_results:
+        _by_type.setdefault(r.get('type', 'stoch'), []).append(r)
+    for _lst in _by_type.values():
+        _lst.sort(key=lambda x: x['score'], reverse=True)
+    all_results = []
+    while _by_type:
+        for _t in list(_by_type.keys()):
+            if not _by_type[_t]:
+                del _by_type[_t]
+                continue
+            all_results.append(_by_type[_t].pop(0))
 
     # ── Топ-N стратегий на каждую валюту ──
     top_results = []

@@ -621,6 +621,43 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                         strat_dict['window'] = int(p[3:])
                     elif p.startswith('th'):
                         strat_dict['corr_threshold'] = float(p[2:])
+            # Williams %R Extreme-specific params
+            elif stype == 'williams_r':
+                k = param  # "per14"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['period'] = int(p[3:])
+            # MACD Histogram Reversal-specific params
+            elif stype == 'macd_histogram':
+                k = param  # "mf12_ms26_sig9"
+                for p in k.split('_'):
+                    if p.startswith('mf'):
+                        strat_dict['fast_period'] = int(p[2:])
+                    elif p.startswith('ms'):
+                        strat_dict['slow_period'] = int(p[2:])
+                    elif p.startswith('sig'):
+                        strat_dict['signal_period'] = int(p[3:])
+            # BB Squeeze Breakout-specific params
+            elif stype == 'bb_squeeze':
+                k = param  # "bp20_bs2.0_sp0.5"
+                for p in k.split('_'):
+                    if p.startswith('bp'):
+                        strat_dict['bb_period'] = int(p[2:])
+                    elif p.startswith('bs'):
+                        strat_dict['bb_std'] = float(p[2:])
+                    elif p.startswith('sp'):
+                        strat_dict['squeeze_pct'] = float(p[2:])
+            # Donchian Breakout-specific params
+            elif stype == 'donchian':
+                k = param  # "per20"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['period'] = int(p[3:])
+            # Engulfing Pattern-specific params
+            elif stype == 'engulfing':
+                # No params — uses default body_ratio=0.5, confirmation=True
+                strat_dict['body_ratio'] = 0.5
+                strat_dict['confirmation'] = True
             active_strategies[key] = strat_dict
             existing_magics.add(magic)
             # ── Регистрируем новую стратегию ──
@@ -922,6 +959,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          calc_pin_bar_fn=None, check_exit_pin_bar_fn=None, check_entry_pin_bar_fn=None,
                          calc_prev_daily_fn=None, check_exit_prev_daily_fn=None, check_entry_prev_daily_fn=None,
                          calc_corr_fn=None, check_exit_corr_fn=None, check_entry_corr_fn=None,
+                         calc_williams_r_fn=None, check_exit_williams_r_fn=None, check_entry_williams_r_fn=None,
+                         calc_macd_histogram_fn=None, check_exit_macd_histogram_fn=None, check_entry_macd_histogram_fn=None,
+                         calc_bb_squeeze_fn=None, check_exit_bb_squeeze_fn=None, check_entry_bb_squeeze_fn=None,
+                         calc_donchian_fn=None, check_exit_donchian_fn=None, check_entry_donchian_fn=None,
+                         calc_engulfing_fn=None, check_exit_engulfing_fn=None, check_entry_engulfing_fn=None,
                          risk_cfg=None):
     """Проверяет сигналы для активных стратегий на закрытом баре.
     
@@ -1223,6 +1265,47 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             lambda v, s, d: check_exit_corr_fn(v['prev'], v['curr'], d),
             lambda v, s: check_entry_corr_fn(v['prev'], v['curr']),
             lambda s: f"{s['symbol']}, CorrMomentum",
+        ),
+        # ═══ 5 НОВЫХ СТРАТЕГИЙ ═══
+        'williams_r': _spec(
+            (lambda df, s: calc_williams_r_fn(df, s.get('period', 14))) if calc_williams_r_fn is not None else None,
+            "WilliamsR — модуль не передан", 2,
+            lambda df: {'prev': df['williams_r_signal'].iloc[-2], 'curr': df['williams_r_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_williams_r_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_williams_r_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, WilliamsR",
+        ),
+        'macd_histogram': _spec(
+            (lambda df, s: calc_macd_histogram_fn(df, s.get('fast_period', 12), s.get('slow_period', 26), s.get('signal_period', 9))) if calc_macd_histogram_fn is not None else None,
+            "MACD-Hist — модуль не передан", 2,
+            lambda df: {'prev': df['macd_hist_signal'].iloc[-2], 'curr': df['macd_hist_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_macd_histogram_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_macd_histogram_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, MACD-Hist",
+        ),
+        'bb_squeeze': _spec(
+            (lambda df, s: calc_bb_squeeze_fn(df, s.get('bb_period', 20), s.get('bb_std', 2.0), s.get('squeeze_pct', 0.5))) if calc_bb_squeeze_fn is not None else None,
+            "BB-Squeeze — модуль не передан", 2,
+            lambda df: {'prev': df['bb_signal'].iloc[-2], 'curr': df['bb_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_bb_squeeze_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_bb_squeeze_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, BB-Squeeze",
+        ),
+        'donchian': _spec(
+            (lambda df, s: calc_donchian_fn(df, s.get('period', 20))) if calc_donchian_fn is not None else None,
+            "Donchian — модуль не передан", 2,
+            lambda df: {'prev': df['donchian_signal'].iloc[-2], 'curr': df['donchian_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_donchian_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_donchian_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, Donchian",
+        ),
+        'engulfing': _spec(
+            (lambda df, s: calc_engulfing_fn(df)) if calc_engulfing_fn is not None else None,
+            "Engulfing — модуль не передан", 2,
+            lambda df: {'prev': df['engulfing_signal'].iloc[-2], 'curr': df['engulfing_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_engulfing_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_engulfing_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, Engulfing",
         ),
     }
 

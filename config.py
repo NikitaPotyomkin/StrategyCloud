@@ -154,6 +154,25 @@ PREV_DAILY_HOLD_BARS_RANGE = (6, 18, 6)
 CORR_WINDOW_RANGE = (15, 25, 5)
 CORR_THRESHOLD_RANGE = (0.3, 0.7, 0.1)
 
+# Williams %R Extreme
+WILLIAMS_R_PERIOD_RANGE = (10, 20, 5)
+
+# MACD Histogram Reversal
+MACD_HISTOGRAM_FAST_RANGE = (8, 12, 2)
+MACD_HISTOGRAM_SLOW_RANGE = (20, 26, 3)
+MACD_HISTOGRAM_SIGNAL_RANGE = (3, 6, 1)
+
+# BB Squeeze Breakout
+BB_SQUEEZE_PERIOD_RANGE = (15, 25, 5)
+BB_SQUEEZE_STD_RANGE = (1.5, 2.5, 0.5)
+BB_SQUEEZE_PCT_RANGE = (0.3, 0.7, 0.1)
+
+# Donchian Breakout
+DONCHIAN_PERIOD_RANGE = (15, 25, 5)
+
+# Engulfing Pattern
+ENGULFING_PERIOD_RANGE = (1, 1)  # no params, single value
+
 
 # ═══════════════ DATACLASS-КОНТЕЙНЕРЫ ═══════════════
 @dataclass(frozen=True)
@@ -263,14 +282,29 @@ class StrategyParams:
     # Rolling Correlation Momentum
     corr_window_list: Tuple[int, ...]
     corr_threshold_list: Tuple[float, ...]
+    # Williams %R Extreme
+    williams_r_period_list: Tuple[int, ...]
+    # MACD Histogram Reversal
+    macd_histogram_fast_list: Tuple[int, ...]
+    macd_histogram_slow_list: Tuple[int, ...]
+    macd_histogram_signal_list: Tuple[int, ...]
+    # BB Squeeze Breakout
+    bb_squeeze_period_list: Tuple[int, ...]
+    bb_squeeze_std_list: Tuple[float, ...]
+    bb_squeeze_pct_list: Tuple[float, ...]
+    # Donchian Breakout
+    donchian_period_list: Tuple[int, ...]
+    # Engulfing Pattern
+    engulfing_dummy: Tuple[int, ...]  # placeholder — no params
 
 
 @dataclass(frozen=True)
 class RiskParams:
     """Параметры риск-менеджмента."""
     max_total_positions: int = 999999   # общий лимит отменён
-    max_per_side: int = 99999               # макс. позиций в ОДНУ сторону на символ (направленный лимит)
-    max_per_symbol: int = 99999             # всего на символ = max_per_side x 2 стороны (производное)
+    max_per_side: int = 99999               # лимит на сторону расширен (наблюдение за всеми стратегиями)
+    max_per_type: int = 5               # макс. стратегий ОДНОГО типа (rf, logreg, ...) в активном топе — диверсификация
+    max_per_symbol: int = 99999             # лимит на символ расширен (наблюдение за всеми стратегиями)
     daily_loss_limit_pct: float = 3.0
     equity_stop_pct: float = 10.0
     realtime_quota_recalc: bool = True
@@ -321,7 +355,7 @@ class SteeringParams:
     Считается на основе РЕАЛЬНЫХ сделок из журнала (последние n_last_trades),
     вызывается в конце ночного пересчёта. Флаг enabled=False — квоты не трогаем.
     """
-    enabled: bool = False
+    enabled: bool = True
     alpha = 0.3
     min_q = 0.005       # снижаем пол
     max_q = 0.5         # поднимаем потолок
@@ -442,6 +476,20 @@ def build_default_strategy_params() -> StrategyParams:
         # Rolling Correlation Momentum
         corr_window_list=int_range(*CORR_WINDOW_RANGE),
         corr_threshold_list=float_range(*CORR_THRESHOLD_RANGE),
+        # Williams %R Extreme
+        williams_r_period_list=int_range(*WILLIAMS_R_PERIOD_RANGE),
+        # MACD Histogram Reversal
+        macd_histogram_fast_list=int_range(*MACD_HISTOGRAM_FAST_RANGE),
+        macd_histogram_slow_list=int_range(*MACD_HISTOGRAM_SLOW_RANGE),
+        macd_histogram_signal_list=int_range(*MACD_HISTOGRAM_SIGNAL_RANGE),
+        # BB Squeeze Breakout
+        bb_squeeze_period_list=int_range(*BB_SQUEEZE_PERIOD_RANGE),
+        bb_squeeze_std_list=float_range(*BB_SQUEEZE_STD_RANGE),
+        bb_squeeze_pct_list=float_range(*BB_SQUEEZE_PCT_RANGE),
+        # Donchian Breakout
+        donchian_period_list=int_range(*DONCHIAN_PERIOD_RANGE),
+        # Engulfing Pattern
+        engulfing_dummy=(1,),
     )
 
 
