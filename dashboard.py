@@ -974,6 +974,12 @@ with tab_surface:
 # ═══════════════════════════════════════════════════════════════
 #  STRATEGY TREE
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  STRATEGY TREE
+# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  STRATEGY TREE
+# ═══════════════════════════════════════════════════════════════
 with tab_tree:
     st.markdown("### Strategy Tree")
 
@@ -983,35 +989,102 @@ with tab_tree:
 
     trades_df = data.get('trades_df')
     if trades_df is None or trades_df.empty or not PLOTLY_AVAILABLE:
-        st.info("No data for strategy tree.")
+        if not PLOTLY_AVAILABLE:
+            st.warning("Plotly недоступен — Strategy Tree не может быть построен.")
+            st.stop()
+        _ds = data.get('dash_stats') or {}
+        st.info(
+            "**Дерево пустое.** Оно строится только из **закрытых** позиций наших стратегий "
+            "(magic 770000–869999, символы `*rfd`) за выбранный период Lookback.\n\n"
+            + f"- Окно: {str(_ds.get('window_from', '?'))[:10]} .. {str(_ds.get('window_to', '?'))[:10]} "
+            f"(Lookback {_ds.get('days_back', '?')} дн.)\n"
+            + f"- Сделок в окне (все magic): **{_ds.get('n_deals_raw', '?')}**\n"
+            + f"- Наших (magic+rfd): **{_ds.get('n_deals_ours', '?')}**\n"
+            + f"- **Закрытых позиций: {_ds.get('n_closed_positions', '?')}** ← нужно для дерева\n"
+            + f"- Открытых позиций: **{_ds.get('n_open_positions', '?')}** (в дерево не попадают)\n\n"
+            + "**Причины:** 1) слишком маленький Lookback; 2) в окне нет закрытий; "
+            "3) дашборд подключён не к тому терминалу/счёту."
+        )
         st.stop()
 
+    # ── Копия и нормализация ────────────────────────────────────
     df_tree = trades_df.copy()
-    # Заменяем NaN на 0, чтобы не ломать расчёты и всплывашки
-    df_tree['profit_net'] = df_tree['profit_net'].fillna(0)
+
+    # Проверяем, что колонка profit_net существует и числовая
+    if 'profit_net' not in df_tree.columns:
+        st.error(
+            "❌ Колонка `profit_net` не найдена в trades_df.\n\n"
+            f"Доступные колонки: `{df_tree.columns.tolist()}`"
+        )
+        st.stop()
+
+    df_tree['profit_net'] = pd.to_numeric(df_tree['profit_net'], errors='coerce').fillna(0)
+
+    # Нормализация категориальных колонок: строки, без NaN/пустот
+    for col in ['strategy_type', 'symbol', 'param_key']:
+        if col in df_tree.columns:
+            df_tree[col] = (
+                df_tree[col]
+                .astype(str)
+                .str.strip()
+                .replace(['nan', 'None', '', 'NaN'], 'Unknown')
+            )
+        else:
+            df_tree[col] = 'Unknown'
+
+    # ── Диагностика (можно закомментировать, когда всё заработает) ──
+    total_pnl_raw = float(df_tree['profit_net'].sum())
+    nonzero_count = int((df_tree['profit_net'] != 0).sum())
+
+    if total_pnl_raw == 0 and nonzero_count == 0:
+        st.warning(
+            f"Все значения `profit_net` равны нулю. "
+            f"Сделок: {len(df_tree)}, но PnL везде 0 — дерево будет пустым.\n\n"
+            "Возможные причины:\n"
+            "- Колонка называется иначе (проверь список колонок выше)\n"
+            "- Данные ещё не досчитаны (профит не зафиксирован)\n"
+            "- Подключён не тот терминал/счёт"
+        )
+        with st.expander("Отладка"):
+            st.write(f"Колонки: {df_tree.columns.tolist()}")
+            st.write(f"Строк: {len(df_tree)}")
+            st.write(f"Сумма profit_net: {total_pnl_raw}")
+            st.dataframe(df_tree[['strategy_type', 'symbol', 'param_key', 'profit_net']].head(20))
+        st.stop()
+
+    # ── Агрегации ───────────────────────────────────────────────
     top_k = 3
 
-    # Агрегации
     grp_fam = (
-        df_tree.groupby('strategy_type', dropna=False)['profit_net']
+        df_tree.groupby('strategy_type')['profit_net']
         .agg(['sum', 'count'])
         .reset_index()
         .rename(columns={'sum': 'pnl', 'count': 'trades'})
     )
     grp_sym = (
-        df_tree.groupby(['strategy_type', 'symbol'], dropna=False)['profit_net']
+        df_tree.groupby(['strategy_type', 'symbol'])['profit_net']
         .agg(['sum', 'count'])
         .reset_index()
         .rename(columns={'sum': 'pnl', 'count': 'trades'})
     )
     grp_strat = (
-        df_tree.groupby(['strategy_type', 'symbol', 'param_key'], dropna=False)['profit_net']
+        df_tree.groupby(['strategy_type', 'symbol', 'param_key'])['profit_net']
         .agg(['sum', 'count'])
         .reset_index()
         .rename(columns={'sum': 'pnl', 'count': 'trades'})
     )
 
+    # ── Построение узлов ────────────────────────────────────────
+    def safe_id(prefix, *parts):
+        s = '_'.join(str(p) for p in parts)
+        for ch in ['/', '\\', '.', ' ', '-', '(', ')', ',', ':', ';', "'", '"']:
+            s = s.replace(ch, '_')
+        s = '_'.join(s.split('_'))  # схлопываем повторяющиеся подчёркивания
+        return f"{prefix}_{s}"
+
     nodes = []
+
+    # Корень
     total_pnl = float(df_tree['profit_net'].sum())
     total_n = int(len(df_tree))
     nodes.append({
@@ -1019,17 +1092,10 @@ with tab_tree:
         'parent': '',
         'label': f'Total  {total_pnl:+,.0f} ₽ · {total_n}',
         'pnl': total_pnl,
-        'size': abs(total_pnl)
+        'size': max(abs(total_pnl), 1.0),  # минимум 1, чтобы не было нуля
     })
 
-    # Helper для безопасного ID
-    def safe_id(prefix, *parts):
-        s = '_'.join(str(p) for p in parts)
-        # Удаляем проблемные символы
-        s = s.replace('/', '_').replace('\\', '_').replace('.', '_').replace(' ', '_')
-        return f"{prefix}_{s}"
-
-    # Уровень: семьи
+    # Уровень: семьи стратегий
     for _, f in grp_fam.sort_values('pnl', ascending=False).iterrows():
         t = f['strategy_type']
         fam_id = safe_id('fam', t)
@@ -1038,10 +1104,10 @@ with tab_tree:
             'parent': 'total',
             'label': f'{t}  {f["pnl"]:+,.0f} ₽ · {int(f["trades"])}',
             'pnl': float(f['pnl']),
-            'size': abs(float(f['pnl']))
+            'size': max(abs(float(f['pnl'])), 1.0),
         })
 
-    # Уровень: символ
+    # Уровень: символы внутри семьи
     for _, s in grp_sym.sort_values('pnl', ascending=False).iterrows():
         t, sym = s['strategy_type'], s['symbol']
         sym_id = safe_id('fs', t, sym)
@@ -1051,10 +1117,10 @@ with tab_tree:
             'parent': parent_id,
             'label': f'{sym}  {s["pnl"]:+,.0f} ₽ · {int(s["trades"])}',
             'pnl': float(s['pnl']),
-            'size': abs(float(s['pnl']))
+            'size': max(abs(float(s['pnl'])), 1.0),
         })
 
-    # Уровень: стратегия (top_k + Others)
+    # Уровень: конкретные стратегии (top_k + Others)
     for (t, sym), g in grp_strat.groupby(['strategy_type', 'symbol']):
         parent_id = safe_id('fs', t, sym)
         g_sorted = g.sort_values('pnl', ascending=False)
@@ -1068,7 +1134,7 @@ with tab_tree:
                 'parent': parent_id,
                 'label': f'{r["param_key"]}  {r["pnl"]:+,.0f} ₽ · {int(r["trades"])}',
                 'pnl': float(r['pnl']),
-                'size': abs(float(r['pnl']))
+                'size': max(abs(float(r['pnl'])), 1.0),
             })
 
         if not rest.empty:
@@ -1080,69 +1146,70 @@ with tab_tree:
                 'parent': parent_id,
                 'label': f'Others ({len(rest)})  {r_pnl:+,.0f} ₽ · {r_n}',
                 'pnl': r_pnl,
-                'size': abs(r_pnl)
+                'size': max(abs(r_pnl), 1.0),
             })
 
-    # Пересчитаем size для родителей как сумму детей (для консистентности treemap)
-    children_sum = {}
-    for n in nodes:
-        if n['parent']:
-            children_sum[n['parent']] = children_sum.get(n['parent'], 0.0) + n['size']
+    # ── Проверка целостности иерархии ──────────────────────────
+    ids = [n['id'] for n in nodes]
+    parents = [n['parent'] for n in nodes]
+    labels = [n['label'] for n in nodes]
+    pnls = [n['pnl'] for n in nodes]
+    values = [n['size'] for n in nodes]
 
-    ids = []
-    parents = []
-    labels = []
-    values = []
-    pnls = []
+    # Проверка: нет ли дубликатов ID
+    if len(ids) != len(set(ids)):
+        dupes = [x for x in ids if ids.count(x) > 1]
+        st.warning(f"Дубликаты ID в дереве: {dupes[:5]}")
 
-    for n in nodes:
-        ids.append(n['id'])
-        parents.append(n['parent'])
-        labels.append(n['label'])
-        # Если у узла есть дети — размер = сумма детей, иначе = его собственный size
-        if n['id'] in children_sum:
-            values.append(children_sum[n['id']])
-        else:
-            values.append(n['size'])
-        pnls.append(n['pnl'])
+    # Проверка: все ли parent ссылаются на существующий ID (или пустые для корня)
+    ids_set = set(ids)
+    orphans = [p for p in parents if p and p not in ids_set]
+    if orphans:
+        st.warning(f"Orphan parents (нет родителя): {orphans[:5]}")
 
-    # Цвета узлов вручную (градиент PnL) — colorscale+cmid в Treemap дают нейтральную заливку
+    # ── Цвета узлов (градиент PnL) ─────────────────────────────
     _max_abs = max(1.0, max(abs(p) for p in pnls))
     node_colors = []
     for _p in pnls:
         if _p >= 0:
             _r = _p / _max_abs
-            node_colors.append(f'rgb({int(46 + 26*_r)}, {int(150 + 35*_r)}, {int(67 + 26*_r)})')
+            node_colors.append(
+                f'rgb({int(46 + 26 * _r)}, {int(150 + 35 * _r)}, {int(67 + 26 * _r)})'
+            )
         else:
             _r = -_p / _max_abs
-            node_colors.append(f'rgb({int(218 + 25*_r)}, {int(54 + 30*_r)}, {int(51 + 20*_r)})')
+            node_colors.append(
+                f'rgb({int(218 + 25 * _r)}, {int(54 + 30 * _r)}, {int(51 + 20 * _r)})'
+            )
 
+    # ── Treemap ────────────────────────────────────────────────
     fig_tree = go.Figure(go.Treemap(
         ids=ids,
         parents=parents,
         labels=labels,
         values=values,
-        branchvalues='total',
+        branchvalues='remainder',
         maxdepth=4,
         textinfo='label',
         textfont=dict(size=12, color=COL_TEXT),
         marker=dict(
-            color=node_colors,
-            
-            
+            colors=node_colors,
             showscale=False,
             line=dict(width=1, color=COL_BG),
         ),
         hovertemplate='%{label}<br>PnL: %{customdata:+,.0f} ₽<extra></extra>',
         customdata=pnls,
     ))
+
     fig_tree.update_layout(
         paper_bgcolor=COL_PANEL,
         height=720,
         margin=dict(l=0, r=0, t=10, b=0),
         font=dict(color=COL_TEXT, size=12),
     )
-    st.plotly_chart(fig_tree, use_container_width=True, key="strategy_tree")
+
+    # ИСПРАВЛЕНО: use_container_width -> width='stretch'
+    st.plotly_chart(fig_tree, width='stretch', key="strategy_tree")
 
     with st.expander("Reading the tree"):
         st.markdown("""
@@ -1156,6 +1223,8 @@ with tab_tree:
         **Size** — |PnL| (node area). **Color** — PnL gradient: green = profit, red = loss.
         Nodes sorted by PnL descending.
         """)
+
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1280,7 +1349,7 @@ with tab_steering:
                 df_sw['current_quota'] = df_sw['current_quota'] / sum_cur
 
             df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
-            
+
 
             df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
             n_delta = int((df_sw['delta'].abs() > 1e-4).sum())

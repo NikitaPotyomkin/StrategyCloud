@@ -348,6 +348,15 @@ def generate_daily_report(date=None):
         'summary_csv': summary_csv,
         'metrics': metrics,
         'total_profit': total_profit,
+            
+                
+                
+                
+                
+                
+                
+                
+            
         'total_trades': total_trades,
     }
 
@@ -432,11 +441,14 @@ def get_dashboard_data(days_back=30):
         date_to = datetime.datetime.now() + datetime.timedelta(hours=6)  # запас: часы хоста могут отставать от сервера UTC+3
         date_from = max(datetime.datetime(2026, 9, 1), date_to - datetime.timedelta(days=days_back))
 
+        n_deals_raw = 0
+        n_deals_ours = 0
         deals = mt5.history_deals_get(date_from, date_to)
         if deals is None or len(deals) == 0:
             trades_df = pd.DataFrame()
         else:
             trades_df = pd.DataFrame([d._asdict() for d in deals])
+            n_deals_raw = len(trades_df)
 
             # Фильтр: только торговые сделки
             type_map = {
@@ -455,6 +467,7 @@ def get_dashboard_data(days_back=30):
 
             # 🔑 ФИЛЬТР ПО СИМВОЛУ — только наши символы с суффиксом rfd
             trades_df = trades_df[trades_df['symbol'].str.endswith(OUR_SYMBOLS_SUFFIX, na=False)]
+            n_deals_ours = len(trades_df)
 
             # 🔑 Привязка сделок к стратегиям: magic → (strategy_type, param_key)
             # ПРИМЕЧАНИЕ: фильтр по comment намеренно удалён (полная выдача).
@@ -570,6 +583,15 @@ def get_dashboard_data(days_back=30):
             'active_strategies': active_strategies,
             'total_trades': total_trades,
             'total_profit': total_profit,
+            'dash_stats': {
+                'window_from': date_from.isoformat(),
+                'window_to': date_to.isoformat(),
+                'days_back': days_back,
+                'n_deals_raw': n_deals_raw,
+                'n_deals_ours': n_deals_ours,
+                'n_closed_positions': len(trades_df),
+                'n_open_positions': len(positions) if positions else 0,
+            },
         }
 
     finally:
