@@ -610,7 +610,7 @@ def _backtest_symbol(args):
         'corr_momentum': corr_per_symbol,
     }
 
-    if test_strategy in _strategy_map:
+    if isinstance(test_strategy, str) and test_strategy in _strategy_map:
         active_combos = _strategy_map[test_strategy]
     else:
         active_combos = sum(_strategy_map.values())

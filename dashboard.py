@@ -970,9 +970,7 @@ with tab_surface:
     st.caption("Select a family, set X/Y to parameter axes, Z to P&L. Ridges indicate optimal parameter zones.")
 
 
-# ═══════════════════════════════════════════════════════════════
-#  STEERING WHEEL
-# ═══════════════════════════════════════════════════════════════
+
 # ═══════════════════════════════════════════════════════════════
 #  STRATEGY TREE
 # ═══════════════════════════════════════════════════════════════
@@ -1108,6 +1106,17 @@ with tab_tree:
             values.append(n['size'])
         pnls.append(n['pnl'])
 
+    # Цвета узлов вручную (градиент PnL) — colorscale+cmid в Treemap дают нейтральную заливку
+    _max_abs = max(1.0, max(abs(p) for p in pnls))
+    node_colors = []
+    for _p in pnls:
+        if _p >= 0:
+            _r = _p / _max_abs
+            node_colors.append(f'rgb({int(46 + 26*_r)}, {int(150 + 35*_r)}, {int(67 + 26*_r)})')
+        else:
+            _r = -_p / _max_abs
+            node_colors.append(f'rgb({int(218 + 25*_r)}, {int(54 + 30*_r)}, {int(51 + 20*_r)})')
+
     fig_tree = go.Figure(go.Treemap(
         ids=ids,
         parents=parents,
@@ -1118,10 +1127,10 @@ with tab_tree:
         textinfo='label',
         textfont=dict(size=12, color=COL_TEXT),
         marker=dict(
-            colors=pnls,
-            colorscale=[[0.0, COL_RED], [0.5, COL_PANEL], [1.0, COL_GREEN]],
-            cmid=0,
-            showscale=True,
+            color=node_colors,
+            
+            
+            showscale=False,
             line=dict(width=1, color=COL_BG),
         ),
         hovertemplate='%{label}<br>PnL: %{customdata:+,.0f} ₽<extra></extra>',
@@ -1149,7 +1158,9 @@ with tab_tree:
         """)
 
 
-
+# ═══════════════════════════════════════════════════════════════
+#  STEERING WHEEL
+# ═══════════════════════════════════════════════════════════════
 with tab_steering:
     if not data:
         st.warning("No data.")
