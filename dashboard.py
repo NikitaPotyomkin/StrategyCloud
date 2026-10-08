@@ -1082,53 +1082,42 @@ with tab_tree:
         s = '_'.join(s.split('_'))  # схлопываем повторяющиеся подчёркивания
         return f"{prefix}_{s}"
 
-    # ── Объём: сегодня / динамика ко вчера (вместо числа сделок) ──
-    # Окно дерева — Lookback (закрытые позиции). Объём считаем по ДАТЕ ЗАКРЫТИЯ:
-    # сегодня = закрыто сегодня, вчера = закрыто вчера; подпись "сегодня/w%".
+
+
+
+
+    # ── Объём: всего / средний недельный темп прироста (week-over-week) ──
+    # Слева — суммарный объём за всё окно (закрытые позиции), справа — средний
+    # недельный темп прироста объёма, %.
     df_tree['volume'] = pd.to_numeric(df_tree['volume'], errors='coerce').fillna(0.0)
     _ts_col = 'timestamp' if 'timestamp' in df_tree.columns else 'time'
-    _close_date = pd.to_datetime(df_tree[_ts_col], unit=('s' if _ts_col == 'time' else None)).dt.normalize()
-    _today = pd.Timestamp.now().normalize()          # хост и сервер в UTC+3 — совпадают
-    _yest = _today - pd.Timedelta(days=1)
-    _today_mask = _close_date == _today
-    _yest_mask = _close_date == _yest
+    df_tree['_cdate'] = pd.to_datetime(df_tree[_ts_col], unit=('s' if _ts_col == 'time' else None)).dt.normalize()
 
-    def _vol_cell(vol_today, vol_yest):
-        v = float(vol_today or 0.0)
-        vstr = f'{v:.2f}'.rstrip('0').rstrip('.') or '0'
-        try:
-            vy = float(vol_yest or 0.0)
-        except (TypeError, ValueError):
-            vy = 0.0
-        if vy > 0:
-            dstr = f'{(v - vy) / vy * 100.0:+.1f}%'
-        elif v > 0:
-            dstr = 'new'                              # вчера 0, сегодня есть
-        else:
-            dstr = '0.0%'
-        return f'{vstr}/{dstr}'
-
-    _vol_fam_today = df_tree[_today_mask].groupby('strategy_type')['volume'].sum()
-    _vol_fam_yest = df_tree[_yest_mask].groupby('strategy_type')['volume'].sum()
-    _vol_sym_today = df_tree[_today_mask].groupby(['strategy_type', 'symbol'])['volume'].sum()
-    _vol_sym_yest = df_tree[_yest_mask].groupby(['strategy_type', 'symbol'])['volume'].sum()
-    _vol_str_today = df_tree[_today_mask].groupby(['strategy_type', 'symbol', 'param_key'])['volume'].sum()
-    _vol_str_yest = df_tree[_yest_mask].groupby(['strategy_type', 'symbol', 'param_key'])['volume'].sum()
+    def _vol_cell(sub):
+        if len(sub) == 0:
+            return '0/—'
+        total = float(sub['volume'].sum())
+        vstr = f'{total:.2f}'.rstrip('0').rstrip('.') or '0'
+        weekly = sub.groupby(sub['_cdate'].dt.to_period('W'))['volume'].sum().sort_index()
+        w = weekly.tolist()
+        rates = [(w[i] - w[i - 1]) / w[i - 1] for i in range(1, len(w)) if w[i - 1] > 0]
+        gstr = f'{sum(rates) / len(rates) * 100.0:+.1f}%' if rates else '0.0%'
+        return f'{vstr}/{gstr}'
 
     def _vc_fam(_t):
-        return _vol_cell(_vol_fam_today.get(_t, 0.0), _vol_fam_yest.get(_t, 0.0))
+        return _vol_cell(df_tree[df_tree['strategy_type'] == _t])
 
     def _vc_sym(_t, _sym):
-        return _vol_cell(_vol_sym_today.get((_t, _sym), 0.0), _vol_sym_yest.get((_t, _sym), 0.0))
+        return _vol_cell(df_tree[(df_tree['strategy_type'] == _t) & (df_tree['symbol'] == _sym)])
 
     def _vc_str(_t, _sym, _pk):
-        return _vol_cell(_vol_str_today.get((_t, _sym, _pk), 0.0), _vol_str_yest.get((_t, _sym, _pk), 0.0))
+        return _vol_cell(df_tree[(df_tree['strategy_type'] == _t) & (df_tree['symbol'] == _sym) & (df_tree['param_key'] == _pk)])
 
     nodes = []
 
     # Корень
     total_pnl = float(df_tree['profit_net'].sum())
-    total_vol = _vol_cell(df_tree[_today_mask]['volume'].sum(), df_tree[_yest_mask]['volume'].sum())
+    total_vol = _vol_cell(df_tree)
     nodes.append({
         'id': 'total',
         'parent': '',
@@ -1181,13 +1170,13 @@ with tab_tree:
 
         if not rest.empty:
             r_pnl = float(rest['pnl'].sum())
-            r_vol_today = sum(_vol_str_today.get((t, sym, pk), 0.0) for pk in rest['param_key'])
-            r_vol_yest = sum(_vol_str_yest.get((t, sym, pk), 0.0) for pk in rest['param_key'])
+            _rest_sub = df_tree[(df_tree['strategy_type'] == t) & (df_tree['symbol'] == sym) & (df_tree['param_key'].isin(set(rest['param_key'])))]
+            _rest_vol = _vol_cell(_rest_sub)
             others_id = safe_id('st_others', t, sym)
             nodes.append({
                 'id': others_id,
                 'parent': parent_id,
-                'label': f'Others ({len(rest)})  {r_pnl:+,.0f} ₽ · {_vol_cell(r_vol_today, r_vol_yest)}',
+                'label': f'Others ({len(rest)})  {r_pnl:+,.0f} ₽ · {_rest_vol}',
                 'pnl': r_pnl,
                 'size': max(abs(r_pnl), 1.0),
             })
@@ -1264,8 +1253,8 @@ with tab_tree:
         | Strategy | Top‑3 param_key by PnL + "Others" bucket |
 
         **Size** — |PnL| (node area). **Color** — PnL gradient: green = profit, red = loss.
-        **Volume** — после «·»: `today_vol/±%` — объём закрытых позиций за сегодня и его
-        динамика ко вчера (напр. `0.1/+0.5%` = вчера было на 0.5% меньше; `new` = вчера 0).
+        **Volume** — после «·»: `total/±%` — суммарный объём за всё окно и
+        средний недельный темп прироста объёма (week-over-week, напр. `12.5/+3.2%`).
         Количество сделок убрано — объём сверяем со штурвалом (Wheel).
         Nodes sorted by PnL descending.
         """)
