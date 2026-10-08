@@ -393,6 +393,67 @@ def check_margin_available(lot, symbol, price, sl_points=0):
     return free_margin >= margin_required, margin_required, free_margin
 
 
+def check_margin_level_after_open(lot, symbol, price, min_level_pct=150.0, buffer=1.2):
+    """Предварительный расчёт: не уйдём ли за минимальный уровень маржи.
+
+    Прогнозирует margin level ПОСЛЕ гипотетического открытия позиции:
+        projected_level = equity / (margin_used + margin_required * buffer) * 100
+    Если прогноз ниже min_level_pct — открывать нельзя (защита от margin call).
+
+    Args:
+        lot: объём
+        symbol: символ
+        price: цена входа
+        min_level_pct: минимально допустимый уровень маржи, %
+        buffer: запас на просадку/спред (по умолчанию +20%)
+
+    Returns:
+        tuple: (можно: bool, прогноз_уровня: float, текущий_уровень: float)
+    """
+    account = mt5.account_info()
+    if account is None:
+        return False, 0.0, 0.0
+
+    equity = account.equity
+    margin_used = getattr(account, 'margin', 0.0) or 0.0
+    current_level = getattr(account, 'margin_level', 0.0) or 0.0
+
+    margin_required = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol, lot, price)
+    if margin_required is None:
+        margin_required = lot * price
+    margin_required *= buffer
+
+    projected_used = margin_used + margin_required
+    if projected_used <= 0:
+        return True, current_level, current_level
+
+    projected_level = equity / projected_used * 100.0
+    return projected_level >= min_level_pct, projected_level, current_level
+
+
+def check_margin_level(min_level_pct=150.0, stop_level_pct=100.0):
+    """Runtime-проверка уровня маржи (защита от «айсберга»).
+
+    Returns:
+        tuple: (status: str, level_pct: float, reason: str)
+        status: 'ok' | 'warn' | 'stop' | 'na'
+    """
+    account = mt5.account_info()
+    if account is None:
+        return 'na', 0.0, 'account_info not available'
+
+    level = getattr(account, 'margin_level', 0.0) or 0.0
+    if level <= 0:
+        # Нет открытых позиций — маржа не занята, уровень не определён
+        return 'ok', 0.0, 'no positions (margin_level undefined)'
+
+    if level < stop_level_pct:
+        return 'stop', level, f'Margin level {level:.1f}% < {stop_level_pct:.0f}%'
+    if level < min_level_pct:
+        return 'warn', level, f'Margin level {level:.1f}% < {min_level_pct:.0f}% — новые ордера блокируются'
+    return 'ok', level, f'OK: margin level {level:.1f}%'
+
+
 def get_stops_levels(symbol):
     """Получить уровни stops/freeze и режим маржи для символа."""
     symbol_info = mt5.symbol_info(symbol)

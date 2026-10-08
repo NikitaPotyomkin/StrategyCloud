@@ -11,7 +11,7 @@ import MetaTrader5 as mt5
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots,
     _normalize_volume, _position_profit, DEFAULT_LOT, json_default,
-    get_positions, positions_total, check_margin_available,
+    get_positions, positions_total, check_margin_available, check_margin_level_after_open,
     get_stops_levels, validate_stops, check_position_limits,
     check_daily_loss_limit, check_equity_stop, realtime_quota_recalc
 )
@@ -116,7 +116,20 @@ def _short_name(r):
         return f"{pair}/RF {k}"
     elif stype == 'logreg':
         return f"{pair}/LogReg {k}"
-    return f"{pair}/Stoch K{k}"
+    _labels = {
+        'ma': 'MA', 'macd_cross': 'MACD', 'rsi_rev': 'RSI-Rev',
+        'zscore': 'ZScore', 'autocorr': 'Autocorr', 'hurst': 'Hurst', 'lrc': 'LRC',
+        'percentile': 'Percentile', 'runs': 'Runs', 'coint': 'Coint', 'sharpe': 'Sharpe',
+        'skewness': 'Skewness', 'bayesian': 'Bayesian', 'kurtosis': 'Kurtosis',
+        'chi_square': 'ChiSq', 'vwap': 'VWAP', 'momentum': 'Momentum', 'pin_bar': 'PinBar',
+        'prev_daily': 'PrevDaily', 'corr_momentum': 'CorrMom', 'williams_r': 'WilliamsR',
+        'macd_histogram': 'MACD-Hist', 'bb_squeeze': 'BB-Squeeze', 'donchian': 'Donchian',
+        'engulfing': 'Engulfing', 'cci': 'CCI-Rev', 'supertrend': 'SuperTrend',
+        'adx': 'ADX-Trend', 'obv': 'OBV-Flow', 'morning_star': 'MorningStar',
+    }
+    if stype == 'stoch':
+        return f"{pair}/Stoch K{k}"
+    return f"{pair}/{_labels.get(stype, stype.upper())} {k}"
 
 
 # ═══ МЕТРИКИ И СКОРИНГ ═══
@@ -658,6 +671,44 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                 # No params — uses default body_ratio=0.5, confirmation=True
                 strat_dict['body_ratio'] = 0.5
                 strat_dict['confirmation'] = True
+            # CCI Reversion-specific params
+            elif stype == 'cci':
+                k = param  # "per14_th100"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['period'] = int(p[3:])
+                    elif p.startswith('th'):
+                        strat_dict['threshold'] = int(p[2:])
+            # SuperTrend-specific params
+            elif stype == 'supertrend':
+                k = param  # "per10_mul3.0"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['period'] = int(p[3:])
+                    elif p.startswith('mul'):
+                        strat_dict['multiplier'] = float(p[3:])
+            # ADX Trend-specific params
+            elif stype == 'adx':
+                k = param  # "per14_th25"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['period'] = int(p[3:])
+                    elif p.startswith('th'):
+                        strat_dict['adx_threshold'] = int(p[2:])
+            # OBV Flow-specific params
+            elif stype == 'obv':
+                k = param  # "per20_th0.5"
+                for p in k.split('_'):
+                    if p.startswith('per'):
+                        strat_dict['period'] = int(p[3:])
+                    elif p.startswith('th'):
+                        strat_dict['threshold'] = float(p[2:])
+            # Morning/Evening Star-specific params
+            elif stype == 'morning_star':
+                k = param  # "br0.3"
+                for p in k.split('_'):
+                    if p.startswith('br'):
+                        strat_dict['min_body_ratio'] = float(p[2:])
             active_strategies[key] = strat_dict
             existing_magics.add(magic)
             # ── Регистрируем новую стратегию ──
@@ -750,7 +801,8 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
             - check_margin: bool (по умолчанию True)
             - check_stops: bool (по умолчанию True)
             - min_sl_distance_points: int (по умолчанию 10)
-            - max_sl_distance_points: int (по умолчанию 500)
+            - max_sl_distance_points: int (по умолчанию 5000)
+            - min_margin_level_pct: float (по умолчанию 150.0) — прогноз margin level после открытия
     """
     if risk_params is None:
         risk_params = {}
@@ -796,6 +848,17 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         if not margin_ok:
             print(f"  -> [WARN] {symbol}: недостаточно margin (req={margin_req:.2f}, free={margin_free:.2f}) — ордер пропущен")
             return None
+
+        # ── Проверка 1b: прогноз margin level ПОСЛЕ открытия (защита от margin call) ──
+        min_margin_level_pct = risk_params.get('min_margin_level_pct', 150.0)
+        lvl_ok, lvl_proj, lvl_now = check_margin_level_after_open(
+            lot, symbol, entry_price, min_margin_level_pct
+        )
+        if not lvl_ok:
+            print(f"  -> [WARN] {symbol}: margin level уйдёт ниже {min_margin_level_pct:.0f}% "
+                  f"(сейчас {lvl_now:.0f}% -> прогноз {lvl_proj:.0f}%) — ордер пропущен")
+            return None
+
     
     # ── Проверка 2: Stops levels брокера (пункт 5) ──
     if check_stops:
@@ -964,6 +1027,12 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                          calc_bb_squeeze_fn=None, check_exit_bb_squeeze_fn=None, check_entry_bb_squeeze_fn=None,
                          calc_donchian_fn=None, check_exit_donchian_fn=None, check_entry_donchian_fn=None,
                          calc_engulfing_fn=None, check_exit_engulfing_fn=None, check_entry_engulfing_fn=None,
+                         calc_cci_fn=None, check_exit_cci_fn=None, check_entry_cci_fn=None,
+                         calc_supertrend_fn=None, check_exit_supertrend_fn=None, check_entry_supertrend_fn=None,
+                         calc_adx_fn=None, check_exit_adx_fn=None, check_entry_adx_fn=None,
+                         calc_obv_fn=None, check_exit_obv_fn=None, check_entry_obv_fn=None,
+                         calc_morning_evening_star_fn=None, check_exit_morning_evening_star_fn=None,
+                         check_entry_morning_evening_star_fn=None,
                          risk_cfg=None):
     """Проверяет сигналы для активных стратегий на закрытом баре.
     
@@ -974,6 +1043,7 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
     if risk_cfg is None:
         risk_cfg = RiskParams()
     risk_params = {'check_margin': True, 'check_stops': True,
+        'min_margin_level_pct': risk_cfg.min_margin_level_pct,
         'min_sl_distance_points': risk_cfg.min_sl_distance_points, 'max_sl_distance_points': risk_cfg.max_sl_distance_points}
     
     # ── Проверка 1: Реальные позиции MT5 (пункт 1) ──
@@ -1306,6 +1376,47 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             lambda v, s, d: check_exit_engulfing_fn(v['prev'], v['curr'], d),
             lambda v, s: check_entry_engulfing_fn(v['prev'], v['curr']),
             lambda s: f"{s['symbol']}, Engulfing",
+        ),
+        # ═══ НАБОР 2: НОВЫЕ СТРАТЕГИИ ═══
+        'cci': _spec(
+            (lambda df, s: calc_cci_fn(df, s.get('period', 14), s.get('threshold', 100))) if calc_cci_fn is not None else None,
+            "CCI-Reversion — модуль не передан", 2,
+            lambda df: {'prev': df['cci_signal'].iloc[-2], 'curr': df['cci_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_cci_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_cci_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, CCI-Reversion",
+        ),
+        'supertrend': _spec(
+            (lambda df, s: calc_supertrend_fn(df, s.get('period', 10), s.get('multiplier', 3.0))) if calc_supertrend_fn is not None else None,
+            "SuperTrend — модуль не передан", 2,
+            lambda df: {'prev': df['supertrend_signal'].iloc[-2], 'curr': df['supertrend_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_supertrend_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_supertrend_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, SuperTrend",
+        ),
+        'adx': _spec(
+            (lambda df, s: calc_adx_fn(df, s.get('period', 14), s.get('adx_threshold', 25))) if calc_adx_fn is not None else None,
+            "ADX-Trend — модуль не передан", 2,
+            lambda df: {'prev': df['adx_signal'].iloc[-2], 'curr': df['adx_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_adx_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_adx_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, ADX-Trend",
+        ),
+        'obv': _spec(
+            (lambda df, s: calc_obv_fn(df, s.get('period', 20), s.get('threshold', 0.5))) if calc_obv_fn is not None else None,
+            "OBV-Flow — модуль не передан", 2,
+            lambda df: {'prev': df['obv_signal'].iloc[-2], 'curr': df['obv_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_obv_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_obv_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, OBV-Flow",
+        ),
+        'morning_star': _spec(
+            (lambda df, s: calc_morning_evening_star_fn(df, s.get('min_body_ratio', 0.3))) if calc_morning_evening_star_fn is not None else None,
+            "Morning/Evening Star — модуль не передан", 2,
+            lambda df: {'prev': df['star_signal'].iloc[-2], 'curr': df['star_signal'].iloc[-1]},
+            lambda v, s, d: check_exit_morning_evening_star_fn(v['prev'], v['curr'], d),
+            lambda v, s: check_entry_morning_evening_star_fn(v['prev'], v['curr']),
+            lambda s: f"{s['symbol']}, MorningStar",
         ),
     }
 

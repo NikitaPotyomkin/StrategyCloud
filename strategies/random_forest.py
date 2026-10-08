@@ -1,7 +1,12 @@
-"""Стратегия Random Forest — вход по уверенности классификатора."""
+"""Стратегия Random Forest — вход по уверенности классификатора.
+
+Walk-forward: модель переобучается каждые ``retrain_every`` баров, обучающая
+выборка берётся ТОЛЬКО из прошлого (исключено заглядывание в будущее).
+bfill удалён — он заполнял пропуски будущими значениями (data leakage).
+"""
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from config import RF_RETRAIN_EVERY
 
 
 def make_features(df, lookback):
@@ -37,8 +42,8 @@ def make_features(df, lookback):
     # День недели
     df['dow'] = df.index.dayofweek
 
-    # Заполняем пропуски
-    df = df.bfill().ffill().fillna(0)
+    # Только ffill (без bfill!) — не заполняем прошлое будущими значениями
+    df = df.ffill().fillna(0)
 
     return df
 
@@ -54,25 +59,29 @@ def train_model(X, y, n_estimators=50, max_depth=5):
         n_estimators=n_estimators,
         max_depth=max_depth,
         random_state=42,
-        n_jobs=1  # Используем все ядра, но только в главном процессе
+        n_jobs=1  # 1 ядро (параллелизм — на уровне процессов)
     )
     model.fit(X, y)
     return model
 
 
-def calc_random_forest_once(df, lookback, n_bars, threshold=0.6, n_estimators=50, max_depth=5):
-    """
-    Считает признаки и обучает ОДНУ модель на всём доступном окне.
+def calc_random_forest_once(df, lookback, n_bars, threshold=0.6,
+                            n_estimators=50, max_depth=5, retrain_every=RF_RETRAIN_EVERY):
+    """Считает признаки и прогнозами Walk-Forward Random Forest.
+
+    Для каждого окна предсказаний [start, start+retrain_every) обучающая
+    выборка — это [start-lookback, start-n_bars), где таргет (рост/падение
+    через n_bars) уже известен. Это исключает заглядывание в будущее.
+
     Возвращает DataFrame с колонками 'rf_prob' и 'rf_signal'.
-    Сигналы генерируются по тому же порогу, что и в бэктесте.
     """
     df = df.copy()
-    if len(df) < lookback + 30:
+    if len(df) < lookback + n_bars + 30:
         df['rf_prob'] = np.nan
         df['rf_signal'] = 0
         return df
 
-    # Целевая переменная
+    # Целевая переменная (последние n_bars строк будут NaN — нормально)
     df['target'] = (df['close'].shift(-n_bars) > df['close']).astype(int)
 
     df = make_features(df, lookback)
@@ -80,33 +89,47 @@ def calc_random_forest_once(df, lookback, n_bars, threshold=0.6, n_estimators=50
     feature_prefixes = ('ret_lag', 'rsi', 'atr', 'hl_range', 'dow')
     feature_cols = [c for c in df.columns if c.startswith(feature_prefixes)]
 
-    X = df[feature_cols].values
-    y = df['target'].values
-
-    # Убираем NaN из-за лагов
-    valid_mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
-    X_valid = X[valid_mask]
-    y_valid = y[valid_mask]
-
-    if len(np.unique(y_valid)) < 2 or len(X_valid) < 50:
-        # Недостаточно данных или дисбаланс
-        df['rf_prob'] = np.nan
-        df['rf_signal'] = 0
-        df = df.drop(columns=['target'], errors='ignore')
-        return df
-
-    model = train_model(X_valid, y_valid, n_estimators, max_depth)
-    if model is None:
-        df['rf_prob'] = np.nan
-        df['rf_signal'] = 0
-        df = df.drop(columns=['target'], errors='ignore')
-        return df
-
-    probs = model.predict_proba(X)[:, 1]
-    df['rf_prob'] = probs
-
-    # Сигнал по порогу (как в бэктесте)
+    n = len(df)
+    df['rf_prob'] = np.nan
     df['rf_signal'] = 0
+
+    retrain_every = max(1, retrain_every)
+    start = lookback + n_bars
+
+    while start < n:
+        # --- Обучение только на прошлом (без будущего) ---
+        train_start = max(0, start - lookback)
+        train_end = start - n_bars  # последняя строка с известным таргетом
+
+        X_train = df.iloc[train_start:train_end][feature_cols]
+        y_train = df.iloc[train_start:train_end]['target']
+
+        valid = y_train.notna() & X_train.notna().all(axis=1)
+        X_valid = X_train[valid].values
+        y_valid = y_train[valid].values.astype(int)
+
+        if len(X_valid) < 50 or len(np.unique(y_valid)) < 2:
+            start += retrain_every
+            continue
+
+        model = train_model(X_valid, y_valid, n_estimators, max_depth)
+        if model is None:
+            start += retrain_every
+            continue
+
+        # --- Предсказание для баров [start, end) ---
+        end = min(start + retrain_every, n)
+        X_pred = df.iloc[start:end][feature_cols]
+        valid_pred = X_pred.notna().all(axis=1)
+
+        if valid_pred.any():
+            probs = model.predict_proba(X_pred[valid_pred].values)[:, 1]
+            pred_idx = X_pred.index[valid_pred]
+            df.loc[pred_idx, 'rf_prob'] = probs
+
+        start = end
+
+    # --- Сигналы по порогу ---
     df.loc[df['rf_prob'] >= threshold, 'rf_signal'] = 1
     df.loc[df['rf_prob'] <= (1 - threshold), 'rf_signal'] = -1
 
@@ -140,13 +163,13 @@ def backtest(df, lookback, n_bars, threshold, sl_points, tp_points, point,
              tick_value, tick_size, n_estimators=50, max_depth=5,
              sim_lot=0.01, spread_points=0):
     """
-    Симуляция сделок на истории с Random Forest.
-    Модель обучается ОДИН РАЗ на всём окне df.
+    Симуляция сделок на истории с Random Forest (walk-forward).
     Перебираются только threshold, SL, TP.
     Возвращает (profit, n_trades, trade_profits).
     """
-    # 1. Считаем признаки и обучаем модель один раз
-    df_calc = calc_random_forest_once(df, lookback, n_bars, threshold=threshold, n_estimators=n_estimators, max_depth=max_depth)
+    # 1. Считаем признаки и walk-forward прогнозы
+    df_calc = calc_random_forest_once(df, lookback, n_bars, threshold=threshold,
+                                      n_estimators=n_estimators, max_depth=max_depth)
 
     sl_dist = sl_points * point
     tp_dist = tp_points * point

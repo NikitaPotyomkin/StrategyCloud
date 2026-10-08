@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from typing import List, Dict, Any
 
 
@@ -15,6 +16,87 @@ def _ccy_base(symbol: str) -> str:
 def category_label(symbol: str, family: str) -> str:
     """Имя категории «символ + семейство»: 'EUR - parabolic'."""
     return f"{_ccy_base(symbol)} - {family}"
+
+def compute_categories(trades_df, family_col='strategy_type', symbol_col='symbol',
+                       pnl_col='profit_net', volume_col='volume'):
+    """ЕДИНЫЙ источник категорий «символ + семейство» из окна сделок.
+
+    Считает PnL по ВСЕМУ переданному окну (никакого n_last) — именно это
+    число видно в Strategy Tree на уровне Symbol. Поэтому Tree и Wheel
+    не могут разойтись: оба берут категории отсюда.
+
+    Возвращает список dict:
+        id, label, family, symbol, pnl, volume, vol (std), trades
+    Отсортирован по PnL по убыванию.
+    """
+    if trades_df is None or len(trades_df) == 0:
+        return []
+
+    df = trades_df.copy().reset_index(drop=True)
+
+    # Гибкий выбор колонок (на случай иных имён во входном DataFrame)
+    if family_col not in df.columns:
+        family_col = 'type' if 'type' in df.columns else None
+    if symbol_col not in df.columns:
+        return []
+    if pnl_col not in df.columns:
+        pnl_col = 'profit' if 'profit' in df.columns else None
+    if family_col is None or pnl_col is None:
+        return []
+
+    df[pnl_col] = pd.to_numeric(df[pnl_col], errors='coerce').fillna(0.0)
+    has_vol = volume_col in df.columns
+    if has_vol:
+        df[volume_col] = pd.to_numeric(df[volume_col], errors='coerce').fillna(0.0)
+
+    metrics = []
+    for (symbol, fam), grp in df.groupby([symbol_col, family_col]):
+        profits = grp[pnl_col].astype(float)
+        pnl = float(profits.sum())
+        volume = float(grp[volume_col].sum()) if has_vol else 0.0
+        vol = float(profits.std(ddof=0)) if len(profits) > 1 else 0.0
+        metrics.append({
+            'id': f"{symbol}_{fam}",
+            'label': category_label(symbol, fam),
+            'family': fam,
+            'symbol': symbol,
+            'pnl': pnl,
+            'volume': volume,
+            'vol': vol,
+            'trades': int(len(profits)),
+        })
+
+    metrics.sort(key=lambda m: m['pnl'], reverse=True)
+    return metrics
+
+
+def format_allocation_report(categories, current_quotas, new_quotas,
+                             lookback_days, top_n=15):
+    """Строки лога «Strategy Tree → квоты» для момента перекладки объёма.
+
+    Ранг = прибыль за окно (как в дереве). Возвращает список строк для print().
+    """
+    if not categories:
+        return [f"  [WHEEL] Окно {lookback_days} дн.: категорий нет — квоты не меняются."]
+
+    lines = [f"  [WHEEL] Аллокация по Strategy Tree за {lookback_days} дн. "
+             f"(ранг = прибыль за окно):"]
+    for i, c in enumerate(categories[:top_n], 1):
+        q_new = new_quotas.get(c['id'], 0.0)
+        q_cur = current_quotas.get(c['id'], 0.0)
+        delta_pp = (q_new - q_cur) * 100.0
+        arrow = '↑' if delta_pp > 1e-6 else ('↓' if delta_pp < -1e-6 else '=')
+        lines.append(
+            f"    {i:>2}. {c['label']:<26} PnL {c['pnl']:>+10,.0f} ₽  "
+            f"квота {q_cur*100:5.1f}% → {q_new*100:5.1f}%  {arrow} {delta_pp:+.1f}pp  "
+            f"({c['trades']} сд.)"
+        )
+    n_pos = sum(1 for c in categories if c['pnl'] > 0)
+    total_pnl = sum(c['pnl'] for c in categories)
+    lines.append(f"  [WHEEL] Итог окна: {len(categories)} категорий, прибыльных {n_pos}, "
+                 f"суммарный PnL {total_pnl:+,.0f} ₽")
+    return lines
+
 
 def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cfg):
     """
@@ -69,13 +151,13 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
         raw_new = alpha * target + (1.0 - alpha) * current
         new_quotas[sid] = max(min_q, min(max_q, raw_new))
 
-    # ── 3. Стратегии БЕЗ сделок — сохраняем текущую долю ──
-    # (консервативный режим: не обнуляем, а оставляем как было)
+    # ── 3. Стратегии БЕЗ сделок за окно → минимум (нет прибыли = нет объёма) ──
+    # (раньше сохраняли текущую долю — это ломало синхрон с деревом)
     scored_ids = set(target_weights.keys())
     base_share = 1.0 / len(current_quotas) if current_quotas else 0.0
     for sid in current_quotas:
         if sid not in scored_ids:
-            new_quotas[sid] = current_quotas[sid]
+            new_quotas[sid] = min_q  # нет сделок за окно → нет прибыли → минимум (объём уходит в зелёные)
 
     # ── 4. Финальная нормализация к 1.0 ──
     total = sum(new_quotas.values())

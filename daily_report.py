@@ -395,11 +395,14 @@ def generate_missing_reports(start_date, end_date):
     return generated
 
 
-def get_dashboard_data(days_back=30):
+def get_dashboard_data(days_back=30, manage_connection=True):
     """Единственная точка входа для дэшборда — собирает все данные из MT5.
 
     Args:
         days_back: сколько дней истории сделок загружать.
+        manage_connection: True — функция сама делает mt5.shutdown()/initialize()
+            и закрывает подключение в finally (режим дэшборда). False — вызывающий
+            уже держит подключение к MT5 (режим main.py), функция его не трогает.
 
     Returns:
         dict с ключами:
@@ -421,8 +424,8 @@ def get_dashboard_data(days_back=30):
     OUR_SYMBOLS_SUFFIX = 'rfd'
 
     # 1. Подключение к MT5
-    mt5.shutdown()
-    if not mt5.initialize():
+    if manage_connection: mt5.shutdown()
+    if manage_connection and not mt5.initialize():
         print(f"  ⚠️  MT5 init failed: {mt5.last_error()}")
         return None
 
@@ -486,6 +489,8 @@ def get_dashboard_data(days_back=30):
             
             
             
+            # Исключаем сделки без атрибуции к стратегии (открыты до имёнования) — шли как '?'
+            trades_df = trades_df[trades_df['strategy_type'] != '?'].copy()
             print(f"  [DASHBOARD] Deals: {len(trades_df)} (magic [770000, 869999] + rfd)")
 
             # PnL нетто
@@ -595,4 +600,4 @@ def get_dashboard_data(days_back=30):
         }
 
     finally:
-        mt5.shutdown()
+        if manage_connection: mt5.shutdown()

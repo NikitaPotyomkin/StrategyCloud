@@ -30,8 +30,8 @@ SYMBOLS = ("EURUSDrfd", "GBPUSDrfd", "USDJPYrfd", "USDCHFrfd",
            "USDCADrfd", "AUDUSDrfd", "NZDUSDrfd")
 
 K_PERIOD_RANGE = (7, 28, 7)
-SL_POINTS_RANGE = (300, 1200, 400)
-TP_POINTS_RANGE = (300, 1200, 400)
+SL_POINTS_RANGE = (300, 1200, 450)   # -> [300, 750, 1200] (ровный шаг, без дублей хвоста)
+TP_POINTS_RANGE = (300, 1200, 450)   # -> [300, 750, 1200]
 PARABOLIC_STEP_RANGE = (0.02, 0.2, 0.02)
 PARABOLIC_MAX_RANGE = (0.2, 0.4, 0.05)
 MA_PERIOD_RANGE = (10, 200, 25)
@@ -39,10 +39,12 @@ MA_PERIOD_RANGE = (10, 200, 25)
 RF_LOOKBACK_RANGE = (200, 400, 100)
 RF_NBARS_RANGE = (5, 10, 5)
 RF_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
+RF_RETRAIN_EVERY = 100   # walk-forward: переобучение модели каждые N баров
 
 LOGREG_LOOKBACK_RANGE = (200, 400, 100)
 LOGREG_NBARS_RANGE = (6, 12, 6)
 LOGREG_THRESHOLD_RANGE = (0.55, 0.65, 0.10)
+LOGREG_RETRAIN_EVERY = 100   # walk-forward: переобучение модели каждые N баров
 
 # MACD Cross (только MACD crossover)
 MACD_CROSS_FAST_RANGE = (10, 14, 2)
@@ -60,7 +62,7 @@ BB_STD_RANGE = (1.5, 2.5, 0.5)
 VOLUME_PERIOD_RANGE = (15, 25, 5)
 
 # EMA Crossover
-EMA_FAST_RANGE = (8, 12, 1)
+EMA_FAST_RANGE = (8, 12, 2)          # -> [8, 10, 12] (шаг 1 давал почти дубли)
 EMA_SLOW_RANGE = (18, 24, 3)
 
 # RSI Divergence
@@ -69,7 +71,7 @@ RSI_DIV_LOOKBACK_RANGE = (4, 7, 1)
 RSI_DIV_THRESHOLD_RANGE = (0.4, 0.6, 0.1)
 
 # Ichimoku
-TENKAN_RANGE = (7, 12, 4)
+TENKAN_RANGE = (8, 12, 4)            # -> [8, 12] (было [7,11,12] — хвост шага 1)
 KIJUN_RANGE = (22, 30, 4)
 SENKOU_B_RANGE = (45, 55, 5)
 DISPLACEMENT_RANGE = (22, 30, 4)
@@ -96,8 +98,8 @@ LRC_VOL_PERIOD_RANGE = (15, 25, 5)
 
 # Percentile reversion
 PCT_PERIOD_RANGE = (20, 50, 10)
-PCT_LOW_RANGE = (3, 8, 2)
-PCT_HIGH_RANGE = (92, 97, 2)
+PCT_LOW_RANGE = (3, 7, 2)            # -> [3, 5, 7] (было [3,5,7,8] — хвост шага 1)
+PCT_HIGH_RANGE = (93, 97, 2)         # -> [93, 95, 97] (было [92,94,96,97] — хвост шага 1)
 PCT_VOL_PERIOD_RANGE = (15, 25, 5)
 
 # Runs Test trend
@@ -172,6 +174,25 @@ DONCHIAN_PERIOD_RANGE = (15, 25, 5)
 
 # Engulfing Pattern
 ENGULFING_PERIOD_RANGE = (1, 1)  # no params, single value
+
+# CCI Reversion
+CCI_PERIOD_RANGE = (10, 20, 5)
+CCI_THRESHOLD_RANGE = (80, 120, 20)
+
+# SuperTrend
+SUPERTREND_PERIOD_RANGE = (7, 14, 3)
+SUPERTREND_MULTIPLIER_RANGE = (2.0, 4.0, 0.5)
+
+# ADX Trend
+ADX_PERIOD_RANGE = (10, 20, 3)
+ADX_THRESHOLD_RANGE = (20, 30, 3)
+
+# OBV Flow
+OBV_PERIOD_RANGE = (15, 30, 5)
+OBV_THRESHOLD_RANGE = (0.3, 0.7, 0.1)
+
+# Morning/Evening Star
+MORNING_STAR_BODY_RATIO_RANGE = (0.2, 0.4, 0.1)
 
 
 # ═══════════════ DATACLASS-КОНТЕЙНЕРЫ ═══════════════
@@ -296,6 +317,20 @@ class StrategyParams:
     donchian_period_list: Tuple[int, ...]
     # Engulfing Pattern
     engulfing_dummy: Tuple[int, ...]  # placeholder — no params
+    # CCI Reversion
+    cci_period_list: Tuple[int, ...]
+    cci_threshold_list: Tuple[int, ...]
+    # SuperTrend
+    supertrend_period_list: Tuple[int, ...]
+    supertrend_multiplier_list: Tuple[float, ...]
+    # ADX Trend
+    adx_period_list: Tuple[int, ...]
+    adx_threshold_list: Tuple[int, ...]
+    # OBV Flow
+    obv_period_list: Tuple[int, ...]
+    obv_threshold_list: Tuple[float, ...]
+    # Morning/Evening Star
+    morning_star_body_ratio_list: Tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -307,10 +342,17 @@ class RiskParams:
     max_per_symbol: int = 99999             # лимит на символ расширен (наблюдение за всеми стратегиями)
     daily_loss_limit_pct: float = 3.0
     equity_stop_pct: float = 10.0
+    # ── Маржа (margin level) — защита от margin call ──
+    # min_margin_level_pct: перед открытием прогнозируем уровень маржи ПОСЛЕ сделки;
+    #   если он упадёт ниже — ордер не отправляем (плюс runtime-предупреждение).
+    # margin_level_stop_pct: аварийное сокращение позиций при падении уровня ниже.
+    min_margin_level_pct: float = 150.0
+    margin_level_stop_pct: float = 100.0
     realtime_quota_recalc: bool = True
     quota_recalc_interval_sec: int = 300
     min_sl_distance_points: int = 10
     max_sl_distance_points: int = 5000
+
     max_risk_pct: float = 0.2
     min_lot: float = 0.01
     min_score: float = 1.0
@@ -343,7 +385,7 @@ class TrailParams:
     """
     enabled: bool = True
     atr_period: int = 14
-    atr_multiplier: float = 2.5
+    atr_multiplier: float = 2.3
     check_interval_sec: int = 60
     min_move_points: int = 10  # не двигать SL, если выигрыш меньше (защита от спама)
 
@@ -356,7 +398,7 @@ class SteeringParams:
     вызывается в конце ночного пересчёта. Флаг enabled=False — квоты не трогаем.
     """
     enabled: bool = True
-    alpha = 0.3
+    alpha = 1.0          # 1.0 = полная перекладка к цели (tree=wheel, зелёное получает объём сразу); <1.0 — EMA-сглаживание
     min_q = 0.005       # снижаем пол
     max_q = 0.5         # поднимаем потолок
     score_mode = 'pnl'
@@ -366,6 +408,11 @@ class SteeringParams:
     max_dd: float = 0.15      # предел просадки (15%)
     score_mode: str = 'pnl'   # 'pnl' — вес по прибыли (как вкладка Strategies); 'sharpe' — pnl/vol
     quotas_file: str = 'steering_quotas.json'
+    # ЖЁСТКИЙ период аллокации (дни). Единый источник и для Strategy Tree,
+    # и для Wheel, и для ночной перекладки объёма в main.py. Слайдер дэшборда
+    # его НЕ меняет — это только визуальный просмотр. Стратегии деградируют,
+    # поэтому считаем прибыль за свежее окно, а не за всю историю.
+    lookback_days: int = 14
 
 
 # ═══════════════ ФАБРИКА ПО УМОЛЧАНИЮ ═══════════════
@@ -490,6 +537,20 @@ def build_default_strategy_params() -> StrategyParams:
         donchian_period_list=int_range(*DONCHIAN_PERIOD_RANGE),
         # Engulfing Pattern
         engulfing_dummy=(1,),
+        # CCI Reversion
+        cci_period_list=int_range(*CCI_PERIOD_RANGE),
+        cci_threshold_list=int_range(*CCI_THRESHOLD_RANGE),
+        # SuperTrend
+        supertrend_period_list=int_range(*SUPERTREND_PERIOD_RANGE),
+        supertrend_multiplier_list=float_range(*SUPERTREND_MULTIPLIER_RANGE),
+        # ADX Trend
+        adx_period_list=int_range(*ADX_PERIOD_RANGE),
+        adx_threshold_list=int_range(*ADX_THRESHOLD_RANGE),
+        # OBV Flow
+        obv_period_list=int_range(*OBV_PERIOD_RANGE),
+        obv_threshold_list=float_range(*OBV_THRESHOLD_RANGE),
+        # Morning/Evening Star
+        morning_star_body_ratio_list=float_range(*MORNING_STAR_BODY_RATIO_RANGE),
     )
 
 

@@ -353,6 +353,46 @@ def _backtest_engulfing(df, sl_points, tp_points,
                               tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
 
 
+def _backtest_cci(df, period, threshold, sl_points, tp_points,
+                  point, tick_value, tick_size, spread_points=0):
+    """Backtest для CCI Reversion."""
+    from strategies.cci_reversion import backtest as backtest_cci
+    return backtest_cci(df, period, threshold, sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_supertrend(df, period, multiplier, sl_points, tp_points,
+                         point, tick_value, tick_size, spread_points=0):
+    """Backtest для SuperTrend."""
+    from strategies.supertrend import backtest as backtest_supertrend
+    return backtest_supertrend(df, period, multiplier, sl_points, tp_points, point,
+                               tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_adx(df, period, adx_threshold, sl_points, tp_points,
+                  point, tick_value, tick_size, spread_points=0):
+    """Backtest для ADX Trend."""
+    from strategies.adx_trend import backtest as backtest_adx
+    return backtest_adx(df, period, adx_threshold, sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_obv(df, period, threshold, sl_points, tp_points,
+                  point, tick_value, tick_size, spread_points=0):
+    """Backtest для OBV Flow."""
+    from strategies.obv_flow import backtest as backtest_obv
+    return backtest_obv(df, period, threshold, sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
+def _backtest_morning_evening_star(df, min_body_ratio, sl_points, tp_points,
+                                   point, tick_value, tick_size, spread_points=0):
+    """Backtest для Morning/Evening Star."""
+    from strategies.morning_evening_star import backtest as backtest_morning_evening_star
+    return backtest_morning_evening_star(df, min_body_ratio, sl_points, tp_points, point,
+                                         tick_value, tick_size, sim_lot=0.01, spread_points=spread_points)
+
+
 # ═══ УТИЛИТЫ ВРЕМЕНИ И ДАТЫ ═══
 def curr_time():
     """Текущее время в формате ЧЧ:ММ."""
@@ -525,6 +565,11 @@ def _backtest_symbol(args):
      WILLIAMS_R_PERIOD_LIST, MACD_HISTOGRAM_FAST_LIST, MACD_HISTOGRAM_SLOW_LIST, MACD_HISTOGRAM_SIGNAL_LIST,
      BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST,
      DONCHIAN_PERIOD_LIST, ENGULFING_PERIOD_LIST,
+     CCI_PERIOD_LIST, CCI_THRESHOLD_LIST,
+     SUPERTREND_PERIOD_LIST, SUPERTREND_MULTIPLIER_LIST,
+     ADX_PERIOD_LIST, ADX_THRESHOLD_LIST,
+     OBV_PERIOD_LIST, OBV_THRESHOLD_LIST,
+     MORNING_STAR_BODY_RATIO_LIST,
      BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
 
      family_fp, recalc_families) = args
@@ -578,6 +623,11 @@ def _backtest_symbol(args):
     bb_squeeze_per_symbol = len(BB_SQUEEZE_PERIOD_LIST) * len(BB_SQUEEZE_STD_LIST) * len(BB_SQUEEZE_PCT_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     donchian_per_symbol = len(DONCHIAN_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
     engulfing_per_symbol = len(ENGULFING_PERIOD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    cci_per_symbol = len(CCI_PERIOD_LIST) * len(CCI_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    supertrend_per_symbol = len(SUPERTREND_PERIOD_LIST) * len(SUPERTREND_MULTIPLIER_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    adx_per_symbol = len(ADX_PERIOD_LIST) * len(ADX_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    obv_per_symbol = len(OBV_PERIOD_LIST) * len(OBV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    morning_star_per_symbol = len(MORNING_STAR_BODY_RATIO_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
     _strategy_map = {
         'stoch': stoch_per_symbol,
@@ -608,6 +658,16 @@ def _backtest_symbol(args):
         'pin_bar': pin_bar_per_symbol,
         'prev_daily': prev_daily_per_symbol,
         'corr_momentum': corr_per_symbol,
+        'williams_r': williams_r_per_symbol,
+        'macd_histogram': macd_histogram_per_symbol,
+        'bb_squeeze': bb_squeeze_per_symbol,
+        'donchian': donchian_per_symbol,
+        'engulfing': engulfing_per_symbol,
+        'cci': cci_per_symbol,
+        'supertrend': supertrend_per_symbol,
+        'adx': adx_per_symbol,
+        'obv': obv_per_symbol,
+        'morning_star': morning_star_per_symbol,
     }
 
     if isinstance(test_strategy, str) and test_strategy in _strategy_map:
@@ -1576,6 +1636,151 @@ def _backtest_symbol(args):
             combos_done += 1
         completed_strategies.append('Engulfing')
 
+    # ── CCI Reversion ──
+    if not test_strategy or test_strategy == 'cci':
+        for period, threshold, sl, tp in product(
+            CCI_PERIOD_LIST, CCI_THRESHOLD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('CCI-Reversion', _backtest_cci,
+                df_window, period, threshold, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'cci',
+                'param_key': f"per{period}_th{threshold}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('CCI-Reversion')
+
+    # ── SuperTrend ──
+    if not test_strategy or test_strategy == 'supertrend':
+        for period, multiplier, sl, tp in product(
+            SUPERTREND_PERIOD_LIST, SUPERTREND_MULTIPLIER_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('SuperTrend', _backtest_supertrend,
+                df_window, period, multiplier, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'supertrend',
+                'param_key': f"per{period}_mul{multiplier}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('SuperTrend')
+
+    # ── ADX Trend ──
+    if not test_strategy or test_strategy == 'adx':
+        for period, adx_threshold, sl, tp in product(
+            ADX_PERIOD_LIST, ADX_THRESHOLD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('ADX-Trend', _backtest_adx,
+                df_window, period, adx_threshold, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'adx',
+                'param_key': f"per{period}_th{adx_threshold}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('ADX-Trend')
+
+    # ── OBV Flow ──
+    if not test_strategy or test_strategy == 'obv':
+        for period, threshold, sl, tp in product(
+            OBV_PERIOD_LIST, OBV_THRESHOLD_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('OBV-Flow', _backtest_obv,
+                df_window, period, threshold, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'obv',
+                'param_key': f"per{period}_th{threshold}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('OBV-Flow')
+
+    # ── Morning / Evening Star ──
+    if not test_strategy or test_strategy == 'morning_star':
+        for min_body_ratio, sl, tp in product(
+            MORNING_STAR_BODY_RATIO_LIST,
+            SL_POINTS_LIST, TP_POINTS_LIST
+        ):
+            profit, n_trades, trade_profits = _safe_backtest('MorningStar', _backtest_morning_evening_star,
+                df_window, min_body_ratio, sl, tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': 'morning_star',
+                'param_key': f"br{min_body_ratio}",
+                'parabolic_max': None,
+                'sl_points': sl, 'tp_points': tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append('MorningStar')
+
     # ── Сохраняем чекпойнт после каждого символа ──
     last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
     save_checkpoint(symbol, results, last_bar_time=last_bar_time, families=family_fp)
@@ -1687,6 +1892,15 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     BB_SQUEEZE_PCT_LIST = strategy_params.bb_squeeze_pct_list
     DONCHIAN_PERIOD_LIST = strategy_params.donchian_period_list
     ENGULFING_PERIOD_LIST = strategy_params.engulfing_dummy
+    CCI_PERIOD_LIST = strategy_params.cci_period_list
+    CCI_THRESHOLD_LIST = strategy_params.cci_threshold_list
+    SUPERTREND_PERIOD_LIST = strategy_params.supertrend_period_list
+    SUPERTREND_MULTIPLIER_LIST = strategy_params.supertrend_multiplier_list
+    ADX_PERIOD_LIST = strategy_params.adx_period_list
+    ADX_THRESHOLD_LIST = strategy_params.adx_threshold_list
+    OBV_PERIOD_LIST = strategy_params.obv_period_list
+    OBV_THRESHOLD_LIST = strategy_params.obv_threshold_list
+    MORNING_STAR_BODY_RATIO_LIST = strategy_params.morning_star_body_ratio_list
     BACKTEST_DAYS = backtest_config.backtest_days
     TOP_N = backtest_config.top_n
 
@@ -1812,6 +2026,14 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'engulfing': engulfing_per_symbol,
     }
 
+    strat_combo_map.update({
+        'cci': cci_per_symbol,
+        'supertrend': supertrend_per_symbol,
+        'adx': adx_per_symbol,
+        'obv': obv_per_symbol,
+        'morning_star': morning_star_per_symbol,
+    })
+
     if test_strategy and test_strategy in strat_combo_map:
         active_combos = strat_combo_map[test_strategy]
     else:
@@ -1857,6 +2079,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'bb_squeeze': _fp(BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'donchian': _fp(DONCHIAN_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'engulfing': _fp(ENGULFING_PERIOD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'cci': _fp(CCI_PERIOD_LIST, CCI_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'supertrend': _fp(SUPERTREND_PERIOD_LIST, SUPERTREND_MULTIPLIER_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'adx': _fp(ADX_PERIOD_LIST, ADX_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'obv': _fp(OBV_PERIOD_LIST, OBV_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
+        'morning_star': _fp(MORNING_STAR_BODY_RATIO_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
     }
 
     # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
@@ -2094,6 +2321,11 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             WILLIAMS_R_PERIOD_LIST, MACD_HISTOGRAM_FAST_LIST, MACD_HISTOGRAM_SLOW_LIST, MACD_HISTOGRAM_SIGNAL_LIST,
             BB_SQUEEZE_PERIOD_LIST, BB_SQUEEZE_STD_LIST, BB_SQUEEZE_PCT_LIST,
             DONCHIAN_PERIOD_LIST, ENGULFING_PERIOD_LIST,
+            CCI_PERIOD_LIST, CCI_THRESHOLD_LIST,
+            SUPERTREND_PERIOD_LIST, SUPERTREND_MULTIPLIER_LIST,
+            ADX_PERIOD_LIST, ADX_THRESHOLD_LIST,
+            OBV_PERIOD_LIST, OBV_THRESHOLD_LIST,
+            MORNING_STAR_BODY_RATIO_LIST,
 
 
             BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
@@ -2180,6 +2412,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         strategies_to_run.append(("Donchian", donchian_per_symbol))
     if not test_strategy or test_strategy == 'engulfing':
         strategies_to_run.append(("Engulfing", engulfing_per_symbol))
+    if not test_strategy or test_strategy == 'cci':
+        strategies_to_run.append(("CCI-Reversion", cci_per_symbol))
+    if not test_strategy or test_strategy == 'supertrend':
+        strategies_to_run.append(("SuperTrend", supertrend_per_symbol))
+    if not test_strategy or test_strategy == 'adx':
+        strategies_to_run.append(("ADX-Trend", adx_per_symbol))
+    if not test_strategy or test_strategy == 'obv':
+        strategies_to_run.append(("OBV-Flow", obv_per_symbol))
+    if not test_strategy or test_strategy == 'morning_star':
+        strategies_to_run.append(("MorningStar", morning_star_per_symbol))
 
     print("  Стратегии на 1 символ:")
     for name, count in sorted(strategies_to_run, key=lambda x: x[1], reverse=True):

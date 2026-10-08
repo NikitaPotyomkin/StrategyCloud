@@ -11,12 +11,12 @@ from collections import defaultdict
 warnings.filterwarnings('ignore')
 
 from functions import terminal_on, run_full_backtest, _checkpoint_dir
-from daily_report import generate_daily_report, generate_missing_reports
+from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
-from wheel import calculate_steering_wheel_quotas, build_metrics_from_journal
+from wheel import calculate_steering_wheel_quotas, compute_categories, format_allocation_report
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots, check_integration_budget,
-    check_daily_loss_limit, check_equity_stop, realtime_quota_recalc,
+    check_daily_loss_limit, check_equity_stop, check_margin_level, realtime_quota_recalc,
     MAX_COMBOS_PER_STRATEGY,
 )
 from strategy_engine import (
@@ -158,6 +158,26 @@ from strategies.donchian_breakout import (
 from strategies.engulfing_pattern import (
     calc_engulfing, backtest as backtest_engulfing,
     check_entry as check_entry_engulfing, check_exit as check_exit_engulfing,
+)
+from strategies.cci_reversion import (
+    calc_cci, backtest as backtest_cci,
+    check_entry as check_entry_cci, check_exit as check_exit_cci,
+)
+from strategies.supertrend import (
+    calc_supertrend, backtest as backtest_supertrend,
+    check_entry as check_entry_supertrend, check_exit as check_exit_supertrend,
+)
+from strategies.adx_trend import (
+    calc_adx, backtest as backtest_adx,
+    check_entry as check_entry_adx, check_exit as check_exit_adx,
+)
+from strategies.obv_flow import (
+    calc_obv, backtest as backtest_obv,
+    check_entry as check_entry_obv, check_exit as check_exit_obv,
+)
+from strategies.morning_evening_star import (
+    calc_morning_evening_star, backtest as backtest_morning_evening_star,
+    check_entry as check_entry_morning_evening_star, check_exit as check_exit_morning_evening_star,
 )
 from data_loader import (
     symbol_data, load_h1, update_symbol_bar,
@@ -691,18 +711,23 @@ if __name__ == '__main__':
                 # ── Штурвал: плавное перераспределение квот по реальным сделкам ──
                 if steering_cfg.enabled:
                     try:
-                        # Семейство (type) сделок журнала — из реестра (symbol+param_key -> type)
-                        fam_map = {}
-                        _reg_path = os.path.join(JOURNAL_DIR, 'strategy_registry.csv')
-                        if os.path.exists(_reg_path):
-                            import csv as _csv
-                            with open(_reg_path, 'r', encoding='utf-8') as _f:
-                                for _row in _csv.DictReader(_f):
-                                    fam_map[f"{_row.get('symbol', '')}_{_row.get('param_key', '')}"] = \
-                                        _row.get('type', 'unknown')
-                        metrics = build_metrics_from_journal(
-                            journal_df, n_last=steering_cfg.n_last_trades,
-                            family_map=fam_map, min_trades_filter=steering_cfg.min_trades)
+                        # ── Источник: Strategy Tree (окно аллокации lookback_days) ──
+                        # Та же выборка сделок, что и в дереве/штурвале дэшборда:
+                        # window → категории symbol+family. Числа совпадают 1-в-1.
+                        _alloc = get_dashboard_data(steering_cfg.lookback_days,
+                                                    manage_connection=False)
+                        _adeals = _alloc.get('trades_df') if _alloc else None
+
+
+
+
+
+
+
+
+                        metrics = compute_categories(_adeals) if _adeals is not None else []
+
+
                         if metrics:
                             quotas_path = os.path.join(JOURNAL_DIR, steering_cfg.quotas_file)
                             prev_quotas = {}
@@ -724,6 +749,14 @@ if __name__ == '__main__':
 
                             with open(quotas_path, 'w', encoding='utf-8') as f:
                                 json.dump(new_quotas, f, ensure_ascii=False, indent=2)
+
+                            # ── Принт: Strategy Tree → перекладка объёма ──
+                            print(f"\n  [WHEEL] Пересчёт квот из Strategy Tree "
+                                  f"(окно {steering_cfg.lookback_days} дн.).", flush=True)
+                            for _line in format_allocation_report(
+                                    metrics, prev_quotas, new_quotas,
+                                    steering_cfg.lookback_days):
+                                print(_line, flush=True)
                             # Плавная корректировка лотов активных стратегий без открытых позиций
                             n_act = max(len(active_strategies), 1)
                             changed = 0
@@ -816,6 +849,23 @@ if __name__ == '__main__':
                                         _record_close(key, s, now, exit_price, 'equity_stop', symbol_data,
                                                      record_trade, journal_df, JOURNAL_FILE)
                             raise RuntimeError(f"Equity stop triggered: {eq_reason}")
+
+                    # ── Проверка 2b: Margin level (защита от margin call — «айсберг») ──
+                    ml_status, ml_level, ml_reason = check_margin_level(
+                        risk_cfg.min_margin_level_pct, risk_cfg.margin_level_stop_pct)
+                    if ml_status == 'stop':
+                        print(f"\n  [STOP] {ml_reason} — аварийное сокращение!")
+                        for key, s in list(active_strategies.items()):
+                            if s['position'] is not None:
+                                print(f"  -> Закрытие {key} по margin level stop")
+                                exit_price = close_order(s['symbol'], s['position']['ticket'],
+                                                        s['position']['direction'], s['magic'], symbol_data)
+                                if exit_price is not None:
+                                    _record_close(key, s, now, exit_price, 'margin_stop', symbol_data,
+                                                 record_trade, journal_df, JOURNAL_FILE)
+                        raise RuntimeError(f"Margin level stop triggered: {ml_reason}")
+                    elif ml_status == 'warn':
+                        print(f"  [WARN] {ml_reason}", flush=True)
 
                     # ── Проверка 3: Realtime quota recalc ──
                     if risk_cfg.realtime_quota_recalc and (now - last_quota_recalc).total_seconds() >= risk_cfg.quota_recalc_interval_sec:
@@ -911,6 +961,11 @@ if __name__ == '__main__':
                         calc_bb_squeeze, check_exit_bb_squeeze, check_entry_bb_squeeze,
                         calc_donchian, check_exit_donchian, check_entry_donchian,
                         calc_engulfing, check_exit_engulfing, check_entry_engulfing,
+                        calc_cci, check_exit_cci, check_entry_cci,
+                        calc_supertrend, check_exit_supertrend, check_entry_supertrend,
+                        calc_adx, check_exit_adx, check_entry_adx,
+                        calc_obv, check_exit_obv, check_entry_obv,
+                        calc_morning_evening_star, check_exit_morning_evening_star, check_entry_morning_evening_star,
                         risk_cfg=risk_cfg,
                     )
                 except Exception as e:

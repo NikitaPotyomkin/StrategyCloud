@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression as SklearnLogisticRegression
 from strategies.base import BaseStrategy
+from config import LOGREG_RETRAIN_EVERY
 
 
 class LogisticRegression(BaseStrategy):
@@ -206,7 +207,7 @@ def clear_cache():
 # ====================================================================== #
 #  Обёртки для совместимости с фреймворком
 # ====================================================================== #
-def calc_logreg(df, lookback, n_bars, threshold, retrain_every=100):
+def calc_logreg(df, lookback, n_bars, threshold, retrain_every=LOGREG_RETRAIN_EVERY):
     """Обёртка для check_active_signals (в реальном времени, без кэша)."""
     return LogisticRegression().calc_indicator(
         df, lookback, n_bars, threshold, retrain_every,
@@ -225,7 +226,7 @@ def check_exit(prev_signal, curr_signal, direction):
 #  Бэктест
 # ====================================================================== #
 def backtest(df, lookback, n_bars, threshold, sl_points, tp_points, point,
-             tick_value, tick_size, retrain_every=100, sim_lot=0.01,
+             tick_value, tick_size, retrain_every=LOGREG_RETRAIN_EVERY, sim_lot=0.01,
              spread_points=0, commission_per_lot=0):
     """Симуляция сделок на истории с Logistic Regression.
 

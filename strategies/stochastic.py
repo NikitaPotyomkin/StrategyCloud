@@ -105,7 +105,7 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size, 
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
-                entry = close
+                entry = close - spread
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 

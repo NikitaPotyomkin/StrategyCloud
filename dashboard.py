@@ -20,6 +20,12 @@ except ImportError:
 
 from daily_report import get_dashboard_data
 
+# ── Период аллокации (ЖЁСТКИЙ, из config) ──
+# Strategy Tree и Wheel ВСЕГДА считают прибыль за этот период — это окно,
+# по которому ночью реально перекладывается объём. Слайдер его НЕ меняет.
+from config import SteeringParams as _SteeringParams
+ALLOC_DAYS = _SteeringParams().lookback_days
+
 # ── Палитра (институциональная) ──
 COL_BG       = '#0E1117'
 COL_PANEL    = '#161B22'
@@ -208,11 +214,16 @@ with col_btn:
 # ── Настройки ──
 with st.sidebar:
     st.markdown("### Configuration")
-    days_back = st.slider("Lookback (days)", 1, 90, 30)
+    days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, ALLOC_DAYS)
+    st.caption(f"Только для просмотра. Strategy Tree / Wheel всегда считают по фикс. периоду аллокации: {ALLOC_DAYS} дн. (config).")
     st.caption("Auto-refresh: 30s")
 
 # ── Загрузка данных ──
 data = load_dashboard_data(days_back)
+# Окно периода аллокации (жёсткое) — его используют Strategy Tree и Wheel.
+data_alloc = load_dashboard_data(ALLOC_DAYS)
+if data_alloc is None:
+    data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
 # ── Табы ──
 tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_tree, tab_steering, tab_pipeline = st.tabs([
@@ -982,20 +993,23 @@ with tab_surface:
 # ═══════════════════════════════════════════════════════════════
 with tab_tree:
     st.markdown("### Strategy Tree")
+    st.caption(f"Allocation period: {ALLOC_DAYS} дн. (config.SteeringParams.lookback_days) — это окно, по которому реально распределяется объём в Wheel.")
+    if days_back != ALLOC_DAYS:
+        st.info(f"⚠ Слайдер показывает {days_back} дн., но дерево аллокации всегда {ALLOC_DAYS} дн. Ниже — окно реальной перекладки объёма (синхрон с Wheel).")
 
     if not data:
         st.warning("No data.")
         st.stop()
 
-    trades_df = data.get('trades_df')
+    trades_df = data_alloc.get('trades_df')
     if trades_df is None or trades_df.empty or not PLOTLY_AVAILABLE:
         if not PLOTLY_AVAILABLE:
             st.warning("Plotly недоступен — Strategy Tree не может быть построен.")
             st.stop()
-        _ds = data.get('dash_stats') or {}
+        _ds = data_alloc.get('dash_stats') or {}
         st.info(
             "**Дерево пустое.** Оно строится только из **закрытых** позиций наших стратегий "
-            "(magic 770000–869999, символы `*rfd`) за выбранный период Lookback.\n\n"
+            "(magic 770000–869999, символы `*rfd`) за период аллокации (config.lookback_days).\n\n"
             + f"- Окно: {str(_ds.get('window_from', '?'))[:10]} .. {str(_ds.get('window_to', '?'))[:10]} "
             f"(Lookback {_ds.get('days_back', '?')} дн.)\n"
             + f"- Сделок в окне (все magic): **{_ds.get('n_deals_raw', '?')}**\n"
@@ -1271,10 +1285,11 @@ with tab_steering:
         st.stop()
 
     st.markdown("###Wheel — Quota by Family")
+    st.caption(f"Allocation period: {ALLOC_DAYS} дн. (config) — то же окно, что и Strategy Tree. Квоты = ранг по прибыли дерева (лидер → максимум).")
     st.caption("Категория = «символ + семейство» (например EUR - parabolic). "
                "Квоты считаются по реальным закрытым сделкам (entry='out').")
 
-    from wheel import (calculate_steering_wheel_quotas, build_metrics_from_journal,
+    from wheel import (calculate_steering_wheel_quotas, build_metrics_from_journal, compute_categories,
                        category_label)
 
     from config import SteeringParams  # ЕДИНЫЙ источник параметров штурвала (config.py)
@@ -1282,7 +1297,7 @@ with tab_steering:
 
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         # ── Адаптер: trades_df → формат журнала ──
-        df_src = data['trades_df'].copy().reset_index(drop=True)
+        df_src = data_alloc['trades_df'].copy().reset_index(drop=True)
         if 'profit' in df_src.columns and 'profit_net' in df_src.columns:
             df_src = df_src.drop(columns=['profit'])
         df_src = df_src.rename(columns={'profit_net': 'profit'})
@@ -1307,16 +1322,16 @@ with tab_steering:
         df_src['param_key'] = df_src['param_key'].astype(str)
 
         # ── Боевые функции ──
-        strategies_data = build_metrics_from_journal(df_src, n_last=steering_cfg.n_last_trades,
-                                                  min_trades_filter=steering_cfg.min_trades)
+        strategies_data = compute_categories(df_src)  # PnL за окно аллокации (без n_last) — синхрон с деревом
+        # min_trades-фильтр убран: категория берётся по всему окну, как в Strategy Tree.
 
         if not strategies_data:
             st.info("Нет сделок в журнале для расчёта метрик.")
         else:
             # Текущие квоты из активных стратегий — ПО КАТЕГОРИЯМ «символ + семейство»
             label_map = {s['id']: s.get('label', s['id']) for s in strategies_data}
-            if data.get('active_strategies'):
-                df_active = pd.DataFrame(data['active_strategies'])
+            if data_alloc.get('active_strategies'):
+                df_active = pd.DataFrame(data_alloc['active_strategies'])
                 if 'type' not in df_active.columns:
                     df_active['type'] = df_active['param_key'].astype(str)
                 df_active['sid'] = (
@@ -1385,6 +1400,24 @@ with tab_steering:
 
             df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
 
+            # ── SYNC: Strategy Tree → Wheel ─────────────────────────
+            # Ранг по прибыли дерева должен совпадать с рангом доли штурвала.
+            _sync = df_sw[['name', 'family', 'pnl', 'trades', 'current_quota', 'new_quota']].copy()
+            _sync = _sync.sort_values('pnl', ascending=False).reset_index(drop=True)
+            _sync.insert(0, 'PnL rank', range(1, len(_sync) + 1))
+            _sync['Q rank'] = _sync['new_quota'].rank(ascending=False, method='min').astype(int)
+            st.markdown("#### Sync: Strategy Tree → Wheel")
+            st.caption(f"Ранг прибыли дерева (PnL rank) ↔ ранг доли штурвала (Q rank). "
+                       f"Окно аллокации: {ALLOC_DAYS} дн. Лидер по прибыли должен получать максимальную долю "
+                       "(кроме ограничения пол/потолок из config).")
+            _sdisp = _sync.copy()
+            _sdisp['Tree PnL'] = _sdisp['pnl'].round(0).astype(int)
+            _sdisp['Cur Q %'] = (_sdisp['current_quota'] * 100).round(1)
+            _sdisp['New Q %'] = (_sdisp['new_quota'] * 100).round(1)
+            st.dataframe(
+                _sdisp[['PnL rank', 'name', 'Tree PnL', 'trades', 'Cur Q %', 'New Q %', 'Q rank']],
+                use_container_width=True, hide_index=True)
+
 
             df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
             n_delta = int((df_sw['delta'].abs() > 1e-4).sum())
@@ -1451,8 +1484,8 @@ with tab_steering:
             # ── Bar chart: Δ ──
             st.markdown(f"#### Quota Delta (Δ) — категорий с перераспределением: {len(df_sw_nz)}")
             if df_sw_nz.empty:
-                st.info("Перераспределения нет: ни одна категория не набрала порог "
-                        f"(мин. сделок = {steering_cfg.min_trades}).")
+                st.info("Перераспределения нет: "
+                        f"(цель за окно {ALLOC_DAYS} дн. уже совпала с текущей аллокацией).")
             bar_colors = [COL_GREEN_LT if d > 0 else COL_RED_LT
                           for d in df_sw_nz['delta']]
 
@@ -1487,8 +1520,8 @@ with tab_steering:
             st.caption(
                 "Зелёные — категории (символ + семейство), получающие больше квоты. "
                 "Красные — теряющие долю (α из config.py). "
-                f"Режим: min_trades={steering_cfg.min_trades}, скоринг={steering_cfg.score_mode} ('pnl' — вес по прибыли, max_dd не применяется). "
-                "Категории без сделок сохраняют текущую квоту (EMA к базовой доле). "
+                f"Окно аллокации: {ALLOC_DAYS} дн. · скоринг: {steering_cfg.score_mode} (вес по прибыли за окно, как в Strategy Tree). "
+                "Категории без сделок за окно получают минимум (объём уходит в зелёные зоны дерева). "
                 "enabled=False — лоты не меняются, расчёт индикативный."
             )
 
