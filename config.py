@@ -383,7 +383,7 @@ class TrailParams:
     enabled=False — трейл выключен: SL остаётся как задан стратегией.
     Дистанция трейла = ATR(D1, atr_period) * atr_multiplier.
     """
-    enabled: bool = True
+    enabled: bool = False
     atr_period: int = 14
     atr_multiplier: float = 2.3
     check_interval_sec: int = 60

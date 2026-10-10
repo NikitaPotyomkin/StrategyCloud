@@ -1214,18 +1214,23 @@ with tab_tree:
         st.warning(f"Orphan parents (нет родителя): {orphans[:5]}")
 
     # ── Цвета узлов (градиент PnL) ─────────────────────────────
-    _max_abs = max(1.0, max(abs(p) for p in pnls))
+    _pos_vals = [p for p in pnls if p > 0]
+    _neg_vals = [-p for p in pnls if p < 0]
+    _max_pos = max(_pos_vals) if _pos_vals else 1.0
+    _max_neg = max(_neg_vals) if _neg_vals else 1.0
     node_colors = []
     for _p in pnls:
-        if _p >= 0:
-            _r = _p / _max_abs
+        if _p == 0:
+            node_colors.append('rgb(45, 52, 60)')
+        elif _p > 0:
+            _r = (_p / _max_pos) ** 0.5
             node_colors.append(
-                f'rgb({int(46 + 26 * _r)}, {int(150 + 35 * _r)}, {int(67 + 26 * _r)})'
+                f'rgb({int(18 + 56 * _r)}, {int(48 + 174 * _r)}, {int(30 + 88 * _r)})'
             )
         else:
-            _r = -_p / _max_abs
+            _r = (-_p / _max_neg) ** 0.5
             node_colors.append(
-                f'rgb({int(218 + 25 * _r)}, {int(54 + 30 * _r)}, {int(51 + 20 * _r)})'
+                f'rgb({int(56 + 174 * _r)}, {int(22 + 50 * _r)}, {int(22 + 44 * _r)})'
             )
 
     # ── Treemap ────────────────────────────────────────────────
