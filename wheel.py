@@ -195,6 +195,25 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
         if n > 0:
             new_quotas = {k: 1.0 / n for k in new_quotas}
 
+    # ── 5. ЖЁСТКИЙ ПОТОЛОК (water-filling) ──
+    # Наивная нормировка выше могла поднять лидера ВЫШЕ max_q (пол min_q
+    # меняет сумму). Итерируем нормировку и clamp, пока потолок не соблюдён
+    # точно: ни одна категория не берёт больше max_q, сумма = 1.0.
+    _n = len(new_quotas)
+    if _n > 0:
+        _cap = max_q if max_q * _n >= 1.0 else (1.0 / _n)  # недостижимый потолок не ломает сумму
+        for _ in range(50):
+            _tot = sum(new_quotas.values())
+            if _tot <= 0:
+                new_quotas = {k: 1.0 / _n for k in new_quotas}
+                break
+            _norm = {k: v / _tot for k, v in new_quotas.items()}
+            _clamped = {k: max(min_q, min(_cap, v)) for k, v in _norm.items()}
+            if all(abs(_clamped[k] - _norm[k]) < 1e-12 for k in _norm):
+                new_quotas = _clamped
+                break
+            new_quotas = _clamped
+
     return new_quotas
 
 

@@ -13,6 +13,40 @@ from risk_manager import json_default
 
 
 # ═══ ЧЕКПОЙНТЫ БЭКТЕСТА ═══
+def _history_path():
+    """Путь к журналу прогонов бэктеста (JSONL, для вкладки Backtest в дэшборде)."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    d = os.path.join(base, 'checkpoints')
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, 'backtest_history.jsonl')
+
+
+def append_backtest_history(elapsed_sec, symbols, combos, results,
+                            kind='light', is_night_run=False, ts=None, **extra):
+    """Дописывает одну строку в журнал прогонов бэктеста (JSONL).
+
+    Нужно, чтобы сравнивать пересчёты не по принтам: вкладка Backtest в
+    дэшборде рисует длительность прогонов (полный/лайт) по дням и число
+    комбинаций. Ошибка записи не должна ронять бэктест.
+    """
+    rec = {
+        'ts': (ts or datetime.datetime.now()).isoformat(timespec='seconds'),
+        'kind': 'full' if kind == 'full' else 'light',
+        'elapsed_sec': round(float(elapsed_sec), 1),
+        'combos': int(combos),
+        'symbols': int(symbols),
+        'results': int(results),
+        'is_night_run': bool(is_night_run),
+        **extra,
+    }
+    try:
+        with open(_history_path(), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except OSError as exc:
+        print(f"  [WARN] Журнал прогонов не записан: {exc!r}")
+    return rec
+
+
 def _checkpoint_dir():
     """Путь к папке чекпойнтов."""
     base = os.path.dirname(os.path.abspath(__file__))
@@ -2557,6 +2591,16 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     # ── Статистика прогона ──
     try:
+        # ═══ Журнал прогонов (вкладка Backtest в дэшборде) ═══
+        append_backtest_history(
+            total_elapsed, total_symbols, total_combos, len(all_results),
+            kind=('full' if force_full_recalc
+                  else ('partial' if partial_recalc else 'light')),
+            skipped=len(skipped_symbols),
+            ok=True,
+            is_night_run=is_night_run,
+        )
+
         with open(last_run_path, 'w', encoding='utf-8') as f:
             json.dump({
                 'combos': total_combos,

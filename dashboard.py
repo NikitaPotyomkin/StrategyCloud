@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import json
 import re
 from datetime import datetime, timedelta
 
@@ -226,15 +227,15 @@ if data_alloc is None:
     data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
 # ── Табы ──
-tab_overview, tab_risk, tab_strategies, tab_3d, tab_surface, tab_tree, tab_steering, tab_pipeline = st.tabs([
+tab_overview, tab_risk, tab_strategies, tab_3d, tab_tree, tab_steering, tab_pipeline, tab_backtest = st.tabs([
     "Overview",
     "Risk",
     "Strategies",
     "3D Landscape",
-    "3D Surface",
     "Strategy Tree",
     "Steering Wheel",
     "Pipeline",
+    "Backtest",
 ])
 
 
@@ -808,180 +809,8 @@ with tab_3d:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  3D SURFACE
+#  STRATEGY TREE
 # ═══════════════════════════════════════════════════════════════
-with tab_surface:
-    st.markdown("### Parametric Surface — 3D")
-
-    if not data:
-        st.warning("No data.")
-        st.stop()
-
-    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        df_surf_src = data['trades_df'].copy()
-        families = sorted(df_surf_src['strategy_type'].unique())
-        sel_family = st.selectbox("Strategy family", families, key="surface_family")
-        df_fam = df_surf_src[df_surf_src['strategy_type'] == sel_family].copy()
-
-        if df_fam.empty:
-            st.info("No data for selected family.")
-        else:
-            df_agg = df_fam.groupby(['symbol', 'param_key']).agg(
-                pnl=('profit_net', 'sum'), trades=('profit_net', 'count'),
-                wins=('profit_net', lambda x: (x > 0).sum()),
-                volatility=('profit_net', 'std'), avg_pnl=('profit_net', 'mean'),
-            ).reset_index()
-            df_agg['win_rate'] = df_agg['wins'] / df_agg['trades'] * 100
-            df_agg['volatility'] = df_agg['volatility'].fillna(0)
-
-            def extract_numbers(key):
-                return [float(x) for x in re.findall(r'[-+]?\d*\.?\d+', str(key))]
-
-            sample_nums = extract_numbers(df_agg['param_key'].iloc[0]) if len(df_agg) > 0 else []
-
-            col_ax1, col_ax2, col_z = st.columns(3)
-            axis_options = {
-                'trades': 'Trade count', 'win_rate': 'Win Rate (%)',
-                'volatility': 'Volatility', 'avg_pnl': 'Avg P&L', 'pnl': 'Total P&L',
-            }
-            param_axis_options = {}
-            if len(sample_nums) >= 1:
-                param_axis_options['param_0'] = 'Param 1 (from key)'
-            if len(sample_nums) >= 2:
-                param_axis_options['param_1'] = 'Param 2 (from key)'
-
-            all_x_options = {**param_axis_options, **axis_options}
-            all_y_options = {**param_axis_options, **axis_options}
-            z_options = {'pnl': 'Total P&L', 'avg_pnl': 'Avg P&L', 'win_rate': 'Win Rate (%)'}
-
-            with col_ax1:
-                x_axis = st.selectbox("X axis", list(all_x_options.keys()),
-                                      format_func=lambda k: all_x_options[k], key="surf_x")
-            with col_ax2:
-                y_axis = st.selectbox("Y axis", list(all_y_options.keys()),
-                                      format_func=lambda k: all_y_options[k],
-                                      key="surf_y", index=min(1, len(all_y_options) - 1))
-            with col_z:
-                z_axis = st.selectbox("Z axis (height)", list(z_options.keys()),
-                                      format_func=lambda k: z_options[k], key="surf_z")
-
-            def get_axis_values(df, axis):
-                if axis.startswith('param_'):
-                    idx = int(axis.split('_')[1])
-                    nums_list = df['param_key'].apply(lambda k: extract_numbers(k))
-                    return nums_list.apply(lambda nums: nums[idx] if len(nums) > idx else 0.0).values
-                return df[axis].values
-
-            x_vals = get_axis_values(df_agg, x_axis)
-            y_vals = get_axis_values(df_agg, y_axis)
-            z_vals = df_agg[z_axis].values
-            labels = df_agg['symbol'].str.replace('rfd', '') + ' | ' + df_agg['param_key']
-            n_points = len(df_agg)
-
-            if n_points < 3:
-                st.warning("Insufficient data points (minimum 3 required).")
-            else:
-                x_unique = np.unique(x_vals)
-                y_unique = np.unique(y_vals)
-                use_surface = (len(x_unique) >= 2 and len(y_unique) >= 2 and
-                               len(x_unique) * len(y_unique) <= n_points * 2)
-
-                if use_surface:
-                    from scipy.interpolate import griddata
-                    xi = np.linspace(x_vals.min(), x_vals.max(), max(len(x_unique), 20))
-                    yi = np.linspace(y_vals.min(), y_vals.max(), max(len(y_unique), 20))
-                    X_grid, Y_grid = np.meshgrid(xi, yi)
-                    Z_grid = griddata((x_vals, y_vals), z_vals, (X_grid, Y_grid), method='linear')
-                    mask = np.isnan(Z_grid)
-                    if mask.any():
-                        Z_nearest = griddata((x_vals, y_vals), z_vals, (X_grid, Y_grid), method='nearest')
-                        Z_grid[mask] = Z_nearest[mask]
-
-                    fig_surf = go.Figure()
-                    fig_surf.add_trace(go.Surface(
-                        x=xi, y=yi, z=Z_grid,
-                        colorscale=[[0, '#DA3633'], [0.5, '#161B22'], [1, '#2EA043']],
-                        contours={"z": {"show": True, "usecolormap": True,
-                                        "highlightcolor": "#ffffff", "project": {"z": True}}},
-                        colorbar=dict(title=z_options[z_axis], x=1.02,
-                                      tickfont=dict(size=16, color=COL_MUTED),
-                                      title_font=dict(size=16)),
-                        hovertemplate=f'{all_x_options[x_axis]}: %{{x:.1f}}<br>{all_y_options[y_axis]}: %{{y:.1f}}<br>{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>',
-                        name='',
-                    ))
-                    fig_surf.update_layout(
-                        scene=dict(
-                            xaxis=dict(title=all_x_options[x_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
-                                       title_font=dict(size=18)),
-                            yaxis=dict(title=all_y_options[y_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
-                                       title_font=dict(size=18)),
-                            zaxis=dict(title=z_options[z_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
-                                       title_font=dict(size=18)),
-                            camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
-                        ),
-                        paper_bgcolor=COL_PANEL, height=650,
-                        margin=dict(l=0, r=0, t=10, b=0),
-                        font=dict(color=COL_TEXT, size=16),
-                    )
-                    st.plotly_chart(fig_surf, use_container_width=True, key="3d_surface")
-                    st.caption(f"Interpolated {n_points} points onto {len(xi)}x{len(yi)} grid. Ridges = profitable zones.")
-                else:
-                    st.info(f"Insufficient grid for surface ({n_points} points). Showing triangulated mesh.")
-
-                    fig_mesh = go.Figure()
-                    fig_mesh.add_trace(go.Mesh3d(
-                        x=x_vals, y=y_vals, z=z_vals,
-                        colorscale=[[0, '#DA3633'], [0.5, '#161B22'], [1, '#2EA043']],
-                        intensity=z_vals,
-                        colorbar=dict(title=z_options[z_axis], x=1.02,
-                                      tickfont=dict(size=16, color=COL_MUTED),
-                                      title_font=dict(size=16)),
-                        hovertemplate=f'{all_x_options[x_axis]}: %{{x:.1f}}<br>{all_y_options[y_axis]}: %{{y:.1f}}<br>{z_options[z_axis]}: %{{z:,.1f}}<extra></extra>',
-                        name='',
-                    ))
-                    fig_mesh.add_trace(go.Scatter3d(
-                        x=x_vals, y=y_vals, z=z_vals, mode='markers+text',
-                        marker=dict(size=4, color=COL_TEXT, line=dict(width=0.5, color=COL_PANEL)),
-                        text=labels, textposition='top center',
-                        textfont=dict(size=12, color=COL_MUTED),
-                        hoverinfo='skip', name='',
-                    ))
-                    fig_mesh.update_layout(
-                        scene=dict(
-                            xaxis=dict(title=all_x_options[x_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
-                                       title_font=dict(size=18)),
-                            yaxis=dict(title=all_y_options[y_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
-                                       title_font=dict(size=18)),
-                            zaxis=dict(title=z_options[z_axis], backgroundcolor=COL_PANEL,
-                                       gridcolor=COL_GRID, tickfont=dict(size=16, color=COL_MUTED),
-                                       title_font=dict(size=18)),
-                            camera=dict(eye=dict(x=1.8, y=1.8, z=0.6)),
-                        ),
-                        paper_bgcolor=COL_PANEL, height=650,
-                        margin=dict(l=0, r=0, t=10, b=0),
-                        font=dict(color=COL_TEXT, size=16),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_mesh, use_container_width=True, key="3d_mesh")
-
-            with st.expander("Source data"):
-                display_df = df_agg[['symbol', 'param_key', 'pnl', 'trades',
-                                     'win_rate', 'volatility', 'avg_pnl']].copy()
-                display_df['symbol'] = display_df['symbol'].str.replace('rfd', '')
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No data for surface.")
-
-    st.markdown("---")
-    st.caption("Select a family, set X/Y to parameter axes, Z to P&L. Ridges indicate optimal parameter zones.")
-
-
-
 # ═══════════════════════════════════════════════════════════════
 #  STRATEGY TREE
 # ═══════════════════════════════════════════════════════════════
@@ -1095,7 +924,7 @@ with tab_tree:
             s = s.replace(ch, '_')
         s = '_'.join(s.split('_'))  # схлопываем повторяющиеся подчёркивания
         return f"{prefix}_{s}"
-
+    # 
 
 
 
@@ -1457,7 +1286,7 @@ with tab_steering:
             _sync['PnL rank'] = _sync['pnl'].rank(ascending=False, method='min').astype(int)
             _sync['U rank'] = _sync['₽/лот'].rank(ascending=False, method='min').astype(int)
             _sync['Q rank'] = _sync['new_quota'].rank(ascending=False, method='min').astype(int)
-            None and st.markdown("#### Sync: Strategy Tree → Wheel")
+            # Sync-блок перенесён вниз; прежнее дублирование отключено (рисовало "None")
             st.caption(f"U rank = ранг удельной прибыли (₽/лот, метрика штурвала) ↔ ранг доли штурвала (Q rank). "
                        f"Окно аллокации: {ALLOC_DAYS} дн. Лидер по ₽/лот должен получать максимальную долю "
                        f"(кроме пол/потолок из config и фильтра min_trades={steering_cfg.min_trades}). Tree PnL — абсолютный.")
@@ -1466,7 +1295,7 @@ with tab_steering:
             _sdisp['₽/лот'] = _sdisp['₽/лот'].round(0).astype(int)
             _sdisp['Cur Q %'] = (_sdisp['current_quota'] * 100).round(1)
             _sdisp['New Q %'] = (_sdisp['new_quota'] * 100).round(1)
-            None and st.dataframe(
+            _ = None and st.dataframe(
                 _sdisp[['U rank', 'name', 'Tree PnL', '₽/лот', 'trades', 'Cur Q %', 'New Q %', 'Q rank']],
                 use_container_width=True, hide_index=True)
 
@@ -1613,3 +1442,145 @@ with tab_pipeline:
         st.markdown(f"**{title}**")
         st.caption(desc)
         st.markdown("")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  BACKTEST
+# ═══════════════════════════════════════════════════════════════
+with tab_backtest:
+    st.markdown("### Backtest — длительность прогонов")
+
+    # Читаем журнал напрямую (без st.cache_data), чтобы данные не «залипали».
+    _bt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'checkpoints', 'backtest_history.jsonl')
+    _bt_rows = []
+    try:
+        with open(_bt_path, 'r', encoding='utf-8') as _bt_f:
+            for _bt_line in _bt_f:
+                _bt_line = _bt_line.strip()
+                if not _bt_line:
+                    continue
+                try:
+                    _bt_rows.append(json.loads(_bt_line))
+                except (ValueError, TypeError):
+                    continue  # битую строку пропускаем
+    except (OSError, IOError):
+        _bt_rows = []
+
+    if not _bt_rows:
+        st.info("Журнал прогонов пуст — появится после первого бэктеста "
+                "(checkpoints/backtest_history.jsonl)")
+    else:
+        df_bt = pd.DataFrame(_bt_rows)
+        if 'kind' not in df_bt.columns:
+            df_bt['kind'] = 'full'
+        df_bt['ts'] = pd.to_datetime(df_bt.get('ts'), errors='coerce')
+        for _bt_c in ['elapsed_sec', 'combos', 'symbols', 'results']:
+            if _bt_c not in df_bt.columns:
+                df_bt[_bt_c] = np.nan
+            df_bt[_bt_c] = pd.to_numeric(df_bt[_bt_c], errors='coerce')
+        df_bt = df_bt.dropna(subset=['ts'])
+        if df_bt.empty:
+            st.info("Журнал прогонов пуст — появится после первого бэктеста "
+                    "(checkpoints/backtest_history.jsonl)")
+            st.stop()
+
+        df_bt['minutes'] = df_bt['elapsed_sec'] / 60.0
+        df_bt['day'] = df_bt['ts'].dt.normalize()
+
+        _bt_ts_min = df_bt['ts'].min()
+        _bt_ts_max = df_bt['ts'].max()
+        st.caption(f"Прогонов: {len(df_bt)} | Период: "
+                   f"{_bt_ts_min.strftime('%Y-%m-%d %H:%M')} .. "
+                   f"{_bt_ts_max.strftime('%Y-%m-%d %H:%M')}")
+
+        # ── Метрики ──
+        _bt_last = df_bt.sort_values('ts').iloc[-1]
+        _bt_full = df_bt[df_bt['kind'] == 'full']
+        _bt_light = df_bt[df_bt['kind'] == 'light']
+        _bt_avg_all = float(df_bt['minutes'].mean()) if len(df_bt) else 0.0
+        _bt_last_min = float(_bt_last['minutes']) if pd.notna(_bt_last['minutes']) else 0.0
+
+        _m1, _m2, _m3 = st.columns(3)
+        with _m1:
+            st.metric("Прогонов", f"{len(df_bt)}")
+        with _m2:
+            st.metric("Последний, мин", f"{_bt_last_min:.1f}",
+                      delta=f"{_bt_last_min - _bt_avg_all:+.1f}")
+        with _m3:
+            st.metric("Средний полный, мин",
+                      f"{_bt_full['minutes'].mean():.1f}" if len(_bt_full) else "—")
+            st.caption("Средний лайт, мин: "
+                       + (f"{_bt_light['minutes'].mean():.1f}" if len(_bt_light) else "—"))
+
+        # ── График: длительность по дням ──
+        if PLOTLY_AVAILABLE:
+            def _bt_marker_size(_combos):
+                try:
+                    _c = max(float(_combos), 1.0)
+                except (TypeError, ValueError):
+                    _c = 1.0
+                _sz = 8 + 6 * (np.log10(_c) / 3.0)
+                return float(min(max(_sz, 8.0), 26.0))
+
+            fig_bt = go.Figure()
+            for _kind, _name, _color, _symbol in [
+                ('full', 'Полный пересчёт', COL_GREEN_LT, 'circle'),
+                ('partial', 'Частичный пересчёт', '#D29922', 'diamond'),
+                ('light', 'Лайт (инкремент)', COL_MUTED, 'square'),
+            ]:
+                _sub = df_bt[df_bt['kind'] == _kind].sort_values('ts')
+                if _sub.empty:
+                    continue  # второй серии нет — не падаем
+                fig_bt.add_trace(go.Scatter(
+                    x=_sub['day'],
+                    y=_sub['minutes'],
+                    mode='markers+lines',
+                    name=_name,
+                    line=dict(color=_color, width=1.5),
+                    marker=dict(
+                        size=[_bt_marker_size(_c) for _c in _sub['combos']],
+                        color=_color, symbol=_symbol,
+                        line=dict(width=0.5, color=COL_PANEL),
+                    ),
+                    text=[f"{int(_c):,}".replace(',', ' ') if pd.notna(_c) else ''
+                          for _c in _sub['combos']],
+                    textposition='top center',
+                    textfont=dict(size=11, color=COL_MUTED),
+                    customdata=np.stack([
+                        _sub['ts'].dt.strftime('%Y-%m-%d %H:%M').to_numpy(),
+                        _sub['combos'].to_numpy(),
+                        _sub['symbols'].to_numpy(),
+                        _sub['results'].to_numpy(),
+                    ], axis=-1),
+                    hovertemplate=(
+                        'Дата/время: %{customdata[0]}<br>'
+                        f'Тип прогона: {_name}<br>'
+                        'Длительность: %{y:.1f} мин<br>'
+                        'Комбинации: %{customdata[1]}<br>'
+                        'Символов: %{customdata[2]}<br>'
+                        'Результатов: %{customdata[3]}<extra></extra>'
+                    ),
+                ))
+            fig_bt.update_layout(
+                xaxis_title='День',
+                yaxis_title='Длительность, мин',
+                legend=dict(orientation='h', y=1.12, x=0),
+            )
+            st.plotly_chart(plotly_dark_layout(fig_bt, 420),
+                            use_container_width=True, key="backtest_chart")
+
+        # ── Таблица-лог ──
+        _bt_log = df_bt.sort_values('ts', ascending=False).copy()
+        _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%Y-%m-%d %H:%M')
+        _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный', 'partial': 'Частичный', 'light': 'Лайт'}).fillna(_bt_log['kind'])
+        _bt_log['Длительность (мин)'] = _bt_log['minutes'].round(1)
+        _bt_log['Комбинации'] = _bt_log['combos'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        _bt_log['Символы'] = _bt_log['symbols'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        _bt_log['Результаты'] = _bt_log['results'].apply(lambda v: int(v) if pd.notna(v) else 0)
+
+        st.dataframe(
+            _bt_log[['Дата/время', 'Тип', 'Длительность (мин)',
+                     'Комбинации', 'Символы', 'Результаты']],
+            use_container_width=True, hide_index=True,
+        )
