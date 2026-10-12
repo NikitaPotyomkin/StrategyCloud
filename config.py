@@ -401,12 +401,12 @@ class SteeringParams:
     alpha = 1.0          # 1.0 = полная перекладка к цели (tree=wheel, зелёное получает объём сразу); <1.0 — EMA-сглаживание
     min_q = 0.005       # снижаем пол
     max_q = 0.5         # поднимаем потолок
-    score_mode = 'pnl'
-    gamma = 1.5          # <-- НОВЫЙ ПАРАМЕТР: усиление лидеров
+    score_mode = 'pnl_per_lot'   # штурвал: 'pnl' — абсолютный PnL; 'pnl_per_lot' — удельный (₽ за лот); 'sharpe' — pnl/vol
+    gamma = 1.5          # усиление лидеров; для 'pnl_per_lot' баллы в узком диапазоне — подбирать 2.0–3.0
     n_last_trades = 10
-    min_trades = 3      # <-- подними с 2 до 3 (для фильтра шума)
+    min_trades = 5      # фильтр шума: категория с <5 сделками за окно не скорится → min_q
     max_dd: float = 0.15      # предел просадки (15%)
-    score_mode: str = 'pnl'   # 'pnl' — вес по прибыли (как вкладка Strategies); 'sharpe' — pnl/vol
+    score_mode: str = 'pnl_per_lot'   # 'pnl' — абсолютный PnL (как Strategy Tree); 'pnl_per_lot' — удельный ₽/лот; 'sharpe' — pnl/vol
     quotas_file: str = 'steering_quotas.json'
     # ЖЁСТКИЙ период аллокации (дни). Единый источник и для Strategy Tree,
     # и для Wheel, и для ночной перекладки объёма в main.py. Слайдер дэшборда

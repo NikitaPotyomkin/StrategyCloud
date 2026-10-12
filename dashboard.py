@@ -1262,7 +1262,49 @@ with tab_tree:
     # ИСПРАВЛЕНО: use_container_width -> width='stretch'
     st.plotly_chart(fig_tree, width='stretch', key="strategy_tree")
 
-    with st.expander("Reading the tree"):
+    with st.expander("Reading the Tree — что означают записи", expanded=False):
+        st.markdown(
+        """
+**Иерархия узлов (4 уровня + свёртка):**
+
+| Уровень | Что это | Пример подписи |
+|---|---|---|
+| **Total** | Вся книга: сумма PnL всех закрытых сделок за окно | `Total  +21 500 ₽ · 48.2/+3.1%` |
+| **Family** | Семейство стратегий (`strategy_type`) | `percentile … ₽ · 12.0/+2.4%` |
+| **Symbol** | Семейство × символ | `EURUSDrfd … ₽ · 5.0/-1.1%` |
+| **Strategy** | Конкретная комбинация `param_key` | `lb200_nb5_th0.60 … ₽ · 3.0/=0.0%` |
+| **Others** | Свёртка «хвоста»: все комбинации данного символ+семейство, кроме топ‑3 по PnL | агрегат остальных |
+
+**Анатомия подписи узла:** `ИМЯ  ±PnL ₽ · ОБЪЁМ`
+- **±PnL** — чистый реализованный PnL (₽) за окно. `+` прибыль, `−` убыток. Это **реальные закрытые сделки** из журнала (не бэктест).
+- **часть после «·»** — объёмная ячейка `ВСЕГО/±%` (разбор ниже).
+
+**Площадь узла** = |PnL|. Больше площадь = больше модуль прибыли/убытка, **не** больше объём.
+
+**Цвет** — градиент по PnL, не бинарный «зелёный/красный»:
+- тёмно‑зелёный → ярко‑зелёный: чем больше прибыль (ярче = дальше от нуля);
+- тёмно‑красный → ярко‑красный: чем больше убыток;
+- серый = ровно `0`.
+Нормализация идёт **раздельно** для плюсов и минусов — крупный плюс не «гасит» мелкие минусы.
+
+**Объёмная ячейка `ВСЕГО/±%`:**
+- **ВСЕГО** — суммарный объём (лоты) всех закрытых сделок узла за окно;
+- **±%** — средний **недельный темп прироста** объёма (week‑over‑week): средний % изменения объёма неделя‑к‑неделе внутри окна (`+3.2%` — разгон, `−5%` — затухание, `=0.0%` — ровно).
+
+> ⚠️ Растущий `±%` у **убыточного** (красного) узла — это не «рост эффективности».
+> Обычно это значит, что штурвал ещё не переложил объём: он работает **раз в ночь**,
+> применяет квоты только к стратегиям **без открытой позиции** и по назначенным квотам.
+> Поэтому объём убыточных стратегий может ещё расти, пока перекладка «доезжает».
+
+**Hover (наведение):** полное имя узла + точный PnL (`PnL: +12 345 ₽`).
+
+**Прочее:**
+- окно = `ALLOC_DAYS` дн. из `config.SteeringParams.lookback_days` (сейчас 14) — совпадает с окном Wheel;
+- узлы отсортированы по PnL по убыванию;
+- число сделок убрано из подписи (объём сверяем со штурвалом), но видно в таблицах Wheel;
+- `Others` появляется, когда у символ+семейство больше 3 комбинаций: топ‑3 по PnL показываются отдельно, остальное — в «Others».
+        """)
+    with st.expander("Reading the tree (кратко)", expanded=False):
         st.markdown("""
         | Level | Shown |
         |-------|-------|
@@ -1366,6 +1408,7 @@ with tab_steering:
                     'min_q': steering_cfg.min_q,
                     'max_q': steering_cfg.max_q,
                     'score_mode': steering_cfg.score_mode,
+                    'min_trades': steering_cfg.min_trades,
                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
                 }
             )
@@ -1385,6 +1428,7 @@ with tab_steering:
                     'name': label_map.get(sid, category_label(sym, fam)),
                     'family': m.get('family', fam),
                     'pnl': m.get('pnl', 0.0),
+                    'volume': m.get('volume', 0.0),
                     'vol': m.get('vol', 0.0),
                     'trades': m.get('trades', 0),
                     'drawdown': m.get('drawdown', 0.0),
@@ -1406,21 +1450,24 @@ with tab_steering:
             df_sw['delta'] = df_sw['new_quota'] - df_sw['current_quota']
 
             # ── SYNC: Strategy Tree → Wheel ─────────────────────────
-            # Ранг по прибыли дерева должен совпадать с рангом доли штурвала.
-            _sync = df_sw[['name', 'family', 'pnl', 'trades', 'current_quota', 'new_quota']].copy()
-            _sync = _sync.sort_values('pnl', ascending=False).reset_index(drop=True)
-            _sync.insert(0, 'PnL rank', range(1, len(_sync) + 1))
+            # U rank (₽/лот — метрика штурвала) должен совпадать с рангом доли штурвала.
+            _sync = df_sw[['name', 'family', 'pnl', 'volume', 'trades', 'current_quota', 'new_quota']].copy()
+            _sync['₽/лот'] = _sync.apply(
+                lambda r: (r['pnl'] / r['volume']) if r['volume'] else 0.0, axis=1)
+            _sync['PnL rank'] = _sync['pnl'].rank(ascending=False, method='min').astype(int)
+            _sync['U rank'] = _sync['₽/лот'].rank(ascending=False, method='min').astype(int)
             _sync['Q rank'] = _sync['new_quota'].rank(ascending=False, method='min').astype(int)
-            st.markdown("#### Sync: Strategy Tree → Wheel")
-            st.caption(f"Ранг прибыли дерева (PnL rank) ↔ ранг доли штурвала (Q rank). "
-                       f"Окно аллокации: {ALLOC_DAYS} дн. Лидер по прибыли должен получать максимальную долю "
-                       "(кроме ограничения пол/потолок из config).")
-            _sdisp = _sync.copy()
+            None and st.markdown("#### Sync: Strategy Tree → Wheel")
+            st.caption(f"U rank = ранг удельной прибыли (₽/лот, метрика штурвала) ↔ ранг доли штурвала (Q rank). "
+                       f"Окно аллокации: {ALLOC_DAYS} дн. Лидер по ₽/лот должен получать максимальную долю "
+                       f"(кроме пол/потолок из config и фильтра min_trades={steering_cfg.min_trades}). Tree PnL — абсолютный.")
+            _sdisp = _sync.sort_values('U rank').copy()
             _sdisp['Tree PnL'] = _sdisp['pnl'].round(0).astype(int)
+            _sdisp['₽/лот'] = _sdisp['₽/лот'].round(0).astype(int)
             _sdisp['Cur Q %'] = (_sdisp['current_quota'] * 100).round(1)
             _sdisp['New Q %'] = (_sdisp['new_quota'] * 100).round(1)
-            st.dataframe(
-                _sdisp[['PnL rank', 'name', 'Tree PnL', 'trades', 'Cur Q %', 'New Q %', 'Q rank']],
+            None and st.dataframe(
+                _sdisp[['U rank', 'name', 'Tree PnL', '₽/лот', 'trades', 'Cur Q %', 'New Q %', 'Q rank']],
                 use_container_width=True, hide_index=True)
 
 
@@ -1512,6 +1559,16 @@ with tab_steering:
                             use_container_width=True, key="steering_delta_bar")
 
             # ── Таблица ──
+            # ── Sync: Strategy Tree → Wheel (рендер внизу, после пирогов) ──
+            st.markdown("#### Sync: Strategy Tree → Wheel")
+            st.caption(f"U rank = ранг удельной прибыли (₽/лот, метрика штурвала) ↔ ранг доли штурвала (Q rank). "
+                       f"Окно аллокации: {ALLOC_DAYS} дн. Лидер по ₽/лот должен получать максимальную долю "
+                       f"(кроме пол/потолок из config и фильтра min_trades={steering_cfg.min_trades}). Tree PnL — абсолютный.")
+            st.dataframe(
+                _sdisp[['U rank', 'name', 'Tree PnL', '₽/лот', 'trades', 'Cur Q %', 'New Q %', 'Q rank']],
+                use_container_width=True, hide_index=True)
+
+            # ── Таблица ──
             st.markdown("#### Detail")
             # ПРАВКА №2: убран target_quota, которого не существует
             df_display = df_sw[['name', 'pnl', 'trades', 'vol', 'drawdown',
@@ -1525,7 +1582,7 @@ with tab_steering:
             st.caption(
                 "Зелёные — категории (символ + семейство), получающие больше квоты. "
                 "Красные — теряющие долю (α из config.py). "
-                f"Окно аллокации: {ALLOC_DAYS} дн. · скоринг: {steering_cfg.score_mode} (вес по прибыли за окно, как в Strategy Tree). "
+                f"Окно аллокации: {ALLOC_DAYS} дн. · скоринг: {steering_cfg.score_mode} (штурвал: удельная прибыль ₽ за лот; Tree — абсолютный PnL). "
                 "Категории без сделок за окно получают минимум (объём уходит в зелёные зоны дерева). "
                 "enabled=False — лоты не меняются, расчёт индикативный."
             )

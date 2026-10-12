@@ -18,6 +18,7 @@ from risk_manager import (
     calc_metrics, composite_score, distribute_lots, check_integration_budget,
     check_daily_loss_limit, check_equity_stop, check_margin_level, realtime_quota_recalc,
     MAX_COMBOS_PER_STRATEGY,
+    _sl_money_per_lot, _normalize_volume,
 )
 from strategy_engine import (
     write_ranking, sync_active_strategies, check_active_signals,
@@ -742,6 +743,7 @@ if __name__ == '__main__':
                                     'min_q': steering_cfg.min_q,
                                     'max_q': steering_cfg.max_q,
                                     'score_mode': steering_cfg.score_mode,
+                                    'min_trades': steering_cfg.min_trades,
                                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
                                     # если gamma ещё нет в cfg — подставим дефолт
                                 }
@@ -751,14 +753,38 @@ if __name__ == '__main__':
                                 json.dump(new_quotas, f, ensure_ascii=False, indent=2)
 
                             # ── Принт: Strategy Tree → перекладка объёма ──
-                            print(f"\n  [WHEEL] Пересчёт квот из Strategy Tree "
+                            print(f"\n  [WHEEL] Пересчёт квот (score_mode={steering_cfg.score_mode}) "
                                   f"(окно {steering_cfg.lookback_days} дн.).", flush=True)
                             for _line in format_allocation_report(
                                     metrics, prev_quotas, new_quotas,
-                                    steering_cfg.lookback_days):
+                                    steering_cfg.lookback_days,
+                                    min_trades=steering_cfg.min_trades,
+                                    score_mode=steering_cfg.score_mode):
                                 print(_line, flush=True)
-                            # Плавная корректировка лотов активных стратегий без открытых позиций
-                            n_act = max(len(active_strategies), 1)
+                            # Перекладка объёма: только стратегии без открытой позиции
+                            # ── Перекладка лотов: АБСОЛЮТНЫЙ целевой лот ──
+                            # Раньше лот умножался на q_new/q_prev, поэтому стратегия с
+                            # мелким лотом «догоняла» целевую долю множителем и тормозила
+                            # перекладку. Теперь целевой лот считается от риск-квоты:
+                            #     lot_i = (budget × q_i) / sl_money_i
+                            # budget — свободная часть квоты (за вычетом риска уже открытых
+                            # позиций), поэтому Σ(lot×sl_money) ≤ quota по построению.
+                            risk_quota = balance * risk_cfg.max_risk_pct
+                            _slm = {}
+                            _used_risk = 0.0
+                            _free_keys = []
+                            _sid_by_key = {}
+                            for _k, _s in active_strategies.items():
+                                _info = symbol_data.get(_s['symbol'], {}).get('info')
+                                _m = _sl_money_per_lot(_s['symbol'], _info, _s.get('sl_points') or 0)
+                                _slm[_k] = _m
+                                _sid_by_key[_k] = f"{_s['symbol']}_{_s.get('type') or _s.get('param_key')}"
+                                if _s['position'] is not None:
+                                    _used_risk += float(_s['lot']) * _m
+                                else:
+                                    _free_keys.append(_k)
+                            _q_covered = sum(new_quotas.get(_sid_by_key[_k], 0.0) for _k in _free_keys)
+                            _budget = max(0.0, risk_quota - _used_risk)
                             changed = 0
                             for key, s in active_strategies.items():
                                 if s['position'] is not None:
@@ -767,12 +793,18 @@ if __name__ == '__main__':
                                 q_new = new_quotas.get(sid)
                                 if q_new is None:
                                     continue
-                                q_prev = prev_quotas.get(sid, 1.0 / n_act)
-                                factor = q_new / q_prev if q_prev > 0 else 1.0
-                                new_lot = max(risk_cfg.min_lot, s['lot'] * factor)
+                                _m = _slm.get(key, 0.0)
+                                if _m <= 0 or _budget <= 0 or _q_covered <= 0:
+                                    continue
+                                new_lot = _budget * (q_new / _q_covered) / _m
+                                _info = symbol_data.get(s['symbol'], {}).get('info')
+                                _vol = _normalize_volume(new_lot, _info)
+                                new_lot = max(_vol if _vol is not None else risk_cfg.min_lot,
+                                              risk_cfg.min_lot)
                                 if abs(new_lot - s['lot']) > 1e-9:
                                     print(f"  [STEERING] {key}: lot {s['lot']:.3f} -> {new_lot:.3f} "
-                                          f"(q {q_prev:.3f} -> {q_new:.3f})")
+                                          f"(q {q_new:.3f}, риск {s['lot'] * _m:,.0f} -> "
+                                          f"{new_lot * _m:,.0f} ₽)")
                                     s['lot'] = new_lot
                                     changed += 1
                             print(f"  [STEERING] Квоты обновлены: {len(new_quotas)} стратегий, "

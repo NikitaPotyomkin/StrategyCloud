@@ -71,37 +71,53 @@ def compute_categories(trades_df, family_col='strategy_type', symbol_col='symbol
 
 
 def format_allocation_report(categories, current_quotas, new_quotas,
-                             lookback_days, top_n=15):
+                             lookback_days, top_n=15, min_trades=0, score_mode='pnl'):
     """Строки лога «Strategy Tree → квоты» для момента перекладки объёма.
 
-    Ранг = прибыль за окно (как в дереве). Возвращает список строк для print().
+    Ранг = метрика штурвала (по умолчанию абсолютный PnL за окно, как в дереве;
+    для 'pnl_per_lot' — удельная прибыль ₽ за лот). Возвращает строки для print().
     """
     if not categories:
         return [f"  [WHEEL] Окно {lookback_days} дн.: категорий нет — квоты не меняются."]
 
-    lines = [f"  [WHEEL] Аллокация по Strategy Tree за {lookback_days} дн. "
-             f"(ранг = прибыль за окно):"]
-    for i, c in enumerate(categories[:top_n], 1):
+    lines = [f"  [WHEEL] Аллокация за {lookback_days} дн. "
+             f"(ранг = {'PnL / объём, ₽ за лот' if score_mode == 'pnl_per_lot' else 'PnL за окно'}):"]
+    # Порядок строк = метрика штурвала (иначе ранг в логе не совпадал бы с квотами)
+    if score_mode == 'pnl_per_lot':
+        _cats = sorted(categories, key=lambda c: (c['pnl'] / c['volume']) if c.get('volume') else 0.0,
+                       reverse=True)
+    else:
+        _cats = list(categories)
+    for i, c in enumerate(_cats[:top_n], 1):
         q_new = new_quotas.get(c['id'], 0.0)
         q_cur = current_quotas.get(c['id'], 0.0)
         delta_pp = (q_new - q_cur) * 100.0
         arrow = '↑' if delta_pp > 1e-6 else ('↓' if delta_pp < -1e-6 else '=')
         lines.append(
             f"    {i:>2}. {c['label']:<26} PnL {c['pnl']:>+10,.0f} ₽  "
+            f"{(c['pnl'] / c['volume'] if c.get('volume') else 0.0):>+8,.0f} ₽/лот  "
             f"квота {q_cur*100:5.1f}% → {q_new*100:5.1f}%  {arrow} {delta_pp:+.1f}pp  "
             f"({c['trades']} сд.)"
         )
     n_pos = sum(1 for c in categories if c['pnl'] > 0)
     total_pnl = sum(c['pnl'] for c in categories)
     lines.append(f"  [WHEEL] Итог окна: {len(categories)} категорий, прибыльных {n_pos}, "
-                 f"суммарный PnL {total_pnl:+,.0f} ₽")
+                 f"суммарный PnL {total_pnl:+,.0f} ₽ | ниже min_trades({min_trades}): "
+                 f"{sum(1 for c in categories if min_trades and c['trades'] < min_trades)}"
+                 f"{' — ВНИМАНИЕ: скорить нечего, квоты НЕ меняются' if min_trades and all(c['trades'] < min_trades for c in categories) else ''}")
     return lines
 
 
 def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cfg):
     """
     Расчёт квот с усилением лидеров (Power Law).
-    Стратегии без сделок сохраняют текущую долю (консервативный режим).
+    score_mode:
+      'pnl'         — абсолютная прибыль за окно (как Strategy Tree);
+      'pnl_per_lot' — УДЕЛЬНАЯ прибыль: PnL / объём лотов (₽ за лот) — режим штурвала;
+      'sharpe'      — pnl / std прибыли на сделку.
+    min_trades: категория с меньшим числом сделок за окно не оценивается
+    (удельная метрика на 1–2 сделках = шум) и получает min_q.
+    Категории без сделок за окно тоже получают min_q — объём уходит в зелёные.
     Финальная нормализация гарантирует сумму = 1.0.
     """
     gamma = steering_cfg.get('gamma', 1.5)
@@ -109,6 +125,7 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
     max_q = steering_cfg.get('max_q', 0.5)
     alpha = steering_cfg.get('alpha', 0.3)
     score_mode = steering_cfg.get('score_mode', 'pnl')
+    min_trades = int(steering_cfg.get('min_trades', 0) or 0)
 
     # ── 1. Сырые баллы с усилением Power Law ──
     scores = []
@@ -121,8 +138,18 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
             continue
 
         pnl_raw = s.get("pnl", 0) or 0.0
+        n_trades = int(s.get("trades", 0) or 0)
 
-        if score_mode == 'sharpe':
+        # Мало сделок за окно → удельная метрика это шум: категория не
+        # оценивается и получает минимум (объём уходит в зелёные зоны).
+        if min_trades and n_trades < min_trades:
+            scores.append((sid, 0.0))
+            continue
+
+        if score_mode == 'pnl_per_lot':
+            vol_lots = float(s.get("volume", 0) or 0.0)
+            score = (max(float(pnl_raw), 0.0) / vol_lots) if vol_lots > 0 else 0.0
+        elif score_mode == 'sharpe':
             vol = s.get("vol", 0) or 0.0
             if vol <= 0:
                 score = pnl_raw * 10.0
