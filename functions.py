@@ -1989,6 +1989,12 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     engulfing_per_symbol = (len(ENGULFING_PERIOD_LIST) *
                             len(SL_POINTS_LIST) * len(TP_POINTS_LIST))
 
+    cci_per_symbol = len(CCI_PERIOD_LIST) * len(CCI_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    supertrend_per_symbol = len(SUPERTREND_PERIOD_LIST) * len(SUPERTREND_MULTIPLIER_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    adx_per_symbol = len(ADX_PERIOD_LIST) * len(ADX_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    obv_per_symbol = len(OBV_PERIOD_LIST) * len(OBV_THRESHOLD_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+    morning_star_per_symbol = len(MORNING_STAR_BODY_RATIO_LIST) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+
     # ── Карта: test_strategy → кол-во комбинаций ──
     strat_combo_map = {
         'stoch': stoch_per_symbol,

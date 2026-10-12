@@ -792,6 +792,28 @@ def check_account_mode():
         print(f"  [WARN] Счёт {getattr(acc, 'login', '?')} (сервер {getattr(acc, 'server', '?')}) "
               f"НЕ hedging: несколько стратегий на одном символе будут сливаться!")
     return ok
+def _pick_filling_modes(symbol):
+    """Разрешённые режимы исполнения из symbol_info (битмаск: 1=FOK, 2=IOC).
+
+    Возвращает список кандидатов ORDER_FILLING в порядке предпочтения.
+    Раньше фоллбэк был жёстко зашит на IOC и на FOK-только символах давал
+    10030 'Unsupported filling mode' — теперь спрашиваем сам терминал.
+    """
+    modes = []
+    try:
+        si = mt5.symbol_info(symbol)
+        fm = getattr(si, 'filling_mode', 0) if si is not None else 0
+    except Exception:
+        fm = 0
+    if fm & getattr(mt5, 'SYMBOL_FILLING_FOK', 1):
+        modes.append(mt5.ORDER_FILLING_FOK)
+    if fm & getattr(mt5, 'SYMBOL_FILLING_IOC', 2):
+        modes.append(mt5.ORDER_FILLING_IOC)
+    if not modes:
+        modes.append(mt5.ORDER_FILLING_FOK)
+    return modes
+
+
 def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
                risk_params=None):
     """Отправить ордер с расширенной проверкой риск-менеджмента.
@@ -892,7 +914,7 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": lot,
         "type": order_type, "price": price, "sl": sl, "tp": tp,
         "deviation": 20, "comment": comment, "magic": magic,
-        "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK
+        "type_time": mt5.ORDER_TIME_GTC, "type_filling": _pick_filling_modes(symbol)[0]
     }
     result = mt5.order_send(request)
     if result is None:
@@ -926,10 +948,13 @@ def send_order(symbol, direction, lot, sl, tp, magic, comment, symbol_data,
         elif result.retcode == mt5.TRADE_RETCODE_NO_MONEY:
             acc = mt5.account_info()
             print(f"  -> [WARN] Ордер {symbol} {direction}: не хватает денег (free={acc.margin_free if acc else 0:.2f})")
-        request["type_filling"] = mt5.ORDER_FILLING_IOC
+        print(f"  -> [WARN] {symbol} {direction} magic={magic}: попытка fill="
+              f"{request.get('type_filling')} не прошла ({result.retcode}, {result.comment})")
+        _alternates = [m for m in _pick_filling_modes(symbol) if m != request.get("type_filling")]
+        request["type_filling"] = _alternates[0] if _alternates else request.get("type_filling")
         result = mt5.order_send(request)
         if result is None:
-            print(f"  -> [WARN] {symbol} {direction} magic={magic}: order_send (IOC) вернул None "
+            print(f"  -> [WARN] {symbol} {direction} magic={magic}: order_send (fill retry) вернул None "
                       f"— терминал не отвечает ({comment})")
             return None
         if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -960,17 +985,20 @@ def close_order(symbol, ticket, direction, magic, symbol_data):
         "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": pos.volume,
         "position": ticket, "type": close_type, "price": price,
         "deviation": 20, "comment": "close", "magic": magic,
-        "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK
+        "type_time": mt5.ORDER_TIME_GTC, "type_filling": _pick_filling_modes(symbol)[0]
     }
     result = mt5.order_send(request)
     if result is None:
         print(f"  -> [WARN] mt5.order_send (close) вернул None — терминал не отвечает")
         return None
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        request["type_filling"] = mt5.ORDER_FILLING_IOC
+        print(f"  -> [WARN] Закрытие {symbol} ticket={ticket}: попытка fill="
+              f"{request.get('type_filling')} не прошла ({result.retcode}, {result.comment})")
+        _alternates = [m for m in _pick_filling_modes(symbol) if m != request.get("type_filling")]
+        request["type_filling"] = _alternates[0] if _alternates else request.get("type_filling")
         result = mt5.order_send(request)
         if result is None:
-            print(f"  -> [WARN] mt5.order_send (close IOC) вернул None — терминал не отвечает")
+            print(f"  -> [WARN] mt5.order_send (close fill retry) вернул None — терминал не отвечает")
             return None
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             print(f"  -> Закрытие не прошло: {result.retcode}, {result.comment}")
