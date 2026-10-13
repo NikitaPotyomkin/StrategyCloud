@@ -227,8 +227,9 @@ if data_alloc is None:
     data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
 # ── Табы ──
-tab_overview, tab_risk, tab_strategies, tab_3d, tab_tree, tab_steering, tab_pipeline, tab_backtest = st.tabs([
+tab_overview, tab_daily, tab_risk, tab_strategies, tab_3d, tab_tree, tab_steering, tab_pipeline, tab_backtest = st.tabs([
     "Overview",
+    "Daily Plan",
     "Risk",
     "Strategies",
     "3D Landscape",
@@ -374,6 +375,269 @@ with tab_overview:
 # ═══════════════════════════════════════════════════════════════
 #  RISK
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  DAILY PLAN
+# ═══════════════════════════════════════════════════════════════
+with tab_daily:
+    if not data:
+        st.warning("No data. Ensure MT5 terminal is running.")
+        st.stop()
+
+    st.markdown("### Daily Plan — итоговый расклад на день")
+    st.caption(f"ПЛАН на день (journals/active_state.json, ночной пересчёт) × Strategy Tree (реальные сделки, окно {ALLOC_DAYS} дн.) × Wheel-квоты. "
+               f"Колонка lot — объём, которым стратегия выйдет в торговлю.")
+
+    # ── ИСТОЧНИК ПЛАНА: active_state.json (ночной план), НЕ открытые позиции ──
+    _act, _plan_meta = [], {}
+    try:
+        _as_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'journals', 'active_state.json')
+        with open(_as_path, 'r', encoding='utf-8') as _as_f:
+            _as = json.load(_as_f)
+        _act = list(_as.get('strategies') or [])
+        _plan_meta = {'updated': _as.get('updated'), 'balance': _as.get('balance'),
+                      'quota': _as.get('quota'), 'total': _as.get('total_strategies')}
+    except Exception as _e:
+        st.caption(f"⚠ План недоступен (journals/active_state.json): {_e!r}")
+    if not _act:
+        st.info("Нет плана: journals/active_state.json пуст или ещё не пересчитан (ночной прогон).")
+    else:
+        from wheel import compute_categories, calculate_steering_wheel_quotas, category_label
+        from config import SteeringParams
+        _scfg = SteeringParams()
+
+        # ── Tree: PnL/объём по категориям symbol+family за окно аллокации ──
+        _cat_by_id = {}
+        try:
+            _df_src = (data_alloc or data)['trades_df'].copy().reset_index(drop=True)
+            if 'profit' in _df_src.columns and 'profit_net' in _df_src.columns:
+                _df_src = _df_src.drop(columns=['profit'])
+            _df_src = _df_src.rename(columns={'profit_net': 'profit'})
+            if 'entry' in _df_src.columns:
+                def _is_closing(v):
+                    if isinstance(v, str):
+                        return v.strip().lower() == 'out'
+                    try:
+                        return int(v) == 1
+                    except (TypeError, ValueError):
+                        return False
+                _df_src = _df_src[_df_src['entry'].apply(_is_closing)]
+            _df_src['symbol'] = _df_src['symbol'].astype(str)
+            _df_src['param_key'] = _df_src['param_key'].astype(str)
+            for _c in compute_categories(_df_src):
+                _cat_by_id[_c['id']] = _c
+        except Exception as _e:
+            st.caption(f"⚠ Tree-метрики недоступны: {_e!r}")
+
+        # ── Wheel-квоты (текущие — из активных лотов, как в Steering Wheel) ──
+        _cur_q, _new_q = {}, {}
+        try:
+            _df_a = pd.DataFrame(_act)
+            if 'type' not in _df_a.columns:
+                _df_a['type'] = _df_a['param_key'].astype(str)
+            _df_a['sid'] = _df_a['symbol'].astype(str) + '_' + _df_a['type'].astype(str)
+            _df_cat = _df_a.groupby(['sid'], as_index=False)['lot'].sum()
+            _tot_lot = _df_a['lot'].sum()
+            _cur_q = dict(zip(_df_cat['sid'], _df_cat['lot'] / _tot_lot)) if _tot_lot > 0 else {}
+            if _cat_by_id:
+                _new_q = calculate_steering_wheel_quotas(
+                    list(_cat_by_id.values()), _cur_q,
+                    {'alpha': _scfg.alpha, 'min_q': _scfg.min_q, 'max_q': _scfg.max_q,
+                     'score_mode': _scfg.score_mode, 'min_trades': _scfg.min_trades,
+                     'gamma': getattr(_scfg, 'gamma', 1.5)})
+        except Exception as _e:
+            st.caption(f"⚠ Wheel-квоты недоступны: {_e!r}")
+
+        # ── опционально: риск ₽ на строку (нужен терминал) ──
+        _slm = None
+        try:
+            from risk_manager import _sl_money_per_lot as _slm_fn
+            _slm = _slm_fn
+        except Exception:
+            _slm = None
+
+        _quota = _plan_meta.get('quota') or (data_alloc or data).get('quota', 0.0) or 0.0
+
+        # ── Сборка строк плана ──
+        rows = []
+        for s in _act:
+            sym = s.get('symbol')
+            typ = s.get('type') or s.get('param_key')
+            pk = s.get('param_key')
+            sid = f"{sym}_{typ}"
+            cat = _cat_by_id.get(sid, {})
+            lot = float(s.get('lot', 0) or 0)
+            risk = None
+            _m = None
+            if _slm is not None:
+                try:
+                    _info = mt5.symbol_info(sym)
+                    _m = _slm(sym, _info, s.get('sl_points') or 0)
+                    risk = lot * _m if _m else None
+                except Exception:
+                    risk = None
+            pass  # _m уже посчитан выше; дубль-сброс убран
+            _vol = cat.get('volume') or 0.0
+            rows.append({
+                'status': 'OPEN' if s.get('has_position') else 'flat',
+                'symbol': str(sym).replace('rfd', ''),
+                'family': typ,
+                'category': category_label(sym, typ),
+                'sid': sid,
+                'param_key': pk,
+                'SL': s.get('sl_points'),
+                'TP': s.get('tp_points'),
+                'lot': lot,
+                'risk ₽': risk,
+                'sl_money': _m,
+                'sym_raw': sym,
+                'BT score': s.get('score'),
+                'BT PF': s.get('profit_factor'),
+                'BT WR %': s.get('win_rate'),
+                'BT trades': s.get('n_trades'),
+                'Tree PnL ₽': cat.get('pnl'),
+                'Tree ₽/лот': (cat.get('pnl') / _vol) if _vol else None,
+                'Tree trades': cat.get('trades'),
+                'Q cur %': round(_cur_q.get(sid, 0.0) * 100, 1) if _cur_q else None,
+                'Q new %': round(_new_q.get(sid, 0.0) * 100, 1) if _new_q else None,
+            })
+        df_plan = pd.DataFrame(rows)
+        df_plan['flag'] = df_plan.apply(
+            lambda r: '⚠ убыток в Tree' if (r['Tree PnL ₽'] is not None
+                                            and r['Tree PnL ₽'] < 0 and r['lot'] > 0.01) else '',
+            axis=1)
+
+        # ── Превью поправки: бэктест выбирает КОГО, реальные сделки — СКОЛЬКО ──
+        df_plan['Lot (tree)'] = None
+        if _cat_by_id:
+            try:
+                from wheel import tree_weighted_lots
+                _items = []
+                for _i, _r in df_plan.iterrows():
+                    _risk = _r.get('risk ₽')
+                    _slm = (_risk / _r['lot']) if (_r['lot'] and _risk) else None
+                    _items.append({'key': _i, 'sid': _r.get('sid'),
+                                   'score': _r.get('BT score'), 'sl_money': _slm})
+                _lots_adj = tree_weighted_lots(
+                    _items, _cat_by_id, _quota, min_lot=0.01,
+                    gamma=getattr(_scfg, 'gamma', 1.5), min_trades=_scfg.min_trades)
+                df_plan['Lot (tree)'] = df_plan.index.map(_lots_adj)
+            except Exception as _e:
+                st.caption(f"⚠ Не удалось посчитать план: {_e!r}")
+
+        # ── tree_weighting ВКЛ: план = tree-взвешенный объём от реальных сделок ──
+        if getattr(_scfg, 'tree_weighting', False) and _cat_by_id:
+            if True:  # soft_plan_lots сам выбирает: absolute (sl_money) или перераспределение (base_lot)
+                try:
+                    from wheel import soft_plan_lots as _twl
+                    _items = [{'key': _i, 'sid': _r['sid'], 'score': _r.get('BT score'),
+                               'sl_money': _r.get('sl_money'), 'base_lot': _r.get('lot')}
+                              for _i, _r in df_plan.iterrows()]
+                    _lots_tw = _twl(_items, _cat_by_id, _quota, min_lot=0.01,
+                                    # gamma в soft-версии не используется
+                                    min_trades=_scfg.min_trades)
+                    _newlot = pd.Series(df_plan.index.map(_lots_tw), index=df_plan.index)
+                    _ok = _newlot.notna() & (_newlot > 0)
+                    df_plan.loc[_ok, 'lot'] = _newlot[_ok]
+                    # риск ₽ под новый план-лот
+                    df_plan['risk ₽'] = [
+                        (l * m) if (m and l) else None
+                        for l, m in zip(df_plan['lot'], df_plan['sl_money'])]
+                    df_plan['flag'] = df_plan.apply(
+                        lambda r: '⚠ убыток в Tree' if (r['Tree PnL ₽'] is not None
+                                                        and r['Tree PnL ₽'] < 0 and r['lot'] > 0.01) else '',
+                        axis=1)
+                except Exception as _e2:
+                    st.caption(f"⚠ tree_weighting: {_e2!r}")
+            else:
+                st.caption("ℹ tree_weighting ВКЛ, но терминал недоступен (нет sl_money) — "
+                           "объём пересчитается в main.py на боевой машине.")
+
+        # ── Шапка-сводка ──
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Strategies in plan", len(df_plan))
+        c2.metric("Planned volume", f"{df_plan['lot'].sum():.2f} lots")
+        c3.metric("Risk budget", f"{_quota:,.0f} RUB")
+        _used = df_plan['risk ₽'].dropna().sum()
+        c4.metric("Used risk", f"{_used:,.0f} RUB" if _used > 0 else "—")
+        st.caption(f"План обновлён: {_plan_meta.get('updated') or '—'} · баланс "
+                   f"{(float(_plan_meta.get('balance') or 0)):,.0f} RUB · стратегий в плане: "
+                   f"{_plan_meta.get('total') or len(df_plan)}")
+        _warn = int((df_plan['flag'] != '').sum())
+        if _warn:
+            st.warning(f"⚠ {_warn} стратегий: категория убыточна в Tree, а объём > min_lot. "
+                       f"Это и есть «большие лоты у красных» — кандидаты на гейт объёма.")
+
+        # ── Гистограмма: план объёма по стратегиям ──
+        if PLOTLY_AVAILABLE and not df_plan.empty:
+            _bar = df_plan[df_plan['lot'] > 0].sort_values('lot', ascending=True).reset_index(drop=True)
+            _bar['label'] = _bar.apply(lambda r: f"{r['category']} {r['param_key']}", axis=1)
+            _bar['color'] = _bar['Tree PnL ₽'].apply(
+                lambda v: '#DA3633' if (v is not None and v < 0) else '#2EA043')
+            fig_bar = go.Figure(go.Bar(
+                x=_bar['label'], y=_bar['lot'], marker_color=_bar['color'],
+                customdata=_bar[['Tree PnL ₽', 'BT score']].values,
+                hovertemplate='<b>%{x}</b><br>Объём: %{y:.2f} лот<br>'
+                              'Tree PnL: %{customdata[0]:,.0f} ₽<br>'
+                              'BT score: %{customdata[1]:.2f}<extra></extra>'))
+                
+            plotly_dark_layout(fig_bar, height=560)
+            fig_bar.update_xaxes(tickangle=-60)
+            fig_bar.update_yaxes(title_text='Объём, лот')
+            st.markdown("#### План объёма")
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # ── Гистограмма С ПОПРАВКОЙ: объём по реальным сделкам ──
+            if False:  # дубль графика убран
+                _bar2 = df_plan.copy()
+                _bar2['Lot (tree)'] = pd.to_numeric(_bar2['Lot (tree)'], errors='coerce').fillna(0.0)
+                _bar2 = _bar2[_bar2['Lot (tree)'] > 0].copy()
+                _bar2['label'] = _bar2.apply(lambda r: f"{r['category']} {r['param_key']}", axis=1)
+                _bar2 = _bar2.sort_values('Lot (tree)', ascending=True).reset_index(drop=True)
+                _c2 = _bar2['Tree PnL ₽'].apply(lambda v: '#DA3633' if (v is not None and v < 0) else '#2EA043')
+                fig_bar2 = go.Figure(go.Bar(
+                    x=_bar2['label'], y=_bar2['Lot (tree)'], marker_color=_c2,
+                    customdata=_bar2[['Tree PnL ₽', 'lot']].values,
+                    hovertemplate='<b>%{x}</b><br>Лот с поправкой: %{y:.2f}<br>'
+                                  'Сейчас: %{customdata[1]:.2f} лот<br>'
+                                  'Tree PnL: %{customdata[0]:,.0f} ₽<extra></extra>'))
+                plotly_dark_layout(fig_bar2, height=560)
+                fig_bar2.update_xaxes(tickangle=-60)
+                fig_bar2.update_yaxes(title_text='Объём с поправкой, лот')
+                st.markdown("#### План объёма С ПОПРАВКОЙ (Tree-weighted: красные → min_lot)")
+                st.plotly_chart(fig_bar2, use_container_width=True)
+            _unused_pie = """
+            _pie = _pie[_pie['lots'] > 0].sort_values('lots', ascending=False)
+            fig_pie = go.Figure(go.Pie(
+                labels=_pie['category'], values=_pie['lots'], hole=0.45,
+                textinfo='label+percent', textposition='outside',
+                texttemplate='%{label}<br>%{value:.2f} лот (%{percent})'))
+            plotly_dark_layout(fig_pie, height=460)
+            st.markdown("#### План объёма по категориям (валюта + семейство)")
+            """  # end disabled pie code
+
+        # ── Полная таблица плана ──
+        st.markdown("#### Полный план (по стратегиям)")
+        _cols = [c for c in ['symbol', 'family', 'category', 'param_key', 'SL', 'TP',
+                             'lot', 'risk ₽', 'BT score', 'BT PF', 'BT WR %', 'BT trades',
+                             'Tree PnL ₽', 'Tree ₽/лот', 'Tree trades',
+                             'Q cur %', 'Q new %', 'flag'] if c in df_plan.columns]
+        st.dataframe(
+            df_plan[_cols].sort_values('lot', ascending=False).reset_index(drop=True),
+            use_container_width=True, hide_index=True,
+            column_config={
+                'lot': st.column_config.NumberColumn(format="%.2f"),
+                # (Lot (tree) убран)
+                'risk ₽': st.column_config.NumberColumn(format="%.0f"),
+                'BT score': st.column_config.NumberColumn(format="%.2f"),
+                'BT PF': st.column_config.NumberColumn(format="%.2f"),
+                'Tree PnL ₽': st.column_config.NumberColumn(format="%.0f"),
+                'Tree ₽/лот': st.column_config.NumberColumn(format="%.0f"),
+                'Q cur %': st.column_config.NumberColumn(format="%.1f"),
+                'Q new %': st.column_config.NumberColumn(format="%.1f"),
+            })
+
+
 with tab_risk:
     if not data:
         st.warning("No data.")
@@ -674,6 +938,7 @@ with tab_strategies:
             df_active[cols_to_show], use_container_width=True,
             column_config={
                 'lot': st.column_config.NumberColumn(format="%.2f"),
+                # (убрано: конфиг колонки, которой нет в этой таблице)
                 'magic': st.column_config.NumberColumn(format="%.0f"),
             }, hide_index=True,
         )
@@ -822,23 +1087,23 @@ with tab_3d:
 # ═══════════════════════════════════════════════════════════════
 with tab_tree:
     st.markdown("### Strategy Tree")
-    st.caption(f"Allocation period: {ALLOC_DAYS} дн. (config.SteeringParams.lookback_days) — это окно, по которому реально распределяется объём в Wheel.")
+    st.caption(f"Окно дерева: {days_back} дн. (ползунок Dashboard lookback). Реальное окно аллокации штурвала — {ALLOC_DAYS} дн. (config.SteeringParams.lookback_days).")
     if days_back != ALLOC_DAYS:
-        st.info(f"⚠ Слайдер показывает {days_back} дн., но дерево аллокации всегда {ALLOC_DAYS} дн. Ниже — окно реальной перекладки объёма (синхрон с Wheel).")
+        st.info(f"⚠ Дерево построено по окну слайдера: {days_back} дн. Окно реальной перекладки объёма (Wheel / ночной пересчёт) — {ALLOC_DAYS} дн. (config) и от ползунка не зависит.")
 
     if not data:
         st.warning("No data.")
         st.stop()
 
-    trades_df = data_alloc.get('trades_df')
+    trades_df = data.get('trades_df')
     if trades_df is None or trades_df.empty or not PLOTLY_AVAILABLE:
         if not PLOTLY_AVAILABLE:
             st.warning("Plotly недоступен — Strategy Tree не может быть построен.")
             st.stop()
-        _ds = data_alloc.get('dash_stats') or {}
+        _ds = data.get('dash_stats') or {}
         st.info(
             "**Дерево пустое.** Оно строится только из **закрытых** позиций наших стратегий "
-            "(magic 770000–869999, символы `*rfd`) за период аллокации (config.lookback_days).\n\n"
+            "(magic 770000–869999, символы `*rfd`) за выбранное окно слайдера.\n\n"
             + f"- Окно: {str(_ds.get('window_from', '?'))[:10]} .. {str(_ds.get('window_to', '?'))[:10]} "
             f"(Lookback {_ds.get('days_back', '?')} дн.)\n"
             + f"- Сделок в окне (все magic): **{_ds.get('n_deals_raw', '?')}**\n"
@@ -1475,7 +1740,7 @@ with tab_backtest:
         if 'kind' not in df_bt.columns:
             df_bt['kind'] = 'full'
         df_bt['ts'] = pd.to_datetime(df_bt.get('ts'), errors='coerce')
-        for _bt_c in ['elapsed_sec', 'combos', 'symbols', 'results']:
+        for _bt_c in ['elapsed_sec', 'combos', 'combos_done', 'symbols', 'results', 'skipped']:
             if _bt_c not in df_bt.columns:
                 df_bt[_bt_c] = np.nan
             df_bt[_bt_c] = pd.to_numeric(df_bt[_bt_c], errors='coerce')
@@ -1487,6 +1752,10 @@ with tab_backtest:
 
         df_bt['minutes'] = df_bt['elapsed_sec'] / 60.0
         df_bt['day'] = df_bt['ts'].dt.normalize()
+        # Факт = реально посчитанные комбинации ('combos_done'), план = 'combos'.
+        # Для старых записей без 'combos_done' факт приравниваем к плану.
+        df_bt['done'] = df_bt['combos_done'].where(df_bt['combos_done'].notna(), df_bt['combos'])
+        df_bt['skipped'] = df_bt['skipped'].fillna(0)
 
         _bt_ts_min = df_bt['ts'].min()
         _bt_ts_max = df_bt['ts'].max()
@@ -1507,6 +1776,9 @@ with tab_backtest:
         with _m2:
             st.metric("Последний, мин", f"{_bt_last_min:.1f}",
                       delta=f"{_bt_last_min - _bt_avg_all:+.1f}")
+            _l_done = int(_bt_last['done']) if pd.notna(_bt_last.get('done')) else 0
+            _l_plan = int(_bt_last['combos']) if pd.notna(_bt_last['combos']) else 0
+            st.caption(f"последний прогон: считано {_l_done} / план {_l_plan} комб.")
         with _m3:
             st.metric("Средний полный, мин",
                       f"{_bt_full['minutes'].mean():.1f}" if len(_bt_full) else "—")
@@ -1539,17 +1811,17 @@ with tab_backtest:
                     name=_name,
                     line=dict(color=_color, width=1.5),
                     marker=dict(
-                        size=[_bt_marker_size(_c) for _c in _sub['combos']],
+                        size=[_bt_marker_size(_c) for _c in _sub['done']],
                         color=_color, symbol=_symbol,
                         line=dict(width=0.5, color=COL_PANEL),
                     ),
                     text=[f"{int(_c):,}".replace(',', ' ') if pd.notna(_c) else ''
-                          for _c in _sub['combos']],
+                          for _c in _sub['done']],
                     textposition='top center',
                     textfont=dict(size=11, color=COL_MUTED),
                     customdata=np.stack([
                         _sub['ts'].dt.strftime('%Y-%m-%d %H:%M').to_numpy(),
-                        _sub['combos'].to_numpy(),
+                        _sub['done'].to_numpy(),
                         _sub['symbols'].to_numpy(),
                         _sub['results'].to_numpy(),
                     ], axis=-1),
@@ -1557,9 +1829,9 @@ with tab_backtest:
                         'Дата/время: %{customdata[0]}<br>'
                         f'Тип прогона: {_name}<br>'
                         'Длительность: %{y:.1f} мин<br>'
-                        'Комбинации: %{customdata[1]}<br>'
+                        'Считано (факт): %{customdata[1]}<br>'
                         'Символов: %{customdata[2]}<br>'
-                        'Результатов: %{customdata[3]}<extra></extra>'
+                        'В пуле: %{customdata[3]}<extra></extra>'
                     ),
                 ))
             fig_bt.update_layout(
@@ -1572,15 +1844,21 @@ with tab_backtest:
 
         # ── Таблица-лог ──
         _bt_log = df_bt.sort_values('ts', ascending=False).copy()
+        st.caption("«Считано» — реально посчитанные комбинации (факт). «План» — сколько комбинаций было в задании. "
+                   "«Символы» — сколько символов пересчитано заново. «Пропущ.» — символов взято из чекпоинтов. "
+                   "«В пуле» — сколько стратегий в пуле результатов после мержа/дедупа. "
+                   "Считано=0 при «Лайт» = расчёт не требовался (всё взято из чекпоинтов).")
         _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%Y-%m-%d %H:%M')
         _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный', 'partial': 'Частичный', 'light': 'Лайт'}).fillna(_bt_log['kind'])
         _bt_log['Длительность (мин)'] = _bt_log['minutes'].round(1)
-        _bt_log['Комбинации'] = _bt_log['combos'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        _bt_log['Считано'] = _bt_log['done'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        _bt_log['План'] = _bt_log['combos'].apply(lambda v: int(v) if pd.notna(v) else 0)
         _bt_log['Символы'] = _bt_log['symbols'].apply(lambda v: int(v) if pd.notna(v) else 0)
-        _bt_log['Результаты'] = _bt_log['results'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        _bt_log['Пропущ.'] = _bt_log['skipped'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        _bt_log['В пуле'] = _bt_log['results'].apply(lambda v: int(v) if pd.notna(v) else 0)
 
         st.dataframe(
             _bt_log[['Дата/время', 'Тип', 'Длительность (мин)',
-                     'Комбинации', 'Символы', 'Результаты']],
+                     'Считано', 'План', 'Символы', 'Пропущ.', 'В пуле']],
             use_container_width=True, hide_index=True,
         )

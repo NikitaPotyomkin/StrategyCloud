@@ -408,6 +408,7 @@ class SteeringParams:
     max_dd: float = 0.15      # предел просадки (15%)
     score_mode: str = 'pnl_per_lot'   # 'pnl' — абсолютный PnL (как Strategy Tree); 'pnl_per_lot' — удельный ₽/лот; 'sharpe' — pnl/vol
     quotas_file: str = 'steering_quotas.json'
+    tree_weighting: bool = True   # True: объём активации считается от реальных сделок (бэктест выбирает, Tree задаёт объём). ВКЛ.
     # ЖЁСТКИЙ период аллокации (дни). Единый источник и для Strategy Tree,
     # и для Wheel, и для ночной перекладки объёма в main.py. Слайдер дэшборда
     # его НЕ меняет — это только визуальный просмотр. Стратегии деградируют,

@@ -445,12 +445,19 @@ def get_dashboard_data(days_back=30, manage_connection=True):
         date_from = max(datetime.datetime(2026, 9, 1), date_to - datetime.timedelta(days=days_back))
 
         n_deals_raw = 0
+        net_deposits = 0.0  # чистый внешний кэшфлоу за окно (пополнения − выводы)
         n_deals_ours = 0
         deals = mt5.history_deals_get(date_from, date_to)
         if deals is None or len(deals) == 0:
             trades_df = pd.DataFrame()
         else:
             trades_df = pd.DataFrame([d._asdict() for d in deals])
+            # Балансовые операции (пополнение/вывод) в PnL сделок не идут, но нужны,
+            # чтобы отличать кэшфлоу от торгового результата (для гвардов риска).
+            net_deposits = float(sum(
+                d.profit for d in deals
+                if d.type in (mt5.DEAL_TYPE_BALANCE, mt5.DEAL_TYPE_CREDIT)
+            ))
             n_deals_raw = len(trades_df)
 
             # Фильтр: только торговые сделки
@@ -596,6 +603,7 @@ def get_dashboard_data(days_back=30, manage_connection=True):
                 'n_deals_ours': n_deals_ours,
                 'n_closed_positions': len(trades_df),
                 'n_open_positions': len(positions) if positions else 0,
+                'net_deposits': net_deposits,
             },
         }
 

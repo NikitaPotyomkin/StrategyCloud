@@ -293,3 +293,254 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None, min_trade
         })
 
     return metrics
+
+
+def tree_weighted_lots(items, categories, quota, min_lot=0.01, gamma=1.5, min_trades=5,
+                       floor_mult=0.25, ceil_mult=3.0):
+    """Обёртка: SOFT-SLOPE версия (база = BT score, множитель категории — от реальных сделок)."""
+    return _soft_weighted_lots(items, categories, quota, min_lot=min_lot,
+                               min_trades=min_trades, floor_mult=floor_mult,
+                               ceil_mult=ceil_mult)
+
+
+def _soft_weighted_lots(items, categories, quota, min_lot=0.01,
+                        min_trades=5, floor_mult=0.25, ceil_mult=3.0):
+    """SOFT-SLOPE: бэктест задаёт КОГО и базовый вес, реальные сделки — множитель объёма.
+
+    Множитель категории m:
+      - нет сделок за окно / меньше min_trades -> 1.0 (нейтрально, без наказания);
+      - ₽/лот >= 0                            -> 1.0 .. ceil_mult (плавно, сатурация);
+      - ₽/лот <  0                            -> floor_mult .. 1.0 (плавно, сатурация).
+    Вес стратегии W = BT score × m_категории.
+    Лот_i = quota × W_i / Σ(W_j × sl_money_j).
+    Никто не обнуляется: даже красные сохраняют долю floor_mult от базового веса.
+    """
+    cats = categories or {}
+
+    # удельная метрика ₽/лот по категории (None = нет данных / мало сделок)
+    raw = {}
+    for sid, c in cats.items():
+        vol = float(c.get('volume') or 0.0)
+        pnl = float(c.get('pnl') or 0.0)
+        tr = int(c.get('trades') or 0)
+        raw[sid] = (pnl / vol) if (vol > 0 and tr >= min_trades) else None
+
+    # авто-масштаб: типичный |₽/лот| среди оценённых категорий
+    vals = [abs(v) for v in raw.values() if v is not None and v != 0.0]
+    if vals:
+        scale = float(np.median(vals))
+        if scale <= 0:
+            scale = 1.0
+    else:
+        scale = 1.0
+
+    m = {}
+    for sid in cats:
+        v = raw.get(sid)
+        if v is None:
+            m[sid] = 1.0
+        elif v >= 0:
+            m[sid] = 1.0 + (ceil_mult - 1.0) * (v / (v + scale))
+        else:
+            m[sid] = floor_mult  # любой убыток в Tree -> плоский минимум (не 0)
+
+    # вес стратегии = BT score × множитель её категории
+    W = {}
+    for it in items:
+        sc = max(float(it.get('score') or 0.0), 0.0)
+        W[it.get('key')] = sc * m.get(it.get('sid'), 1.0)
+
+    denom = 0.0
+    for it in items:
+        denom += W.get(it.get('key'), 0.0) * (float(it.get('sl_money') or 0.0))
+
+    lots = {}
+    for it in items:
+        k = it.get('key')
+        slm = float(it.get('sl_money') or 0.0)
+        if denom > 0 and W.get(k, 0.0) > 0 and slm > 0:
+            lot = quota * W[k] / denom
+        else:
+            lot = min_lot
+        lots[k] = max(lot, min_lot)
+    return lots
+
+
+def _category_multipliers(categories, min_trades=5, floor_mult=0.25, ceil_mult=3.0):
+    """Множитель объёма на категорию из реальных сделок (SOFT-SLOPE)."""
+    cats = categories or {}
+    raw = {}
+    for sid, c in cats.items():
+        vol = float(c.get('volume') or 0.0)
+        pnl = float(c.get('pnl') or 0.0)
+        tr = int(c.get('trades') or 0)
+        raw[sid] = (pnl / vol) if (vol > 0 and tr >= min_trades) else None
+    vals = [abs(v) for v in raw.values() if v is not None and v != 0.0]
+    if vals:
+        scale = float(np.median(vals))
+        if scale <= 0:
+            scale = 1.0
+    else:
+        scale = 1.0
+    m = {}
+    for sid in cats:
+        v = raw.get(sid)
+        if v is None:
+            m[sid] = 1.0
+        elif v >= 0:
+            m[sid] = 1.0 + (ceil_mult - 1.0) * (v / (v + scale))
+        else:
+            m[sid] = floor_mult  # любой убыток в Tree -> плоский минимум (не 0)
+    return m
+
+
+def soft_plan_lots(items, categories, quota, min_lot=0.01,
+                   min_trades=5, floor_mult=0.25, ceil_mult=3.0):
+    """План объёма на день.
+
+    1) Если есть валидный `sl_money` (>0) — абсолютная нормировка к риск-квоте
+       (как в live-врезке main.py): lot_i = quota·W_i / Σ(W_j·sl_money_j).
+    2) Иначе (терминал недоступен, sl_money=0) — перераспределение УЖЕ имеющегося
+       объёма (`base_lot`) по множителю категории с СОХРАНЕНИЕМ суммарного объёма.
+       Это относительный превью-план: кто получает больше, кто меньше.
+    """
+    has_slm = any(float(it.get('sl_money') or 0.0) > 0 for it in items)
+    if has_slm and quota and quota > 0:
+        return _soft_weighted_lots(items, categories, quota, min_lot=min_lot,
+                                   min_trades=min_trades, floor_mult=floor_mult,
+                                   ceil_mult=ceil_mult)
+    m = _category_multipliers(categories, min_trades, floor_mult, ceil_mult)
+    base_total = sum(max(float(it.get('base_lot') or 0.0), 0.0) for it in items)
+    if base_total <= 0:
+        return {it.get('key'): min_lot for it in items}
+    w = {}
+    for it in items:
+        w[it.get('key')] = max(float(it.get('base_lot') or 0.0), 0.0) * m.get(it.get('sid'), 1.0)
+    sw = sum(w.values()) or 1.0
+    lots = {}
+    for it in items:
+        lots[it.get('key')] = max(base_total * w[it.get('key')] / sw, min_lot)
+    return lots
+
+
+def _tree_weighted_lots_hard(items, categories, quota, min_lot=0.01, gamma=1.5, min_trades=5):
+    """Поправка объёма: бэктест выбирает КОГО, реальные сделки — СКОЛЬКО.
+
+    items: список dict с ключами:
+        'key'      — уникальный ключ стратегии;
+        'sid'      — категория 'symbol_family' (напр. 'USDJPYrfd_rf');
+        'score'    — score бэктеста (вес внутри категории);
+        'sl_money' — деньги риска на 1 лот по SL (нормировка к риск-квоте),
+                     может быть None (тогда берётся 1.0).
+    categories: dict sid -> {'pnl','volume','trades'} за окно аллокации.
+
+    Вес категории w = (PnL/объём)^gamma, если PnL>0 и trades>=min_trades, иначе 0.
+    Доля стратегии внутри категории ∝ score бэктеста.
+    Лот_i = quota * W_i / Σ(W_j * sl_money_j).
+    Категории с w=0 получают min_lot («убыточные едут на минималке»).
+
+    Возвращает dict key -> lot.
+    """
+    cats = categories or {}
+    w_cat = {}
+    for sid, c in cats.items():
+        vol = float(c.get('volume') or 0.0)
+        pnl = float(c.get('pnl') or 0.0)
+        tr = int(c.get('trades') or 0)
+        if vol > 0 and pnl > 0 and tr >= min_trades:
+            w_cat[sid] = (pnl / vol) ** gamma
+        else:
+            w_cat[sid] = 0.0
+
+    # Сумма score внутри категории — для доли стратегии
+    ssum = {}
+    for it in items:
+        sid = it.get('sid')
+        ssum[sid] = ssum.get(sid, 0.0) + max(float(it.get('score') or 0.0), 0.0)
+
+    # Вклад стратегии: вес категории × доля по бэктесту
+    W = {}
+    for it in items:
+        sid = it.get('sid')
+        sc = max(float(it.get('score') or 0.0), 0.0)
+        share = (sc / ssum[sid]) if ssum.get(sid, 0.0) > 0 else 1.0
+        W[it.get('key')] = w_cat.get(sid, 0.0) * share
+
+    denom = 0.0
+    for it in items:
+        slm = it.get('sl_money')
+        slm = float(slm) if slm else 1.0
+        denom += W.get(it.get('key'), 0.0) * (float(it.get('sl_money') or 0.0))
+
+    lots = {}
+    for it in items:
+        k = it.get('key')
+        slm = it.get('sl_money')
+        slm = float(slm) if slm else 1.0
+        if denom > 0 and W.get(k, 0.0) > 0 and (it.get('sl_money') or 0.0) > 0:
+            lot = quota * W[k] / denom
+        else:
+            lot = min_lot
+        lots[k] = max(lot, min_lot)
+    return lots
+
+
+def apply_tree_weighting(active, symbol_data, balance, risk_pct,
+                         min_lot=0.01, gamma=1.5, min_trades=5, lookback_days=14):
+    """Пересчитать лоты активного набора от реальных сделок (Tree).
+
+    Бэктест выбирает набор; объём задают реальные сделки: зелёные категории →
+    больше, красные → min_lot. Меняет r['lot'] на месте. Безопасна: при любой
+    ошибке/отсутствии данных оставляет лоты как есть.
+    """
+    if not active:
+        return active
+    try:
+        from daily_report import get_dashboard_data
+        from risk_manager import _sl_money_per_lot
+    except Exception:
+        return active
+
+    d = get_dashboard_data(lookback_days, manage_connection=False)
+    df = (d or {}).get('trades_df')
+    if df is None or len(df) == 0:
+        return active
+
+    df = df.copy().reset_index(drop=True)
+    if 'profit' in df.columns and 'profit_net' in df.columns:
+        df = df.drop(columns=['profit'])
+    df = df.rename(columns={'profit_net': 'profit'})
+    if 'entry' in df.columns:
+        def _closing(v):
+            if isinstance(v, str):
+                return v.strip().lower() == 'out'
+            try:
+                return int(v) == 1
+            except (TypeError, ValueError):
+                return False
+        df = df[df['entry'].apply(_closing)]
+    df['symbol'] = df['symbol'].astype(str)
+    df['param_key'] = df['param_key'].astype(str)
+
+    cats = {}
+    for c in compute_categories(df):
+        cats[c['id']] = c
+    if not cats:
+        return active
+
+    items = []
+    for i, r in enumerate(active):
+        info = symbol_data.get(r['symbol'], {}).get('info')
+        try:
+            slm = _sl_money_per_lot(r['symbol'], info, r.get('sl_points') or 0)
+        except Exception:
+            slm = None
+        items.append({'key': i, 'sid': f"{r['symbol']}_{r.get('type', 'stoch')}",
+                      'score': r.get('score'), 'sl_money': slm})
+
+    lots = tree_weighted_lots(items, cats, balance * risk_pct,
+                              min_lot=min_lot, gamma=gamma, min_trades=min_trades)
+    for i, r in enumerate(active):
+        if lots.get(i):
+            r['lot'] = lots[i]
+    return active

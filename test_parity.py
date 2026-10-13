@@ -85,11 +85,12 @@ N = 210  # >= 202: RSI-Rev требует прогрев EMA200
 
 
 class FakePos:
-    __slots__ = ('symbol', 'magic')
+    __slots__ = ('symbol', 'magic', 'type')
 
-    def __init__(self, symbol, magic):
+    def __init__(self, symbol, magic, type=None):
         self.symbol = symbol
         self.magic = magic
+        self.type = type
 
 
 def fake_mt5(positions, ticks):
@@ -97,6 +98,8 @@ def fake_mt5(positions, ticks):
         positions_get=lambda *a, **k: list(positions),
         symbol_info_tick=lambda symbol: ticks.get(symbol),
         ACCOUNT_MARGIN_MODE_RETAIL_HEDGING='hedging',
+        POSITION_TYPE_BUY='buy',
+        POSITION_TYPE_SELL='sell',
     )
 
 
@@ -262,7 +265,7 @@ def run_scenario(impl, sc, log):
 
 def sig_col_for(t):
     return {
-        'stoch': 'k', 'parabolic': 'sar', 'ma': 'ma', 'rf': 'rf_signal',
+        'stoch': 'k', 'parabolic': 'sar_trend', 'ma': 'ma', 'rf': 'rf_signal',
         'logreg': 'lr_signal', 'macd_cross': 'signal', 'rsi_rev': 'signal',
         'bollinger': 'signal', 'ema_cross': 'signal', 'rsi_div': 'signal',
         'ichimoku': 'signal', 'zscore': 'zscore', 'autocorr': 'acf',
@@ -380,6 +383,46 @@ def run_scenarios(impl, scenarios):
     return log
 
 
+def run_bt_parity():
+    """Самосогласованность бэктест-движка (strategies/_bt_core.py + реестр).
+
+    Для каждой стратегии реестра проверяет:
+      * registry_backtest(...) == прямой module.backtest(...)  (wiring реестра);
+      * детерминизм движка (повторный прогон даёт тот же результат).
+    Возвращает True, если всё сошлось. Ничего не торгует.
+    """
+    import importlib
+    from strategies._registry import REGISTRY, registry_backtest
+
+    idx = pd.date_range('2026-09-01', periods=N, freq='h')
+    rng = np.random.default_rng(12345)
+    close = 1.1000 + np.cumsum(rng.normal(0, 0.0005, N))
+    df = pd.DataFrame({
+        'time': idx,
+        'open': close, 'high': close + 0.0002, 'low': close - 0.0002,
+        'close': close, 'volume': rng.integers(50, 200, N).astype(float),
+    })
+    args = (300, 600, 0.0001, 1.0, 0.0001)  # sl, tp, point, tick_value, tick_size
+
+    ok = True
+    n = 0
+    for key, e in REGISTRY.items():
+        mod = importlib.import_module(f"strategies.{e['module']}")
+        pk = e['grid'][0]
+        a = registry_backtest(key, df, pk, *args, spread_points=10)
+        b = mod.backtest(df, pk, *args, spread_points=10)
+        if a != b:
+            ok = False
+            print(f"  [FAIL] {key}: registry_backtest != module.backtest")
+        c = registry_backtest(key, df, pk, *args, spread_points=10)
+        if c != a:
+            ok = False
+            print(f"  [FAIL] {key}: недетерминизм движка")
+        n += 1
+    print(f"BT-PARITY: проверено {n} стратегий — {'ОК' if ok else 'РАСХОЖДЕНИЯ'}")
+    return ok
+
+
 def diff_stdout(a, b):
     for line in difflib.unified_diff(a, b, fromfile='NEW/ТЕКУЩИЙ', tofile='ЭТАЛОН', lineterm=''):
         print(line)
@@ -387,11 +430,14 @@ def diff_stdout(a, b):
 
 def main():
     ap = argparse.ArgumentParser(description='Parity-тест check_active_signals')
-    ap.add_argument('mode', choices=['golden', 'check'])
+    ap.add_argument('mode', choices=['golden', 'check', 'bt'])
     args = ap.parse_args()
 
     scenarios = build_scenarios()
     golden_path = 'journals/parity_golden.txt'
+
+    if args.mode == 'bt':
+        sys.exit(0 if run_bt_parity() else 1)
 
     if args.mode == 'golden':
         log = run_scenarios(se.check_active_signals, scenarios)

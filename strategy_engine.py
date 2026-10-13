@@ -101,6 +101,13 @@ def assign_magic(symbol, stype, param_key, parabolic_max=None):
 def _short_name(r):
     pair = get_non_usd(r['symbol'])
     stype = r.get('type', 'stoch')
+    try:
+        from strategies._registry import label_for as _label_for
+        _reg_label = _label_for(stype)
+    except Exception:
+        _reg_label = None
+    if _reg_label is not None:
+        return f"{pair}/{_reg_label} {r['param_key']}"
     k = r['param_key']
     if stype == 'parabolic':
         return f"{pair}/SAR s{k}"
@@ -718,6 +725,15 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
                 print(f"  -> [WARN] Реестр: ошибка записи: {reg_exc!r}", flush=True)
 
     # Проверяем реальные позиции (могли закрыться по SL/TP у брокера)
+    # ── Реестр standalone-стратегий: доп. спеки для live-сигналов ──
+    # calc/entry/exit резолвятся лениво из strategies/_registry.py, поэтому
+    # сигнатура check_active_signals НЕ растёт позиционными параметрами.
+    try:
+        from strategies._registry import build_live_specs as _build_live_specs
+        specs.update(_build_live_specs(_spec))
+    except Exception as _reg_err:
+        print(f"  -> [WARN] реестр live-спеков: {_reg_err}", flush=True)
+
     for key, s in active_strategies.items():
         if s['position'] is not None and not mt5.positions_get(ticket=s['position']['ticket']):
             _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,

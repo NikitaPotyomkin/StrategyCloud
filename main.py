@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore')
 from functions import terminal_on, run_full_backtest, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
-from wheel import calculate_steering_wheel_quotas, compute_categories, format_allocation_report
+from wheel import calculate_steering_wheel_quotas, compute_categories, format_allocation_report, apply_tree_weighting
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots, check_integration_budget,
     check_daily_loss_limit, check_equity_stop, check_margin_level, realtime_quota_recalc,
@@ -593,6 +593,11 @@ if __name__ == '__main__':
 
     active = distribute_lots(deduped_results, symbol_data, balance,
                              risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
+    if getattr(steering_cfg, 'tree_weighting', False):
+        try:
+            apply_tree_weighting(active, symbol_data, balance, risk_cfg.max_risk_pct, risk_cfg.min_lot)
+        except Exception as _tw_e:
+            print(f"  [WARN] tree-weighting: {_tw_e!r}", flush=True)
 
     print(f"Активировано {len(active)} стратегий из {len(deduped_results)} комбинаций")
 
@@ -631,9 +636,23 @@ if __name__ == '__main__':
     last_conn_warn_time = datetime.min
     last_balance_refresh = datetime.now()
     last_quota_recalc = datetime.now()
+    def _net_cashflow(since_dt):
+        """Чистый внешний кэшфлоу (пополнения − выводы) в рублях с момента since_dt.
+        Нужен, чтобы гварды риска не принимали депо/вывод за торговый убыток."""
+        try:
+            _deals = mt5.history_deals_get(since_dt, datetime.now() + timedelta(hours=6))
+        except Exception:
+            return 0.0
+        if not _deals:
+            return 0.0
+        return float(sum(d.profit for d in _deals
+                         if d.type in (mt5.DEAL_TYPE_BALANCE, mt5.DEAL_TYPE_CREDIT)))
+
     initial_equity = None
     daily_start_balance = None
     daily_start_date = None
+    daily_start_dt = None
+    initial_equity_dt = None
     daily_stop_notified = False  # [STOP] печатаем и закрываем позиции один раз за день
     first_run = True  # Флаг первого запуска — нужен для полного пересчёта
 
@@ -701,6 +720,11 @@ if __name__ == '__main__':
                 deduped_results = all_results
                 active = distribute_lots(deduped_results, symbol_data, balance,
                                          risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
+                if getattr(steering_cfg, 'tree_weighting', False):
+                    try:
+                        apply_tree_weighting(active, symbol_data, balance, risk_cfg.max_risk_pct, risk_cfg.min_lot)
+                    except Exception as _tw_e:
+                        print(f"  [WARN] tree-weighting: {_tw_e!r}", flush=True)
                 print(f"Баланс: {balance:.0f} руб | Квота: {balance * risk_cfg.max_risk_pct:.0f} руб | "
                       f"Активировано {len(active)} из {len(deduped_results)} (всего {len(all_results)})")
 
@@ -832,10 +856,12 @@ if __name__ == '__main__':
 
                     if initial_equity is None:
                         initial_equity = equity
+                        initial_equity_dt = now
                         print(f"  [INIT] Initial equity: {equity:.2f}")
 
                     if daily_start_balance is None or now.date() != daily_start_date:
                         daily_start_balance = balance
+                        daily_start_dt = now
                         daily_start_date = now.date()
                         print(f"  [INIT] Daily start balance: {balance:.2f}")
                         daily_stop_notified = False  # новый день — лимит снова активен
@@ -845,7 +871,8 @@ if __name__ == '__main__':
                     # ── Проверка 1: Daily stop-loss ──
                     if daily_start_balance is not None:
                         dl_ok, dl_pct, dl_reason = check_daily_loss_limit(
-                            daily_start_balance, equity, risk_cfg.daily_loss_limit_pct
+                            daily_start_balance, equity, risk_cfg.daily_loss_limit_pct,
+                            cashflow=(_net_cashflow(daily_start_dt) if daily_start_dt else 0.0),
                         )
                         if not dl_ok:
                             # Сбой терминала (нет account_info) — позиции НЕ закрываем, ждём следующей проверки
@@ -869,7 +896,10 @@ if __name__ == '__main__':
 
                     # ── Проверка 2: Equity stop ──
                     if initial_equity is not None:
-                        eq_ok, eq_dd, eq_reason = check_equity_stop(equity, initial_equity, risk_cfg.equity_stop_pct)
+                        eq_ok, eq_dd, eq_reason = check_equity_stop(
+                            equity, initial_equity, risk_cfg.equity_stop_pct,
+                            cashflow=(_net_cashflow(initial_equity_dt) if initial_equity_dt else 0.0)
+                        )
                         if not eq_ok:
                             print(f"\n  [STOP] Equity stop: {eq_reason} — аварийная остановка!")
                             for key, s in list(active_strategies.items()):

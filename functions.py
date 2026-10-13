@@ -1817,6 +1817,47 @@ def _backtest_symbol(args):
 
     # ── Сохраняем чекпойнт после каждого символа ──
     last_bar_time = df_window.index[-1].isoformat() if df_window is not None else None
+
+    # save_checkpoint перенесён НИЖЕ — ПОСЛЕ generic-цикла реестра (результаты попадают в чекпойнт)
+
+    # ── Реестр standalone-стратегий (strategies/_registry.py) ──
+    # Generic-цикл: добавляет новые стратегии в результаты/ранжирование без
+    # дублирования блоками по 28 строк. Ярлык/сетка берутся из реестра.
+    try:
+        from strategies._registry import REGISTRY as _REG, registry_backtest as _reg_bt
+        _reg_entries = []  # ОТКАТ бэктест-слоя: реестр в расчёты НЕ подключаем
+    except Exception as _reg_err:
+        _reg_entries = []
+        print(f"  [WARN] реестр стратегий недоступен: {_reg_err}", flush=True)
+
+    for _key, _e in _reg_entries:
+        if test_strategy and test_strategy != _key:
+            continue
+        for _pk, _sl, _tp in product(_e['grid'], SL_POINTS_LIST, TP_POINTS_LIST):
+            profit, n_trades, trade_profits = _safe_backtest(
+                _e['label'], _reg_bt, _key,
+                df_window, _pk, _sl, _tp,
+                info.point, info.trade_tick_value, info.trade_tick_size,
+                spread_points=info.spread
+            )
+            metrics = calc_metrics(trade_profits)
+            score = composite_score(metrics)
+            results.append({
+                'symbol': symbol, 'type': _key, 'param_key': _pk,
+                'parabolic_max': None,
+                'sl_points': _sl, 'tp_points': _tp,
+                'profit': profit, 'n_trades': n_trades,
+                'profit_factor': metrics['profit_factor'],
+                'max_drawdown': metrics['max_drawdown'],
+                'win_rate': metrics['win_rate'],
+                'sharpe': metrics['sharpe'],
+                'recovery': metrics['recovery'],
+                'score': score,
+            })
+            combos_done += 1
+        completed_strategies.append(_e['label'])
+        _strategy_map[_key] = len(_e['grid']) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
+
     save_checkpoint(symbol, results, last_bar_time=last_bar_time, families=family_fp)
 
     return symbol, results, combos_done, active_combos, completed_strategies
@@ -2074,6 +2115,13 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'morning_star': morning_star_per_symbol,
     })
 
+    # ── Реестр standalone-стратегий: комбинации для итогов и прогресса ──
+    try:
+        from strategies._registry import registry_combos as _reg_combos
+        pass  # ОТКАТ бэктест-слоя: комбинации реестра НЕ подмешиваем
+    except Exception as _reg_err:
+        print(f"  -> [WARN] реестр комбинаций: {_reg_err}", flush=True)
+
     if test_strategy and test_strategy in strat_combo_map:
         active_combos = strat_combo_map[test_strategy]
     else:
@@ -2125,6 +2173,14 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         'obv': _fp(OBV_PERIOD_LIST, OBV_THRESHOLD_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
         'morning_star': _fp(MORNING_STAR_BODY_RATIO_LIST, SL_POINTS_LIST, TP_POINTS_LIST),
     }
+
+    # ── Реестр standalone-стратегий: отпечатки семейств для чекпойнтов ──
+    try:
+        from strategies._registry import registry_families as _reg_families
+        for _lab, _grids in ():  # ОТКАТ бэктест-слоя: семейства реестра НЕ подмешиваем
+            family_fp[_lab] = _fp(*_grids)
+    except Exception as _reg_err:
+        print(f"  -> [WARN] реестр семейств: {_reg_err}", flush=True)
 
     # ═══ ПРОВЕРКА НОЧНОГО ПЕРЕСЧЁТА ═══
     now = datetime.datetime.now()
@@ -2463,6 +2519,15 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     if not test_strategy or test_strategy == 'morning_star':
         strategies_to_run.append(("MorningStar", morning_star_per_symbol))
 
+    # ── Реестр standalone-стратегий (strategies/_registry.py) ──
+    try:
+        from strategies._registry import REGISTRY as _REG_SR
+        for _k, _e in ():  # ОТКАТ бэктест-слоя: список стратегий реестра НЕ подмешиваем
+            if not test_strategy or test_strategy == _k:
+                strategies_to_run.append((_e['label'], len(_e['grid']) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)))
+    except Exception as _reg_err:
+        print(f"  -> [WARN] реестр (список стратегий): {_reg_err}", flush=True)
+
     print("  Стратегии на 1 символ:")
     for name, count in sorted(strategies_to_run, key=lambda x: x[1], reverse=True):
         print(f"    {name}: {count} комб.")
@@ -2524,6 +2589,9 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 print(f"    {symbol_done} | {strat_name} ✓")
 
     # ── Сбор результатов ──
+    # ФАКТ посчитанных комбинаций (в отличие от total_combos — это ПЛАН задания)
+    combos_done_total = sum(int((it[2] if len(it) > 2 else 0) or 0) for it in results_list)
+
     all_results = list(cached_results)   # ← начинаем с кэша пропущенных
     new_by_symbol = {}
     for item in results_list:
@@ -2594,6 +2662,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         # ═══ Журнал прогонов (вкладка Backtest в дэшборде) ═══
         append_backtest_history(
             total_elapsed, total_symbols, total_combos, len(all_results),
+            combos_done=combos_done_total,
             kind=('full' if force_full_recalc
                   else ('partial' if partial_recalc else 'light')),
             skipped=len(skipped_symbols),

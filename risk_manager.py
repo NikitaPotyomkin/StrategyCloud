@@ -545,7 +545,7 @@ def check_position_limits(current_positions, max_total_positions, max_per_symbol
     return True, 'OK', {'total': total, 'max': max_total_positions, 'positions': dict(current_positions)}
 
 
-def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0):
+def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0, cashflow=0.0):
     """Проверить daily stop-loss по убытку.
 
     Returns:
@@ -564,7 +564,10 @@ def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0):
     if initial_balance <= 0:
         return True, 0.0, 'initial_balance invalid (<=0)'
 
-    daily_loss = ((initial_balance - equity) / initial_balance) * 100
+    # cashflow = внешний кэшфлоу (пополнения − выводы) с момента отсчёта.
+    # Убираем его из equity, чтобы депо/вывод не считались торговым PnL.
+    effective_equity = equity - cashflow
+    daily_loss = ((initial_balance - effective_equity) / initial_balance) * 100
 
     if daily_loss >= daily_loss_pct:
         return False, daily_loss, f'Daily loss {daily_loss:.2f}% >= {daily_loss_pct}%'
@@ -572,7 +575,7 @@ def check_daily_loss_limit(initial_balance, current_equity, daily_loss_pct=3.0):
     return True, daily_loss, f'OK: daily loss {daily_loss:.2f}% < {daily_loss_pct}%'
 
 
-def check_equity_stop(current_equity, initial_equity, equity_stop_pct=10.0):
+def check_equity_stop(current_equity, initial_equity, equity_stop_pct=10.0, cashflow=0.0):
     """Проверить equity stop — глобальный стоп при просадке.
 
     Returns:
@@ -581,7 +584,9 @@ def check_equity_stop(current_equity, initial_equity, equity_stop_pct=10.0):
     if initial_equity <= 0:
         return True, 0.0, 'initial_equity invalid'
 
-    drawdown = ((initial_equity - current_equity) / initial_equity) * 100
+    # Убираем внешний кэшфлоу (депо/вывод), иначе вывод выглядит как просадка.
+    effective_equity = current_equity - cashflow
+    drawdown = ((initial_equity - effective_equity) / initial_equity) * 100
 
     if drawdown >= equity_stop_pct:
         return False, drawdown, f'Equity drawdown {drawdown:.2f}% >= {equity_stop_pct}%'
