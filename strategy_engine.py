@@ -724,13 +724,26 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
             except Exception as reg_exc:
                 print(f"  -> [WARN] Реестр: ошибка записи: {reg_exc!r}", flush=True)
 
+    # ── Унификация источника лота: план диктует лот исполнению ──
+    # Раньше лот выставлялся только при ПЕРВОМ добавлении стратегии в топ, поэтому
+    # оставшаяся в топе стратегия торговала СТАРЫМ лотом, пока план/дэш показывают
+    # новый — «дэш ≠ бой». Теперь active_strategies всегда берёт лот из плана (active);
+    # штурвал затем переопределит лот для стратегий без позиции и вернёт итог в план.
+    for r in top_results:
+        key = strategy_key_fn(r['symbol'], r['param_key'], r.get('type', 'stoch'),
+                              r.get('parabolic_max'))
+        if key in active_strategies:
+            _plan_lot = r.get('lot')
+            if _plan_lot is not None:
+                active_strategies[key]['lot'] = _plan_lot
+
     # Проверяем реальные позиции (могли закрыться по SL/TP у брокера)
     # ── Реестр standalone-стратегий: доп. спеки для live-сигналов ──
     # calc/entry/exit резолвятся лениво из strategies/_registry.py, поэтому
     # сигнатура check_active_signals НЕ растёт позиционными параметрами.
     try:
         from strategies._registry import build_live_specs as _build_live_specs
-        specs.update(_build_live_specs(_spec))
+        pass  # спеки обновляются внутри check_active_signals (там, где определён specs)
     except Exception as _reg_err:
         print(f"  -> [WARN] реестр live-спеков: {_reg_err}", flush=True)
 
@@ -1463,6 +1476,13 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             lambda s: f"{s['symbol']}, MorningStar",
         ),
     }
+
+    # ── Реестр standalone-стратегий: доп. спеки для live-сигналов ──
+    try:
+        from strategies._registry import build_live_specs as _build_live_specs
+        specs.update(_build_live_specs(_spec))
+    except Exception as _reg_err:
+        print(f"  -> [WARN] реестр live-спеков: {_reg_err}", flush=True)
 
     for key, s in active_strategies.items():
         try:

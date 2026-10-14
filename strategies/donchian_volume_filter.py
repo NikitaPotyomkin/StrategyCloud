@@ -19,8 +19,8 @@ def calc_donchian_volume(df, period):
     lo = df['low'].rolling(period, min_periods=period).min().shift(1)
     vol_avg = df['volume'].rolling(VOL_PERIOD, min_periods=VOL_PERIOD).mean()
     vol_ok = df['volume'] > VOL_MULT * vol_avg
-    up = (df['close'] > hi) & vol_ok
-    dn = (df['close'] < lo) & vol_ok
+    up = (df['high'] > hi) & vol_ok
+    dn = (df['low'] < lo) & vol_ok
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

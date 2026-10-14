@@ -400,11 +400,12 @@ class SteeringParams:
     enabled: bool = True
     alpha = 1.0          # 1.0 = полная перекладка к цели (tree=wheel, зелёное получает объём сразу); <1.0 — EMA-сглаживание
     min_q = 0.005       # снижаем пол
-    max_q = 0.20        # потолок штурвала: ни одна категория не берёт больше 20% доли
+    max_q = 0.10        # потолок штурвала: ни одна категория не берёт больше 10% доли
     score_mode = 'pnl_per_lot'   # штурвал: 'pnl' — абсолютный PnL; 'pnl_per_lot' — удельный (₽ за лот); 'sharpe' — pnl/vol
     gamma = 1.5          # усиление лидеров; для 'pnl_per_lot' баллы в узком диапазоне — подбирать 2.0–3.0
     n_last_trades = 10
-    min_trades = 5      # фильтр шума: категория с <5 сделками за окно не скорится → min_q
+    score_volume_prior: float = 0.0   # shrinkage ₽/лот: score = PnL / (volume + V₀); 0.0 → авто-медиана объёма по оцениваемым категориям
+    min_trades = 10      # фильтр шума: категория с <10 сделками за окно не скорится → min_q
     max_dd: float = 0.15      # предел просадки (15%)
     score_mode: str = 'pnl_per_lot'   # 'pnl' — абсолютный PnL (как Strategy Tree); 'pnl_per_lot' — удельный ₽/лот; 'sharpe' — pnl/vol
     quotas_file: str = 'steering_quotas.json'

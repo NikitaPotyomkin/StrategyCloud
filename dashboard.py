@@ -444,7 +444,8 @@ with tab_daily:
                     list(_cat_by_id.values()), _cur_q,
                     {'alpha': _scfg.alpha, 'min_q': _scfg.min_q, 'max_q': _scfg.max_q,
                      'score_mode': _scfg.score_mode, 'min_trades': _scfg.min_trades,
-                     'gamma': getattr(_scfg, 'gamma', 1.5)})
+                     'gamma': getattr(_scfg, 'gamma', 1.5),
+                     'score_volume_prior': getattr(_scfg, 'score_volume_prior', 0.0)})
         except Exception as _e:
             st.caption(f"⚠ Wheel-квоты недоступны: {_e!r}")
 
@@ -538,7 +539,9 @@ with tab_daily:
                                     min_trades=_scfg.min_trades)
                     _newlot = pd.Series(df_plan.index.map(_lots_tw), index=df_plan.index)
                     _ok = _newlot.notna() & (_newlot > 0)
-                    df_plan.loc[_ok, 'lot'] = _newlot[_ok]
+                    # План из active_state.json — уже ИТОГОВЫЙ (пересчитан штурвалом в
+                    # main.py). Повторное tree-взвешивание искажало реальную картину
+                    # («дэш ≠ бой»), поэтому лот НЕ перезаписываем; красные ниже помечаются.
                     # риск ₽ под новый план-лот
                     df_plan['risk ₽'] = [
                         (l * m) if (m and l) else None
@@ -1504,6 +1507,7 @@ with tab_steering:
                     'score_mode': steering_cfg.score_mode,
                     'min_trades': steering_cfg.min_trades,
                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
+                    'score_volume_prior': getattr(steering_cfg, 'score_volume_prior', 0.0),
                 }
             )
 

@@ -15,8 +15,8 @@ THRESHOLD = 50.0
 def calc_cmo(df, period):
     """period — окно CMO. Колонка 'k' — состояние позиции."""
     delta = df['close'].diff()
-    gain = delta.clip(lower=0.0).rolling(period, min_periods=period).sum()
-    loss = (-delta.clip(upper=0.0)).rolling(period, min_periods=period).sum()
+    gain = delta.clip(lower=0.0).ewm(alpha=1.0 / period, adjust=False).mean()
+    loss = (-delta.clip(upper=0.0)).ewm(alpha=1.0 / period, adjust=False).mean()
     denom = (gain + loss).replace(0.0, np.nan)
     cmo = 100.0 * (gain - loss) / denom
     cmo = cmo.fillna(0.0)

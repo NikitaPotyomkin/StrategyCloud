@@ -769,6 +769,7 @@ if __name__ == '__main__':
                                     'score_mode': steering_cfg.score_mode,
                                     'min_trades': steering_cfg.min_trades,
                                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
+                                    'score_volume_prior': getattr(steering_cfg, 'score_volume_prior', 0.0),
                                     # если gamma ещё нет в cfg — подставим дефолт
                                 }
                             )
@@ -797,6 +798,7 @@ if __name__ == '__main__':
                             _slm = {}
                             _used_risk = 0.0
                             _free_keys = []
+                            _n_in_cat = {}
                             _sid_by_key = {}
                             for _k, _s in active_strategies.items():
                                 _info = symbol_data.get(_s['symbol'], {}).get('info')
@@ -807,7 +809,8 @@ if __name__ == '__main__':
                                     _used_risk += float(_s['lot']) * _m
                                 else:
                                     _free_keys.append(_k)
-                            _q_covered = sum(new_quotas.get(_sid_by_key[_k], 0.0) for _k in _free_keys)
+                                    _n_in_cat[_sid_by_key[_k]] = _n_in_cat.get(_sid_by_key[_k], 0) + 1
+                            _q_covered = sum(new_quotas.get(_sid, 0.0) for _sid in set(_sid_by_key[_k] for _k in _free_keys))
                             _budget = max(0.0, risk_quota - _used_risk)
                             changed = 0
                             for key, s in active_strategies.items():
@@ -820,7 +823,7 @@ if __name__ == '__main__':
                                 _m = _slm.get(key, 0.0)
                                 if _m <= 0 or _budget <= 0 or _q_covered <= 0:
                                     continue
-                                new_lot = _budget * (q_new / _q_covered) / _m
+                                new_lot = _budget * (q_new / _q_covered) / max(1, _n_in_cat.get(sid, 1)) / _m
                                 _info = symbol_data.get(s['symbol'], {}).get('info')
                                 _vol = _normalize_volume(new_lot, _info)
                                 new_lot = max(_vol if _vol is not None else risk_cfg.min_lot,
@@ -833,6 +836,23 @@ if __name__ == '__main__':
                                     changed += 1
                             print(f"  [STEERING] Квоты обновлены: {len(new_quotas)} стратегий, "
                                   f"лоты скорректированы: {changed}", flush=True)
+                            # ── Унификация источника лота ──
+                            # Штурвал правит active_strategies — это и есть бой. Чтобы
+                            # дэшборд/active_state.json показывали РЕАЛЬНУЮ перекладку (а не
+                            # дотюненный tree-weighting лот), переносим итог штурвала назад
+                            # в план (active). После этого active == active_strategies.
+                            _lot_by_key = {_k: _v.get('lot') for _k, _v in active_strategies.items()}
+                            _synced = 0
+                            for _r in active:
+                                _rk = strategy_key(_r['symbol'], _r['param_key'],
+                                                   _r.get('type', 'stoch'),
+                                                   _r.get('parabolic_max'))
+                                _nl = _lot_by_key.get(_rk)
+                                if _nl is not None and abs(float(_nl) - float(_r.get('lot') or 0)) > 1e-9:
+                                    _r['lot'] = _nl
+                                    _synced += 1
+                            if _synced:
+                                print(f"  [STEERING] Лоты синхронизированы в план (active): {_synced}", flush=True)
                     except Exception as se:
                         print(f"\n[WARN] Ошибка штурвала: {se!r} — квоты не изменены", flush=True)
                 write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)

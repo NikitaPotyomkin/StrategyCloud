@@ -126,6 +126,9 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
     alpha = steering_cfg.get('alpha', 0.3)
     score_mode = steering_cfg.get('score_mode', 'pnl')
     min_trades = int(steering_cfg.get('min_trades', 0) or 0)
+    # V0 = score_volume_prior (shrinkage знаменателя): score = PnL / (volume + V0);
+    # если 0 -> авто-медиана объёма по оцениваемым категориям окна.
+    v_prior = (float(steering_cfg.get('score_volume_prior', 0.0) or 0.0) or float(np.median([float(_s.get("volume", 0) or 0.0) for _s in strategies_data if isinstance(_s, dict) and _s.get("id") is not None and (not min_trades or int(_s.get("trades", 0) or 0) >= min_trades) and float(_s.get("volume", 0) or 0.0) > 0] or [0.0]))) if score_mode == 'pnl_per_lot' else 0.0
 
     # ── 1. Сырые баллы с усилением Power Law ──
     scores = []
@@ -148,7 +151,7 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
 
         if score_mode == 'pnl_per_lot':
             vol_lots = float(s.get("volume", 0) or 0.0)
-            score = (max(float(pnl_raw), 0.0) / vol_lots) if vol_lots > 0 else 0.0
+            score = (max(float(pnl_raw), 0.0) / (vol_lots + v_prior)) if vol_lots > 0 else 0.0
         elif score_mode == 'sharpe':
             vol = s.get("vol", 0) or 0.0
             if vol <= 0:
@@ -342,7 +345,7 @@ def _soft_weighted_lots(items, categories, quota, min_lot=0.01,
         elif v >= 0:
             m[sid] = 1.0 + (ceil_mult - 1.0) * (v / (v + scale))
         else:
-            m[sid] = floor_mult  # любой убыток в Tree -> плоский минимум (не 0)
+            m[sid] = 1.0 - (1.0 - floor_mult) * (abs(v) / (abs(v) + scale))
 
     # вес стратегии = BT score × множитель её категории
     W = {}
@@ -390,7 +393,7 @@ def _category_multipliers(categories, min_trades=5, floor_mult=0.25, ceil_mult=3
         elif v >= 0:
             m[sid] = 1.0 + (ceil_mult - 1.0) * (v / (v + scale))
         else:
-            m[sid] = floor_mult  # любой убыток в Tree -> плоский минимум (не 0)
+            m[sid] = 1.0 - (1.0 - floor_mult) * (abs(v) / (abs(v) + scale))
     return m
 
 
@@ -537,6 +540,12 @@ def apply_tree_weighting(active, symbol_data, balance, risk_pct,
             slm = None
         items.append({'key': i, 'sid': f"{r['symbol']}_{r.get('type', 'stoch')}",
                       'score': r.get('score'), 'sl_money': slm})
+
+    # Защита: если нет ни одного валидного sl_money (символы не в Market Watch /
+    # нет терминала), пересчёт даст знаменатель Σ(W·sl_money)=0 и все лоты схлопнутся
+    # в min_lot. В этом случае НЕ трогаем лоты (оставляем из distribute_lots) и выходим.
+    if not any(float(it.get('sl_money') or 0.0) > 0 for it in items):
+        return active
 
     lots = tree_weighted_lots(items, cats, balance * risk_pct,
                               min_lot=min_lot, gamma=gamma, min_trades=min_trades)
