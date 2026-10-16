@@ -40,17 +40,17 @@ def calc_cointegration(df, window, z_entry=2.0, z_exit=0.0):
 
 def check_entry(prev_z, curr_z, z_entry):
     """
-    Вход при отклонении спреда из нейтральной зоны.
+    Вход при уходе спреда ЗА пределы нейтральной зоны.
     
     Returns:
         'long', 'short' или None
     """
-    # Short: из нейтральной зоны (> -z_entry и < z_entry) вверх выше z_entry
-    if prev_z >= -z_entry and prev_z <= z_entry and curr_z > z_entry:
-        return 'short'
-    # Long: из нейтральной зоны вниз ниже -z_entry
-    if prev_z >= -z_entry and prev_z <= z_entry and curr_z < -z_entry:
+    # Long: был ниже -z_entry (перепроданность), теперь вернулся внутрь
+    if prev_z < -z_entry and curr_z >= -z_entry:
         return 'long'
+    # Short: был выше z_entry (перекупленность), теперь вернулся внутрь
+    if prev_z > z_entry and curr_z <= z_entry:
+        return 'short'
     return None
 
 

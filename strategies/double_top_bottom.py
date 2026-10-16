@@ -15,8 +15,8 @@ TOL_MULT = 0.25
 
 def calc_double_top_bottom(df, period):
     """period — окно поиска экстремумов. Колонка 'k' — состояние позиции."""
-    swing_hi = df['high'].rolling(period, min_periods=period).max()
-    swing_lo = df['low'].rolling(period, min_periods=period).min()
+    swing_hi = df['high'].rolling(period, min_periods=period).max().shift(1)
+    swing_lo = df['low'].rolling(period, min_periods=period).min().shift(1)
     atr_v = atr(df, 14)
     tol = TOL_MULT * atr_v
     near_hi = (swing_hi - df['high']).abs() <= tol

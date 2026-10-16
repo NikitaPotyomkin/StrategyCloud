@@ -84,11 +84,11 @@ def check_entry(prev_signal, curr_signal):
     Returns:
         'long', 'short' или None
     """
-    # Long: был нейтральный или short-сигнал, теперь цена выше Supertrend
-    if prev_signal != 1 and curr_signal == 1:
+    # Long: был neutral (0), теперь цена выше Supertrend
+    if prev_signal == 0 and curr_signal == 1:
         return 'long'
-    # Short: был нейтральный или long-сигнал, теперь цена ниже Supertrend
-    if prev_signal != -1 and curr_signal == -1:
+    # Short: был neutral (0), теперь цена ниже Supertrend
+    if prev_signal == 0 and curr_signal == -1:
         return 'short'
     return None
 

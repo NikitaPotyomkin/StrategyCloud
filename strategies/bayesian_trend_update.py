@@ -40,14 +40,20 @@ def calc_bayesian_trend(df, window, prior=0.5, p_entry=0.65, p_exit=0.5):
             # Вероятность роста в окне
             up_ratio = (window_returns > 0).sum() / len(window_returns)
             
-            # Байесовское обновление
-            # P(тренд|данные) = P(данные|тренд) * P(тренд) / P(данные)
-            likelihood_up = up_ratio
-            likelihood_down = 1 - up_ratio
+            # Байесовское обновление для вероятности тренда
+            # P(trend|up) = P(up|trend) * P(trend) / P(up)
+            # P(up|trend) ~ up_ratio (если тренд, чаще рост)
+            # P(up|no_trend) ~ 0.5 (случайный блуждание)
+            likelihood_up_given_trend = up_ratio
+            likelihood_up_given_no_trend = 0.5
             
-            # Новая вероятность
-            p_trend = (likelihood_up * p_trend) / \
-                      (likelihood_up * p_trend + likelihood_down * (1 - p_trend))
+            # P(up) = P(up|trend)*P(trend) + P(up|no_trend)*P(no_trend)
+            p_up = (likelihood_up_given_trend * p_trend + 
+                    likelihood_up_given_no_trend * (1 - p_trend))
+            
+            if p_up > 0:
+                # P(trend|up)
+                p_trend = (likelihood_up_given_trend * p_trend) / p_up
             
             # Ограничиваем диапазон
             p_trend = np.clip(p_trend, 0.01, 0.99)

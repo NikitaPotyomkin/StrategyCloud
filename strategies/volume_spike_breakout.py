@@ -16,10 +16,10 @@ def calc_volume_spike(df, period):
     """period — окно среднего объёма и канала пробоя. Колонка 'k' — состояние."""
     avg_vol = df['volume'].rolling(period, min_periods=period).mean()
     spike = df['volume'] > VOL_MULT * avg_vol
-    up = df['high'].rolling(period, min_periods=period).max().shift(1)
-    dn = df['low'].rolling(period, min_periods=period).min().shift(1)
-    state = np.where(spike & (df['close'] > up), 1,
-                     np.where(spike & (df['close'] < dn), -1, 0))
+    hi = df['high'].rolling(period, min_periods=period).max().shift(1)
+    lo = df['low'].rolling(period, min_periods=period).min().shift(1)
+    state = np.where(spike & (df['high'] > hi), 1,
+                     np.where(spike & (df['low'] < lo), -1, 0))
     df = df.copy()
     df['k'] = state
     return df

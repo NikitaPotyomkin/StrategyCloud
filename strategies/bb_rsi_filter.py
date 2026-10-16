@@ -30,8 +30,8 @@ def calc_bb_rsi(df, period):
     upper = ma + STD_MULT * sd
     lower = ma - STD_MULT * sd
     rsi = _rsi(df['close'], RSI_PERIOD)
-    up = (df['close'] > upper) & (rsi > 50.0)
-    dn = (df['close'] < lower) & (rsi < 50.0)
+    up = (df['high'] > upper) & (rsi > 50.0)
+    dn = (df['low'] < lower) & (rsi < 50.0)
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

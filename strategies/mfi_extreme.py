@@ -36,9 +36,11 @@ def check_entry(prev_k, curr_k):
 
 
 def check_exit(prev_k, curr_k, direction):
+    # Long exit: MFI вернулся в зону перепроданности (пересёк 20 вверх)
     if direction == 'long':
-        return prev_k >= OVERBOUGHT and curr_k < OVERBOUGHT
-    return prev_k <= OVERSOLD and curr_k > OVERSOLD
+        return prev_k <= OVERSOLD and curr_k > OVERSOLD
+    # Short exit: MFI вернулся в зону перекупленности (пересёк 80 вниз)
+    return prev_k <= OVERBOUGHT and curr_k > OVERBOUGHT
 
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,

@@ -21,8 +21,8 @@ def calc_inside_bar(df, period):
     mother_low_prev = df['low'].shift(2)
     inside_prev = ((df['high'].shift(1) < mother_high_prev) &
                    (df['low'].shift(1) > mother_low_prev))
-    state = np.where(inside_prev & (df['close'] > mother_high_prev), 1,
-                     np.where(inside_prev & (df['close'] < mother_low_prev), -1, 0))
+    state = np.where(inside_prev & (df['high'] > mother_high_prev), 1,
+                     np.where(inside_prev & (df['low'] < mother_low_prev), -1, 0))
     df = df.copy()
     df['k'] = state
     return df

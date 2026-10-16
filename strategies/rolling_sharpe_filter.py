@@ -40,16 +40,16 @@ def calc_rolling_sharpe(df, window, sharpe_entry=0.5, sharpe_exit=0.0):
 
 def check_entry(prev_sharpe, curr_sharpe, sharpe_entry):
     """
-    Вход при переходе Sharpe из нейтральной зоны.
+    Вход при появлении сильного Sharpe (тренд с доходностью).
     
     Returns:
-        'long', 'short' или None
+        'long' (Sharpe > 0.5 → восходящий), 'short' (Sharpe < -0.5 → нисходящий) или None
     """
-    # Long: из нейтральной зоны (> -sharpe_entry и < sharpe_entry) вверх выше sharpe_entry
-    if prev_sharpe >= -sharpe_entry and prev_sharpe <= sharpe_entry and curr_sharpe > sharpe_entry:
+    # Long: был в нейтральной зоне, теперь Sharpe > sharpe_entry
+    if prev_sharpe <= sharpe_entry and curr_sharpe > sharpe_entry:
         return 'long'
-    # Short: из нейтральной зоны вниз ниже -sharpe_entry
-    if prev_sharpe >= -sharpe_entry and prev_sharpe <= sharpe_entry and curr_sharpe < -sharpe_entry:
+    # Short: был в нейтральной зоне, теперь Sharpe < -sharpe_entry
+    if prev_sharpe >= -sharpe_entry and curr_sharpe < -sharpe_entry:
         return 'short'
     return None
 

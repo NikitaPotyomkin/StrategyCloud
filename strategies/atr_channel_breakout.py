@@ -20,8 +20,8 @@ def calc_atr_channel(df, period):
     atr_v = atr(df, ATR_PERIOD)
     upper = sma + K_MULT * atr_v
     lower = sma - K_MULT * atr_v
-    up = df['close'] > upper
-    dn = df['close'] < lower
+    up = df['high'] > upper
+    dn = df['low'] < lower
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

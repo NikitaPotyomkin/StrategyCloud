@@ -35,10 +35,12 @@ def calc_ichimoku(df, tenkan=9, kijun=26, senkou_b=52, displacement=26):
 
     # Сигнал: пробой облака
     df['signal'] = 0
-    long_cond = (df['close'] > df['cloud_top']) & \
-                (df['close'].shift(1) <= df['cloud_top'].shift(1))
-    short_cond = (df['close'] < df['cloud_bottom']) & \
-                 (df['close'].shift(1) >= df['cloud_bottom'].shift(1))
+    # Long: цена пробивает облако вверх (high > cloud_top)
+    long_cond = (df['high'] > df['cloud_top']) & \
+                (df['low'].shift(1) <= df['cloud_top'].shift(1))
+    # Short: цена пробивает облако вниз (low < cloud_bottom)
+    short_cond = (df['low'] < df['cloud_bottom']) & \
+                 (df['high'].shift(1) >= df['cloud_bottom'].shift(1))
     df.loc[long_cond, 'signal'] = 1
     df.loc[short_cond, 'signal'] = -1
 

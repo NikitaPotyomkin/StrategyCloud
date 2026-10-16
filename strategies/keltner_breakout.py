@@ -21,7 +21,7 @@ def calc_keltner(df, period):
     atr_v = atr(df, ATR_PERIOD)
     upper = ema + K_MULT * atr_v
     lower = ema - K_MULT * atr_v
-    state = np.where(df['close'] > upper, 1, np.where(df['close'] < lower, -1, 0))
+    state = np.where(df['high'] > upper, 1, np.where(df['low'] < lower, -1, 0))
     df = df.copy()
     df['k'] = state
     return df

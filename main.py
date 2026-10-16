@@ -10,6 +10,14 @@ from collections import defaultdict
 
 warnings.filterwarnings('ignore')
 
+# Логирование прогона в journals/run.log (stdout+stderr с ротацией).
+# Fail-safe: любая проблема с логом не должна ронять пайплайн.
+try:
+    import run_log
+    run_log.setup()
+except Exception:
+    pass
+
 from functions import terminal_on, run_full_backtest, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
@@ -636,6 +644,8 @@ if __name__ == '__main__':
     last_conn_warn_time = datetime.min
     last_balance_refresh = datetime.now()
     last_quota_recalc = datetime.now()
+    last_equity_sample = datetime.min          # сэмплер floating → trades_db (daily_peak/equity_samples)
+    EQUITY_SAMPLE_INTERVAL_SEC = 300           # свой интервал сэмплинга, независим от poll_interval
     def _net_cashflow(since_dt):
         """Чистый внешний кэшфлоу (пополнения − выводы) в рублях с момента since_dt.
         Нужен, чтобы гварды риска не принимали депо/вывод за торговый убыток."""
@@ -659,6 +669,17 @@ if __name__ == '__main__':
     try:
         while True:
             now = datetime.now()
+
+            # ── Сэмплер нереализованной прибыли (trades_db): свой интервал ~300 с ──
+            # Торговую логику не трогаем: только пишем floating по категориям в daily_peak
+            # и снимок счёта в equity_samples. Fail-safe — ошибка БД не роняет пайплайн.
+            if (now - last_equity_sample).total_seconds() >= EQUITY_SAMPLE_INTERVAL_SEC:
+                last_equity_sample = now
+                try:
+                    import trades_db
+                    trades_db.sample_positions(interval=EQUITY_SAMPLE_INTERVAL_SEC)
+                except Exception as _smp_err:
+                    print(f"  [WARN] trades_db.sample: {_smp_err!r}", flush=True)
 
             # Смена дня
             if now.date() != last_mode_check:
@@ -866,6 +887,14 @@ if __name__ == '__main__':
                 report = generate_daily_report(yesterday)
 
                 print(f"  Готово: {len(all_results)} комбинаций, {len(active)} активных")
+
+                # ── История сделок в SQLite (trades_db): шаг 1 — локальная запись ──
+                # Fail-safe: любая ошибка БД не должна ронять пайплайн.
+                try:
+                    import trades_db
+                    trades_db.ingest(days=3)
+                except Exception as _tdb_err:
+                    print(f"  [WARN] trades_db: {_tdb_err!r}", flush=True)
 
             # Периодическое обновление баланса (раз в минуту)
             if (now - last_balance_refresh).total_seconds() >= 60:

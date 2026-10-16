@@ -21,10 +21,11 @@ def calc_three_crows(df, period):
     min_body = MIN_BODY_MULT * atr_v
     bull = body > min_body
     bear = body < -min_body
+    # Проверка что ПОСЛЕДНИЕ period баров подряд удовлетворяют условию
     bull_run = bull.rolling(period, min_periods=period).sum()
     bear_run = bear.rolling(period, min_periods=period).sum()
-    up = bull_run >= period
-    dn = bear_run >= period
+    up = bull_run == period
+    dn = bear_run == period
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

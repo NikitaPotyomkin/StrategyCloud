@@ -41,8 +41,8 @@ def calc_adx_bb_squeeze(df, period):
     bandwidth = (upper - lower) / ma.replace(0.0, np.nan)
     expanding = bandwidth > bandwidth.rolling(period, min_periods=period).mean()
     strong = _adx(df, ADX_PERIOD) > ADX_MIN
-    up = (df['close'] > upper) & expanding & strong
-    dn = (df['close'] < lower) & expanding & strong
+    up = (df['high'] > upper) & expanding & strong
+    dn = (df['low'] < lower) & expanding & strong
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

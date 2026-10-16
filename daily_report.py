@@ -479,6 +479,14 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             trades_df = trades_df[trades_df['symbol'].str.endswith(OUR_SYMBOLS_SUFFIX, na=False)]
             n_deals_ours = len(trades_df)
 
+            # Счётчик непривязанных сделок (magic вне реестра) — значения по умолчанию,
+            # чтобы ключи были заполнены и при пустом окне сделок.
+            n_deals_unlinked = 0
+            unlinked_positions = 0
+            unlinked_magics = []
+            unlinked_volume = 0.0
+            unlinked_profit = 0.0
+
             # 🔑 Привязка сделок к стратегиям: magic → (strategy_type, param_key)
             # ПРИМЕЧАНИЕ: фильтр по comment намеренно удалён (полная выдача).
             registry = _load_registry()
@@ -497,8 +505,27 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             
             
             # Исключаем сделки без атрибуции к стратегии (открыты до имёнования) — шли как '?'
+            # Непривязанные сделки: magic в нашем диапазоне, но записи в journals/strategy_registry.csv нет.
+            # Считаем ДО отсева, иначе не видно, сколько сделок выпало из Strategy Tree (категория → '—').
+            unlinked_df = trades_df[trades_df['strategy_type'] == '?'].copy()
+            n_deals_unlinked = len(unlinked_df)
             trades_df = trades_df[trades_df['strategy_type'] != '?'].copy()
             print(f"  [DASHBOARD] Deals: {len(trades_df)} (magic [770000, 869999] + rfd)")
+            if n_deals_unlinked:
+                unlinked_magics = sorted(int(m) for m in unlinked_df['magic'].dropna().unique())
+                unlinked_positions = int(unlinked_df['position_id'].nunique())
+                unlinked_volume = float(
+                    unlinked_df.loc[unlinked_df['entry'] == mt5.DEAL_ENTRY_IN, 'volume'].sum()
+                )
+                unlinked_profit = float(
+                    (unlinked_df['profit'] + unlinked_df['commission'] + unlinked_df['swap']).sum()
+                )
+                _unl_head = ', '.join(str(m) for m in unlinked_magics[:8])
+                _unl_tail = f", ...(+{len(unlinked_magics) - 8})" if len(unlinked_magics) > 8 else ""
+                print(f"  [DASHBOARD] Непривязанных сделок: {n_deals_unlinked} из {n_deals_ours} "
+                      f"(объём {unlinked_volume:.2f} лот, PnL {unlinked_profit:+,.0f} руб.) — "
+                      f"{len(unlinked_magics)} magic нет в strategy_registry.csv: {_unl_head}{_unl_tail}",
+                      flush=True)
 
             # PnL нетто
             trades_df['profit_net'] = trades_df['profit'] + trades_df['commission'] + trades_df['swap']
@@ -601,6 +628,11 @@ def get_dashboard_data(days_back=30, manage_connection=True):
                 'days_back': days_back,
                 'n_deals_raw': n_deals_raw,
                 'n_deals_ours': n_deals_ours,
+                'n_deals_unlinked': n_deals_unlinked,
+                'unlinked_positions': unlinked_positions,
+                'unlinked_magics': unlinked_magics,
+                'unlinked_volume': unlinked_volume,
+                'unlinked_profit': unlinked_profit,
                 'n_closed_positions': len(trades_df),
                 'n_open_positions': len(positions) if positions else 0,
                 'net_deposits': net_deposits,

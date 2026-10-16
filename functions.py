@@ -1825,13 +1825,18 @@ def _backtest_symbol(args):
     # дублирования блоками по 28 строк. Ярлык/сетка берутся из реестра.
     try:
         from strategies._registry import REGISTRY as _REG, registry_backtest as _reg_bt
-        _reg_entries = []  # ОТКАТ бэктест-слоя: реестр в расчёты НЕ подключаем
+        from strategies._registry import enabled_entries as _enabled_entries
+        # БАТЧ-1 (15.10): 20 включённых стратегий из ENABLED_BATCH (strategies/_registry.py).
+        # Включение порциями — чтобы не раздувать ночной пересчёт (540 комб. на символ).
+        _reg_entries = _enabled_entries()
     except Exception as _reg_err:
         _reg_entries = []
         print(f"  [WARN] реестр стратегий недоступен: {_reg_err}", flush=True)
 
     for _key, _e in _reg_entries:
-        if test_strategy and test_strategy != _key:
+        # Семейства реестра лежат в family_fp и под label, и под ключом —
+        # фильтр инкрементального пересчёта должен принимать оба имени.
+        if test_strategy and test_strategy != _key and test_strategy != _e['label']:
             continue
         for _pk, _sl, _tp in product(_e['grid'], SL_POINTS_LIST, TP_POINTS_LIST):
             profit, n_trades, trade_profits = _safe_backtest(
@@ -2118,7 +2123,9 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # ── Реестр standalone-стратегий: комбинации для итогов и прогресса ──
     try:
         from strategies._registry import registry_combos as _reg_combos
-        pass  # ОТКАТ бэктест-слоя: комбинации реестра НЕ подмешиваем
+        from strategies._registry import enabled_combos as _enabled_combos
+        # БАТЧ-1: комбинации включённых стратегий учитываем в прогресс-баре и оценке времени
+        strat_combo_map.update(_enabled_combos(SL_POINTS_LIST, TP_POINTS_LIST))
     except Exception as _reg_err:
         print(f"  -> [WARN] реестр комбинаций: {_reg_err}", flush=True)
 
@@ -2177,7 +2184,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # ── Реестр standalone-стратегий: отпечатки семейств для чекпойнтов ──
     try:
         from strategies._registry import registry_families as _reg_families
-        for _lab, _grids in ():  # ОТКАТ бэктест-слоя: семейства реестра НЕ подмешиваем
+        from strategies._registry import enabled_family_fp_items as _enabled_fp_items
+        for _lab, _grids in _enabled_fp_items(SL_POINTS_LIST, TP_POINTS_LIST):  # БАТЧ-1: отпечатки включённых семейств (label + ключ)
             family_fp[_lab] = _fp(*_grids)
     except Exception as _reg_err:
         print(f"  -> [WARN] реестр семейств: {_reg_err}", flush=True)
@@ -2522,8 +2530,10 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # ── Реестр standalone-стратегий (strategies/_registry.py) ──
     try:
         from strategies._registry import REGISTRY as _REG_SR
-        for _k, _e in ():  # ОТКАТ бэктест-слоя: список стратегий реестра НЕ подмешиваем
-            if not test_strategy or test_strategy == _k:
+        from strategies._registry import enabled_entries as _enabled_entries_sr
+        for _k, _e in _enabled_entries_sr():  # БАТЧ-1: включённые стратегии реестра
+            # При инкрементальном пересчёте фильтр сравнивает по label — принимаем оба имени
+            if not test_strategy or test_strategy == _k or test_strategy == _e['label']:
                 strategies_to_run.append((_e['label'], len(_e['grid']) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)))
     except Exception as _reg_err:
         print(f"  -> [WARN] реестр (список стратегий): {_reg_err}", flush=True)

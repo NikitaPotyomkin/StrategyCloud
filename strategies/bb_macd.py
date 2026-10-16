@@ -23,8 +23,8 @@ def calc_bb_macd(df, period):
     slow = df['close'].ewm(span=26, adjust=False).mean()
     macd = fast - slow
     signal = macd.ewm(span=SIGNAL_PERIOD, adjust=False).mean()
-    up = (df['close'] > upper) & (macd > signal)
-    dn = (df['close'] < lower) & (macd < signal)
+    up = (df['high'] > upper) & (macd > signal)
+    dn = (df['low'] < lower) & (macd < signal)
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

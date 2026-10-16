@@ -21,7 +21,9 @@ def calc_stoch_ma(df, period):
     rng = (high_max - low_min).replace(0.0, np.nan)
     k = (100.0 * (df['close'] - low_min) / rng).fillna(50.0)
     sma = df['close'].rolling(SMA_PERIOD, min_periods=SMA_PERIOD).mean()
+    # Long: цена выше тренда + Stochastic перепродан → вход в рост
     up = (k < STOCH_OS) & (df['close'] > sma)
+    # Short: цена ниже тренда + Stochastic перекуплен → вход в падение
     dn = (k > STOCH_OB) & (df['close'] < sma)
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))

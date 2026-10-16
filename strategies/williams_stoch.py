@@ -19,8 +19,8 @@ STOCH_OB = 80.0
 
 def calc_williams_stoch(df, period):
     """period — окно обоих осцилляторов. Колонка 'k' — состояние позиции."""
-    high_max = df['high'].rolling(period, min_periods=period).max()
-    low_min = df['low'].rolling(period, min_periods=period).min()
+    high_max = df['high'].rolling(period, min_periods=period).max().shift(1)
+    low_min = df['low'].rolling(period, min_periods=period).min().shift(1)
     rng = (high_max - low_min).replace(0.0, np.nan)
     wr = (-100.0 * (high_max - df['close']) / rng).fillna(-50.0)
     stoch = (100.0 * (df['close'] - low_min) / rng).fillna(50.0)

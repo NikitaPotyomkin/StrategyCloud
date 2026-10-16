@@ -46,15 +46,17 @@ def calc_percentile(df, lookback, low_pct=5, high_pct=95, mid_pct=50):
 
 def check_entry(prev_pct, curr_pct, low_pct, high_pct):
     """
-    Вход при экстремальном перцентиле (mean-reversion).
+    Вход при возврате перцентила ИЗ экстремума к середине (mean-reversion).
     
     Returns:
-        'long' (цена была внизу, теперь растёт), 'short' (цена была вверху, теперь падает) или None
+        'long' (цена была в перепроданности, теперь растёт), 'short' (цена была в перекупленности, теперь падает) или None
     """
-    if prev_pct >= high_pct and curr_pct < high_pct:
-        return 'short'  # Цена была > 95-го перцентиля (очень высокая), теперь падает
-    if prev_pct <= low_pct and curr_pct > low_pct:
-        return 'long'  # Цена была < 5-го перцентиля (очень низкая), теперь растёт
+    # Short: был в перекупленности (> high_pct), теперь падает (< high_pct)
+    if prev_pct > high_pct and curr_pct <= high_pct:
+        return 'short'
+    # Long: был в перепроданности (< low_pct), теперь растёт (> low_pct)
+    if prev_pct < low_pct and curr_pct >= low_pct:
+        return 'long'
     return None
 
 

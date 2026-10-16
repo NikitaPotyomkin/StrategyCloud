@@ -40,18 +40,18 @@ def calc_skewness(df, window, skew_entry=1.0, skew_exit=0.3):
     return df
 
 
-def check_entry(prev_skew, curr_skew, skew_entry, skew_exit):
+def check_entry(prev_skew, curr_skew, skew_entry):
     """
-    Вход при экстремальной асимметии из нейтральной зоны.
+    Вход при экстремальной асимметии.
     
     Returns:
-        'long' (отрицательная skewness), 'short' (положительная) или None
+        'long' (отрицательная skewness → хвост влево → разворот вверх), 'short' (положительная) или None
     """
-    # Long: из нейтральной зоны (> -skew_entry и < skew_entry) вниз ниже -skew_entry
-    if prev_skew >= -skew_entry and prev_skew <= skew_entry and curr_skew < -skew_entry:
+    # Long: был в нейтральной зоне, теперь skew < -skew_entry
+    if prev_skew >= -skew_entry and curr_skew < -skew_entry:
         return 'long'
-    # Short: из нейтральной зоны вверх выше skew_entry
-    if prev_skew >= -skew_entry and prev_skew <= skew_entry and curr_skew > skew_entry:
+    # Short: был в нейтральной зоне, теперь skew > skew_entry
+    if prev_skew <= skew_entry and curr_skew > skew_entry:
         return 'short'
     return None
 

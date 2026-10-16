@@ -15,8 +15,8 @@ FIB_HIGH = 0.618
 
 def calc_fibonacci(df, period):
     """period — окно свинга. Колонка 'k' — состояние позиции."""
-    swing_hi = df['high'].rolling(period, min_periods=period).max()
-    swing_lo = df['low'].rolling(period, min_periods=period).min()
+    swing_hi = df['high'].rolling(period, min_periods=period).max().shift(1)
+    swing_lo = df['low'].rolling(period, min_periods=period).min().shift(1)
     rng = (swing_hi - swing_lo).replace(0.0, np.nan)
     retr = (swing_hi - df['close']) / rng
     trend = df['close'].ewm(span=2 * period, adjust=False).mean()

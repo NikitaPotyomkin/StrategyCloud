@@ -34,8 +34,8 @@ def calc_donchian_adx(df, period):
     dn = df['low'].rolling(period, min_periods=period).min().shift(1)
     adx = _adx(df, ADX_PERIOD)
     valid = adx > ADX_THRESHOLD
-    state = np.where(valid & (df['close'] > up), 1,
-                     np.where(valid & (df['close'] < dn), -1, 0))
+    state = np.where(valid & (df['high'] > up), 1,
+                     np.where(valid & (df['low'] < dn), -1, 0))
     df = df.copy()
     df['k'] = state
     return df

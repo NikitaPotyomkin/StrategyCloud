@@ -80,7 +80,7 @@ def assign_magic(symbol, stype, param_key, parabolic_max=None):
     fmt_max = f"{parabolic_max:.2f}" if parabolic_max is not None else ""
     for magic, row in live:
         if (row['symbol'] == symbol and row['type'] == stype and
-                row['param_key'] == param_key and
+                str(row['param_key']) == str(param_key) and
                 str(row.get('parabolic_max') or '') == fmt_max):
             # Если в старом реестре осталась коллизия (magic живёт ещё у
             # другой живой стратегии) — не переиспользуем, берём свободный.
@@ -328,7 +328,7 @@ def _register_strategy(magic, symbol, stype, param_key, parabolic_max, activated
             if int(row['magic']) == magic and row['symbol'] == symbol:
                 found = True
                 if (str(row.get('parabolic_max') or '') == fmt_max and
-                        row['type'] == stype and row['param_key'] == param_key):
+                        row['type'] == stype and str(row['param_key']) == str(param_key)):
                     continue
                 # Параметры изменились — обновляем
                 row['type'] = stype

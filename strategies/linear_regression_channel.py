@@ -73,11 +73,11 @@ def check_entry(prev_signal, curr_signal):
     Returns:
         'long', 'short' или None
     """
-    # Long: был нейтральный или short-сигнал, теперь цена ниже нижней границы
-    if prev_signal != 1 and curr_signal == 1:
+    # Long: был нейтральный сигнал (0), теперь цена ниже нижней границы
+    if prev_signal == 0 and curr_signal == 1:
         return 'long'
-    # Short: был нейтральный или long-сигнал, теперь цена выше верхней границы
-    if prev_signal != -1 and curr_signal == -1:
+    # Short: был нейтральный сигнал (0), теперь цена выше верхней границы
+    if prev_signal == 0 and curr_signal == -1:
         return 'short'
     return None
 

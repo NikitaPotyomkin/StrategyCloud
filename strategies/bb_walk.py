@@ -21,6 +21,8 @@ def calc_bb_walk(df, period):
     close = df['close']
     up = (close > upper) & (close.shift(1) > upper.shift(1))
     dn = (close < lower) & (close.shift(1) < lower.shift(1))
+    # NOTE: BB Walk — корректно входить по close, т.к. стратегия требует 2
+    # подряд закрытия за полосой (подтверждение, а не пробой).
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

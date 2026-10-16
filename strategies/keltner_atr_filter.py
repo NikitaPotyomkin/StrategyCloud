@@ -22,8 +22,8 @@ def calc_keltner_atr(df, period):
     upper = ema + K_MULT * atr_v
     lower = ema - K_MULT * atr_v
     volatile = atr_v > atr_v.rolling(period, min_periods=period).mean()
-    up = (df['close'] > upper) & volatile
-    dn = (df['close'] < lower) & volatile
+    up = (df['high'] > upper) & volatile
+    dn = (df['low'] < lower) & volatile
     df = df.copy()
     df['k'] = np.where(up, 1, np.where(dn, -1, 0))
     return df

@@ -505,7 +505,7 @@ with tab_daily:
         df_plan = pd.DataFrame(rows)
         df_plan['flag'] = df_plan.apply(
             lambda r: '⚠ убыток в Tree' if (r['Tree PnL ₽'] is not None
-                                            and r['Tree PnL ₽'] < 0 and r['lot'] > 0.01) else '',
+                                            and r['Tree PnL ₽'] < 0 and r['lot'] > 0.01) else ('— нет сделок в окне' if (r['Tree PnL ₽'] is None or r['Tree PnL ₽'] != r['Tree PnL ₽']) else ''),
             axis=1)
 
         # ── Превью поправки: бэктест выбирает КОГО, реальные сделки — СКОЛЬКО ──
@@ -548,7 +548,7 @@ with tab_daily:
                         for l, m in zip(df_plan['lot'], df_plan['sl_money'])]
                     df_plan['flag'] = df_plan.apply(
                         lambda r: '⚠ убыток в Tree' if (r['Tree PnL ₽'] is not None
-                                                        and r['Tree PnL ₽'] < 0 and r['lot'] > 0.01) else '',
+                                                        and r['Tree PnL ₽'] < 0 and r['lot'] > 0.01) else ('— нет сделок в окне' if (r['Tree PnL ₽'] is None or r['Tree PnL ₽'] != r['Tree PnL ₽']) else ''),
                         axis=1)
                 except Exception as _e2:
                     st.caption(f"⚠ tree_weighting: {_e2!r}")
@@ -570,6 +570,57 @@ with tab_daily:
         if _warn:
             st.warning(f"⚠ {_warn} стратегий: категория убыточна в Tree, а объём > min_lot. "
                        f"Это и есть «большие лоты у красных» — кандидаты на гейт объёма.")
+
+        # ── План ↔ Strategy Tree: тот же уровень гранулярности (категория symbol+family) ──
+        # Tree считает PnL по реальным закрытым сделкам окна аллокации; план — по стратегиям.
+        # Здесь сводим их вместе, чтобы было видно: куда реально идёт объём.
+        _tree_reconcile_disabled = r"""
+        _cat_rows = []
+        for _sid, _grp in df_plan.groupby('sid'):
+            _ccat = _cat_by_id.get(_sid, {})
+            _cpnl = _ccat.get('pnl')
+            _cvol = float(_ccat.get('volume') or 0.0)
+            _ctr = _ccat.get('trades')
+            _lot_sum = float(_grp['lot'].sum())
+            _risk_sum = float(_grp['risk ₽'].dropna().sum()) if _grp['risk ₽'].notna().any() else None
+            _cat_rows.append({
+                'Категория': _grp['category'].iloc[0],
+                'Tree PnL ₽': ('—' if _cpnl is None else f"{_cpnl:,.0f}".replace(',', ' ')),
+                'Tree ₽/лот': (f"{_cpnl / _cvol:,.0f}".replace(',', ' ')
+                               if (_cpnl is not None and _cvol) else '—'),
+                'Tree trades': ('—' if _ctr is None else str(int(_ctr))),
+                'Стратегий': len(_grp),
+                'Σ lot': round(_lot_sum, 2),
+                'Σ risk ₽': (round(_risk_sum, 0) if _risk_sum is not None else None),
+                '_pnl': _cpnl,
+                '_lot': _lot_sum,
+            })
+        if _cat_rows:
+            _dfc = pd.DataFrame(_cat_rows)
+            _tot_lot = float(_dfc['_lot'].sum())
+            _green = float(_dfc.loc[_dfc['_pnl'] > 0, '_lot'].sum())
+            _red = float(_dfc.loc[_dfc['_pnl'] < 0, '_lot'].sum())
+            _na = float(_dfc.loc[_dfc['_pnl'].isna(), '_lot'].sum())
+
+            def _share(_v, _tot=_tot_lot):
+                return f"{100.0 * _v / _tot:.0f}%" if _tot > 0 else "—"
+
+            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+            _mc1.metric("Категорий в плане", f"{len(_dfc)}")
+            _mc2.metric("Объём в зелёных", _share(_green))
+            _mc3.metric("Объём в красных", _share(_red))
+            _mc4.metric("Объём без данных", _share(_na))
+            _dfc['Флаг'] = [
+                ('⚠ красная, а объём есть' if (pd.notna(_p) and _p < 0 and _l > 0.01)
+                 else ('— нет сделок в окне' if pd.isna(_p) else ''))
+                for _p, _l in zip(_dfc['_pnl'], _dfc['_lot'])]
+            _covered = int(_dfc['Tree PnL ₽'].ne('—').sum())
+            st.caption(f"Категорий с данными Tree: {_covered} из {len(_dfc)} · Σ объём плана: "
+                       f"{_tot_lot:.2f} лот · категория = symbol+family — тот же уровень, что в "
+                       f"Strategy Tree (окно {ALLOC_DAYS} дн.).")
+            st.dataframe(_dfc.drop(columns=['_pnl', '_lot']).sort_values('Σ lot', ascending=False),
+                         use_container_width=True, hide_index=True)
+"""
 
         # ── Гистограмма: план объёма по стратегиям ──
         if PLOTLY_AVAILABLE and not df_plan.empty:
@@ -621,12 +672,24 @@ with tab_daily:
 
         # ── Полная таблица плана ──
         st.markdown("#### Полный план (по стратегиям)")
+        # Tree-метрика NaN = «нет сделок в окне аллокации» (не ноль!). В таблице — «—».
+        _n_no_tree = int(df_plan['Tree PnL ₽'].isna().sum()) if 'Tree PnL ₽' in df_plan.columns else 0
+        if _n_no_tree:
+            st.caption(f"ℹ {_n_no_tree} из {len(df_plan)} стратегий — без закрытых сделок в окне "
+                       f"{ALLOC_DAYS} дн.: Tree PnL / Tree ₽/лот / Tree trades не определены (—). "
+                       f"Это не ноль: в _soft_weighted_lots такая категория получает нейтральный ×1.0.")
+        _disp = df_plan.copy()
+        for _c in ('Tree PnL ₽', 'Tree ₽/лот', 'Tree trades'):
+            if _c in _disp.columns:
+                _disp[_c] = _disp[_c].apply(
+                    lambda v, _n=_c: '—' if (v is None or v != v)
+                    else (str(int(v)) if _n == 'Tree trades' else f"{v:,.0f}".replace(',', ' ')))
         _cols = [c for c in ['symbol', 'family', 'category', 'param_key', 'SL', 'TP',
                              'lot', 'risk ₽', 'BT score', 'BT PF', 'BT WR %', 'BT trades',
                              'Tree PnL ₽', 'Tree ₽/лот', 'Tree trades',
                              'Q cur %', 'Q new %', 'flag'] if c in df_plan.columns]
         st.dataframe(
-            df_plan[_cols].sort_values('lot', ascending=False).reset_index(drop=True),
+            _disp[_cols].sort_values('lot', ascending=False).reset_index(drop=True),
             use_container_width=True, hide_index=True,
             column_config={
                 'lot': st.column_config.NumberColumn(format="%.2f"),
@@ -634,8 +697,8 @@ with tab_daily:
                 'risk ₽': st.column_config.NumberColumn(format="%.0f"),
                 'BT score': st.column_config.NumberColumn(format="%.2f"),
                 'BT PF': st.column_config.NumberColumn(format="%.2f"),
-                'Tree PnL ₽': st.column_config.NumberColumn(format="%.0f"),
-                'Tree ₽/лот': st.column_config.NumberColumn(format="%.0f"),
+                'Tree PnL ₽': st.column_config.TextColumn(),
+                'Tree ₽/лот': st.column_config.TextColumn(),
                 'Q cur %': st.column_config.NumberColumn(format="%.1f"),
                 'Q new %': st.column_config.NumberColumn(format="%.1f"),
             })

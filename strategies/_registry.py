@@ -452,11 +452,94 @@ REGISTRY = {
 
 _MODULE_CACHE = {}
 
+# ═══════════ ПОЭТАПНОЕ ВКЛЮЧЕНИЕ РЕЕСТРА В НОЧНОЙ ПЕРЕСЧЁТ ═══════════
+# Включаем порциями, чтобы не получить «цунами» комбинаций разом.
+# Батч 1 (15.10): 20 стратегий = 60 параметризаций на символ
+#   → 60 × 3 SL × 3 TP = 540 бэктестов на символ, × 7 символов = 3780 за ночь.
+# Весь реестр дал бы 240 параметризаций → 2160 на символ → 15120 за ночь.
+# Добавить стратегию = дописать ключ сюда; отключить всё = оставить кортеж пустым.
+ENABLED_BATCH = (
+    'triple_ema', 'adx_di', 'ultimate', 'cmo', 'donchian_vol',
+    'hull', 'dualema', 'macdline', 'vwmacd', 'wmaema', 'hhll', 'momthr',
+    'dpo', 'ppo', 'vortex', 'elder', 'cmf', 'adline', 'heikin', 'tsi',
+)
+
+
+def _as_param(value):
+    """Период из плана/JSON может прийти строкой ('14') — модули ждут число."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+
+def enabled_keys():
+    """Ключи реестра, включённые в текущий батч (только реально существующие)."""
+    return tuple(k for k in ENABLED_BATCH if k in REGISTRY)
+
+
+def enabled_entries():
+    """[(key, entry)] включённого батча — вход generic-цикла бэктеста."""
+    return [(k, REGISTRY[k]) for k in enabled_keys()]
+
+
+def enabled_combos(sl_list, tp_list):
+    """{type: комбинаций на символ} включённого батча — для strat_combo_map."""
+    return {k: len(REGISTRY[k]['grid']) * len(sl_list) * len(tp_list) for k in enabled_keys()}
+
+
+def enabled_families(sl_list, tp_list):
+    """{label: (grid, sl_list, tp_list)} включённого батча — для family_fp."""
+    return {REGISTRY[k]['label']: (list(REGISTRY[k]['grid']), list(sl_list), list(tp_list))
+            for k in enabled_keys()}
+
+
+def enabled_family_fp_items(sl_list, tp_list):
+    """[(имя, (grid, sl_list, tp_list))] для family_fp — и label, и ключ.
+
+    Два имени нужны потому, что фильтр инкрементального пересчёта (_FamilyFilter
+    в functions.py) сравнивает семейства по label, а строки результатов в
+    чекпойнте помечены ключом (r['type'] = ключ реестра). Если положить только
+    label, кэш реестровых строк не проходит проверку 'r.type in family_fp'
+    и теряется при частичном пересчёте.
+    """
+    items = []
+    for k in enabled_keys():
+        e = REGISTRY[k]
+        _grids = (list(e['grid']), list(sl_list), list(tp_list))
+        items.append((e['label'], _grids))
+        items.append((k, _grids))
+    return items
+
+
+class _MissingModule:
+    """Заглушка для модуля, который не импортировался.
+
+    Любой атрибут — no-op callable, возвращающий None. Нужна, чтобы один
+    битый модуль реестра не отключал live-спеки ВСЕГО реестра: calc(...)
+    вернёт None, и check_active_signals корректно пропускает стратегию.
+    """
+    def __getattr__(self, name):
+        if name == 'backtest':
+            # Бэктест-слой: пусть падает исключение — его ловит _safe_backtest
+            # в functions.py и отдаёт (0, 0, []), не роняя весь символ.
+            raise RuntimeError(f"модуль стратегии не импортирован (нет {name})")
+        return lambda *a, **k: None
+
 
 def _module(name):
     """Ленивый импорт модуля стратегии с кэшем."""
     if name not in _MODULE_CACHE:
-        _MODULE_CACHE[name] = importlib.import_module(f"strategies.{name}")
+        try:
+            _MODULE_CACHE[name] = importlib.import_module(f"strategies.{name}")
+        except Exception as exc:
+            print(f"  [WARN] стратегия '{name}' не импортируется: {exc!r} — заглушка", flush=True)
+            _MODULE_CACHE[name] = _MissingModule()
     return _MODULE_CACHE[name]
 
 
@@ -470,7 +553,7 @@ def registry_backtest(key, df, param_key, sl_points, tp_points,
     """
     entry = REGISTRY[key]
     mod = _module(entry['module'])
-    return mod.backtest(df, param_key, sl_points, tp_points, point,
+    return mod.backtest(df, _as_param(param_key), sl_points, tp_points, point,
                         tick_value, tick_size, sim_lot, spread_points)
 
 
@@ -495,7 +578,7 @@ def build_live_specs(make_spec):
 
         specs[key] = make_spec(
             # calc(df, s) — параметры берём из записи стратегии (s['param_key'])
-            (lambda df, s, _c=calc: _c(df, s['param_key'])),
+            (lambda df, s, _c=calc: _c(df, _as_param(s['param_key']))),
             None,
             min_len,
             # snapshot: последние два значения сигнальной колонки 'k'

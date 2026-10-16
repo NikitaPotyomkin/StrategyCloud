@@ -26,10 +26,10 @@ def calc_bollinger(df, bb_period=20, bb_std=2, volume_period=20):
 
     # Сигнал: пробой верхней/нижней полосы
     df['signal'] = 0
-    # Long: цена закрытия выше верхней полосы И объём выше среднего
-    long_cond = (df['close'] > df['bb_upper']) & vol_cond
-    # Short: цена закрытия ниже нижней полосы И объём выше среднего
-    short_cond = (df['close'] < df['bb_lower']) & vol_cond
+    # Long: цена пробивает верхнюю полосу (high > upper) И объём выше среднего
+    long_cond = (df['high'] > df['bb_upper']) & vol_cond
+    # Short: цена пробивает нижнюю полосу (low < lower) И объём выше среднего
+    short_cond = (df['low'] < df['bb_lower']) & vol_cond
 
     df.loc[long_cond, 'signal'] = 1
     df.loc[short_cond, 'signal'] = -1
