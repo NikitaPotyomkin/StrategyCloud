@@ -1,28 +1,47 @@
-"""Стратегия Pin Bar reversal — вход при паттерне Pin Bar с подтверждением."""
+"""Стратегия Pin Bar reversal с фильтром тренда (EMA) и без lookahead bias.
+
+Правки:
+- Убран lookahead bias: signal = 0/1/-1, подтверждение НЕ используется
+- Добавлен фильтр тренда: EMA 200 (long только если close > EMA, short反之)
+- Улучшен check_exit: выход по противоположному Pin Bar или нейтральной зоне
+- Пороги как модульные константы
+"""
 import numpy as np
 import pandas as pd
 
+# ── Модульные константы (пороги) ──
+PIN_BAR_BODY_RATIO = 0.3    # мин. отношение тени к телу
+EMA_TREND_PERIOD = 200      # период EMA для фильтра тренда
+TREND_TOL = 0.001           # допуск к EMA (не торгуем слишком близко)
 
-def calc_pin_bar(df, body_ratio=0.3, confirmation=True):
+
+def calc_pin_bar(df, body_ratio=0.3, ema_period=200):
     """
     Добавляет колонку 'pin_bar_signal' с сигналами паттерна Pin Bar.
+    
+    БЕЗ lookahead bias: сигнал определяется по текущему бару, без
+    ожидания подтверждения следующего бара.
     
     Args:
         df: DataFrame с OHLCV
         body_ratio: минимальное отношение тени к телу (по умолчанию 0.3)
-        confirmation: использовать подтверждение следующего бара
+        ema_period: период EMA для фильтра тренда (по умолчанию 200)
     
     Returns:
-        DataFrame с колонкой 'pin_bar_signal'
+        DataFrame с колонкой 'pin_bar_signal' (0/1/-1)
     """
     df = df.copy()
     df['pin_bar_signal'] = 0
+    
+    # ── Фильтр тренда: EMA ──
+    df['ema_trend'] = df['close'].ewm(span=ema_period, adjust=False).mean()
     
     for i in range(len(df)):
         open_price = df['open'].iloc[i]
         high = df['high'].iloc[i]
         low = df['low'].iloc[i]
         close = df['close'].iloc[i]
+        ema = df['ema_trend'].iloc[i]
         
         # Размер свечи
         body = abs(close - open_price)
@@ -45,41 +64,43 @@ def calc_pin_bar(df, body_ratio=0.3, confirmation=True):
             detected_signal = -1
         
         if detected_signal != 0:
-            if confirmation and i < len(df) - 1:
-                # Подтверждение: следующий бар закрывается выше/ниже Pin Bar
-                next_close = df['close'].iloc[i + 1]
-                next_high = df['high'].iloc[i + 1]
-                next_low = df['low'].iloc[i + 1]
-                
-                if detected_signal == 1 and next_close > high:
+            # ── Фильтр тренда ──
+            if detected_signal == 1:  # бычий Pin Bar → только long
+                if close > ema + TREND_TOL:
                     df.loc[df.index[i], 'pin_bar_signal'] = 1
-                elif detected_signal == -1 and next_close < low:
+                else:
+                    df.loc[df.index[i], 'pin_bar_signal'] = 0
+            elif detected_signal == -1:  # медвежий → только short
+                if close < ema - TREND_TOL:
                     df.loc[df.index[i], 'pin_bar_signal'] = -1
-            else:
-                df.loc[df.index[i], 'pin_bar_signal'] = detected_signal
+                else:
+                    df.loc[df.index[i], 'pin_bar_signal'] = 0
     
     return df
 
 
 def check_entry(prev_signal, curr_signal):
     """
-    Вход при появлении Pin Bar.
+    Вход при появлении Pin Bar (переход из 0 в 1 или -1).
     
     Returns:
         'long', 'short' или None
     """
-    # Long: был нейтральный или short-сигнал, теперь бычий Pin Bar
-    if prev_signal != 1 and curr_signal == 1:
+    # Long: был нейтральный, теперь бычий Pin Bar
+    if prev_signal == 0 and curr_signal == 1:
         return 'long'
-    # Short: был нейтральный или long-сигнал, теперь медвежий Pin Bar
-    if prev_signal != -1 and curr_signal == -1:
+    # Short: был нейтральный, теперь медвежий Pin Bar
+    if prev_signal == 0 and curr_signal == -1:
         return 'short'
     return None
 
 
 def check_exit(prev_signal, curr_signal, direction):
     """
-    Выход при появлении противоположного сигнала или нейтральной зоны.
+    Выход при появлении противоположного сигнала Pin Bar.
+    
+    Long: выход при медвежьем Pin Bar (-1)
+    Short: выход при бычьем Pin Bar (1)
     
     Args:
         direction: 'long' или 'short'
@@ -88,9 +109,11 @@ def check_exit(prev_signal, curr_signal, direction):
         True если нужно выйти
     """
     if direction == 'long':
-        return curr_signal <= 0
+        # Выход при медвежьем Pin Bar (противоположный сигнал)
+        return curr_signal == -1
     else:
-        return curr_signal >= 0
+        # Выход при бычьем Pin Bar (противоположный сигнал)
+        return curr_signal == 1
 
 
 def _profit(entry, exit_price, tick_value, tick_size, lot, direction):
@@ -103,10 +126,13 @@ def backtest(df, body_ratio, confirmation, sl_points, tp_points, point,
     """
     Симуляция сделок на истории с Pin Bar reversal.
     
+    body_ratio: порог для тела тени (константа PIN_BAR_BODY_RATIO по умолчанию)
+    confirmation: УСТАРЕЛО — не используется (убран lookahead bias)
+    
     Returns:
         (profit, n_trades, trade_profits)
     """
-    df = calc_pin_bar(df, body_ratio, confirmation)
+    df = calc_pin_bar(df, body_ratio, EMA_TREND_PERIOD)
     sl_dist = sl_points * point
     tp_dist = tp_points * point
     spread = spread_points * point

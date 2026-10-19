@@ -446,7 +446,13 @@ with tab_daily:
                     {'alpha': _scfg.alpha, 'min_q': _scfg.min_q, 'max_q': _scfg.max_q,
                      'score_mode': _scfg.score_mode, 'min_trades': _scfg.min_trades,
                      'gamma': getattr(_scfg, 'gamma', 1.5),
-                     'score_volume_prior': getattr(_scfg, 'score_volume_prior', 0.0)})
+                     'score_volume_prior': getattr(_scfg, 'score_volume_prior', 0.0),
+                     # Политика потерь: чтобы превью штурвала совпадало с боем
+                     # (карантин/kill видны в дэшборде, а не только в main.py)
+                     'loss_decay': getattr(_scfg, 'loss_decay', 0.25),
+                     'kill_pnl_pct': getattr(_scfg, 'kill_pnl_pct', 0.02),
+                     'kill_min_trades': getattr(_scfg, 'kill_min_trades', 3),
+                     'quota_rub': 0.0})  # превью: рублёвой квоты нет → kill по % не срабатывает
         except Exception as _e:
             st.caption(f"⚠ Wheel-квоты недоступны: {_e!r}")
 
@@ -1601,6 +1607,12 @@ with tab_steering:
                     'min_trades': steering_cfg.min_trades,
                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
                     'score_volume_prior': getattr(steering_cfg, 'score_volume_prior', 0.0),
+                    # Политика потерь — превью должно совпадать с боем (main.py)
+                    'loss_decay': getattr(steering_cfg, 'loss_decay', 0.25),
+                    'kill_pnl_pct': getattr(steering_cfg, 'kill_pnl_pct', 0.02),
+                    'kill_min_trades': getattr(steering_cfg, 'kill_min_trades', 3),
+                    'quota_rub': 0.0,  # рублёвой квоты в превью нет → kill только по параметрам
+                }
                 }
             )
 

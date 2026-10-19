@@ -219,6 +219,53 @@ def composite_score(metrics, weights=None, profit_scale=DEFAULT_PROFIT_SCALE):
     return score
 
 
+# ═══ PROBATION ДЛЯ «ИДЕАЛЬНЫХ» БЭКТЕСТОВ ═══
+# PF=999 (ни одной убыточной сделки в выборке) и win_rate=100% — это артефакт
+# короткой выборки или SL вне диапазона, а НЕ доказанное преимущество. Такие
+# комбинации остаются в плане, но с урезанным score: они не забирают объём у
+# проверенных стратегий. Пример: 21 из 121 комбинации pin_bar с PF=999/WR=100%.
+SUSPECT_PF = 900.0
+SUSPECT_SCORE_CAP = 1.0
+
+
+def is_suspect_backtest(r):
+    """True, если бэктест «слишком идеален»: PF ≥ SUSPECT_PF или win_rate = 100%."""
+    try:
+        n = int(r.get('n_trades') or 0)
+        pf = float(r.get('profit_factor') or 0.0)
+        wr = float(r.get('win_rate') or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return n > 0 and (pf >= SUSPECT_PF or wr >= 100.0)
+
+
+def apply_probation_cap(ranked_results, cap=SUSPECT_SCORE_CAP, verbose=True):
+    """Ограничивает score «идеальных» бэктестов (in-place) и помечает их suspect.
+
+    score_raw сохраняется для прозрачности, suspect=True виден в ranking/
+    active_state/дэшборде. Возвращает число урезанных комбинаций.
+    """
+    capped = []
+    for r in (ranked_results or []):
+        if not isinstance(r, dict) or not is_suspect_backtest(r):
+            continue
+        try:
+            score = float(r.get('score') or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if score > cap:
+            r.setdefault('score_raw', score)
+            r['score'] = cap
+        r['suspect'] = True
+        capped.append(f"{r.get('symbol')}/{r.get('type')}/{r.get('param_key')}")
+    if capped and verbose:
+        _tail = ' …' if len(capped) > 8 else ''
+        print(f"  [SCORE] probation: {len(capped)} 'идеальных' бэктестов "
+              f"(PF>={SUSPECT_PF:.0f} или WR=100%) — score ≤ {cap:.2f}: "
+              + ", ".join(capped[:8]) + _tail, flush=True)
+    return len(capped)
+
+
 # ═══ РАСПРЕДЕЛЕНИЕ ЛОТОВ ═══
 
 def distribute_lots(ranked_results, symbol_data, balance,
@@ -229,6 +276,11 @@ def distribute_lots(ranked_results, symbol_data, balance,
     и _sl_money_per_lot для расчёта риска SL через order_calc_profit.
     """
     quota = balance * max_risk_pct
+
+    # Probation: «идеальные» бэктесты (PF≥900 / WR=100% — ни одного убытка в
+    # выборке) не получают полный score. Иначе артефакт короткой выборки
+    # (21 из 121 комбинации pin_bar, PF=999/WR=100%) забирает объём у проверенных.
+    apply_probation_cap(ranked_results)
 
     candidates = []
     for r in ranked_results:
@@ -606,6 +658,10 @@ def realtime_quota_recalc(balance, current_positions, max_risk_pct=0.05):
         tuple: (quota_ok: bool, current_risk_pct: float, quota: float)
     """
     quota = balance * max_risk_pct
+
+    # (probation-кап применяется в distribute_lots — здесь ranked_results нет)
+
+
 
     total_risk = 0
     for pos in current_positions:

@@ -25,6 +25,8 @@ HEDGING_MODE = getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 'hedging')
 # Символы, для которых уже выводилось предупреждение о netting-счёте.
 _NETTING_WARNED = set()
 _MISSING_INFO_WARNED = set()
+# Kill switch штурвала: по какой стратегии уже сказали «выключена» (без спама каждую минуту)
+_DISABLED_WARNED = set()
 
 # Максимальная длина comment ордера. Эмпирически терминал отклоняет comment
 # длиннее 28 символов (last_error=(-2, 'Invalid "comment" argument')).
@@ -293,6 +295,12 @@ def write_active_state(active, active_strategies, balance, max_risk_pct, journal
             'win_rate': r.get('win_rate', 0),
             'n_trades': r.get('n_trades', 0),
             'has_position': has_position,
+            # Kill switch штурвала: enabled=False → новые входы запрещены,
+            # disabled_reason — почему (видно в дэшборде, не только в логе).
+            'enabled': strat.get('enabled', True) is not False,
+            'disabled_reason': strat.get('disabled_reason') or '',
+            # Probation: бэктест «слишком идеальный» (PF≥900 / WR=100%) — score урезан
+            'suspect': bool(r.get('suspect', False)),
         })
     path = os.path.join(journal_dir, 'active_state.json')
     with open(path, 'w', encoding='utf-8') as f:
@@ -1379,7 +1387,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
             lambda s: f"{s['symbol']}, Momentum",
         ),
         'pin_bar': _spec(
-            (lambda df, s: calc_pin_bar_fn(df, s.get('body_ratio', 0.3), s.get('confirmation', True))) if calc_pin_bar_fn is not None else None,
+            # 3-й позиционный аргумент calc_pin_bar — теперь ema_period (фильтр тренда),
+            # а не confirmation: True попадало в ewm(span=True) → alpha=1 → EMA == close →
+            # фильтр `close > ema + TREND_TOL` глушил ВСЕ сигналы (live не входил вообще).
+            (lambda df, s: calc_pin_bar_fn(df, s.get('body_ratio', 0.3),
+                                           s.get('ema_period', 200))) if calc_pin_bar_fn is not None else None,
             "PinBar — модуль не передан", 2,
             lambda df: {'prev': df['pin_bar_signal'].iloc[-2], 'curr': df['pin_bar_signal'].iloc[-1]},
             lambda v, s, d: check_exit_pin_bar_fn(v['prev'], v['curr'], d),
@@ -1495,6 +1507,16 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
 
     for key, s in active_strategies.items():
         try:
+            # Kill switch штурвала: категория убыточна → квота 0 → сигналы не проверяем.
+            # Открытые позиции по такой стратегии всё равно обслуживаются ниже
+            # (проверка выхода идёт по s['position'], а не по этому флагу).
+            if s.get('enabled', True) is False and s.get('position') is None:
+                if key not in _DISABLED_WARNED:
+                    _DISABLED_WARNED.add(key)
+                    print(f"  -> [{key}] Выключена штурвалом: "
+                          f"{s.get('disabled_reason', 'квота категории = 0')} — "
+                          f"новые входы не открываются", flush=True)
+                continue
             if s['symbol'] not in symbol_data:
                 continue
             sd = symbol_data.get(s['symbol'])

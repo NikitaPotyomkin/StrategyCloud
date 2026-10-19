@@ -153,6 +153,21 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
     alpha = steering_cfg.get('alpha', 0.3)
     score_mode = steering_cfg.get('score_mode', 'pnl')
     min_trades = int(steering_cfg.get('min_trades', 0) or 0)
+    # ── Политика потерь (kill switch по РЕАЛЬНЫМ сделкам) ──
+    # Раньше убыток обрезался в 0 и категория получала пол min_q — то есть
+    # красная категория жила вечно. Теперь:
+    #   loss_decay   — во сколько раз режется квота убыточной категории (карантин);
+    #   kill_pnl_pct — убыток больше этой доли риск-квоты → квота 0 (полная остановка);
+    #   kill_pnl_rub — абсолютный порог в рублях (0 = не использовать);
+    #   quota_rub    — риск-квота счёта в рублях (передаётся из main.py).
+    loss_decay = float(steering_cfg.get('loss_decay', 0.25) or 0.25)
+    kill_pnl_pct = float(steering_cfg.get('kill_pnl_pct', 0.02) or 0.0)
+    kill_pnl_rub = float(steering_cfg.get('kill_pnl_rub', 0.0) or 0.0)
+    # Порог сделок ДЛЯ наказания: ниже min_trades (10) скорить нельзя (шум), но
+    # 3 сделки с минусом — уже повод для карантина/kill, иначе живой минус ждёт
+    # десятой сделки, продолжая получать min_q.
+    kill_min_trades = int(steering_cfg.get('kill_min_trades', 3) or 0)
+    quota_rub = float(steering_cfg.get('quota_rub', 0.0) or 0.0)
     # V0 = score_volume_prior (shrinkage знаменателя): score = PnL / (volume + V0);
     # если 0 -> авто-медиана объёма по оцениваемым категориям окна.
     v_prior = (float(steering_cfg.get('score_volume_prior', 0.0) or 0.0) or float(np.median([float(_s.get("volume", 0) or 0.0) for _s in strategies_data if isinstance(_s, dict) and _s.get("id") is not None and (not min_trades or int(_s.get("trades", 0) or 0) >= min_trades) and float(_s.get("volume", 0) or 0.0) > 0] or [0.0]))) if score_mode == 'pnl_per_lot' else 0.0
@@ -193,10 +208,30 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
 
         scores.append((sid, score))
 
+    # ── 1b. PnL и сделки по категориям + список убыточных ──
+    # Убыток — это НЕ «нет данных»: ему нельзя давать пол min_q, иначе категория
+    # с живым минусом получает квоту вечно (ровно то, что происходило с pin_bar).
+    _pnl_by_sid, _trades_by_sid = {}, {}
+    for _s in strategies_data:
+        if not isinstance(_s, dict):
+            continue
+        _sid = _s.get('id')
+        if _sid is None:
+            continue
+        _pnl_by_sid[_sid] = float(_s.get('pnl', 0) or 0.0)
+        _trades_by_sid[_sid] = int(_s.get('trades', 0) or 0)
+    _loss_sids = {_sid for _sid, _p in _pnl_by_sid.items()
+                  # Убыток — это НЕ «нет данных»: порог сделок здесь свой (kill_min_trades),
+                  # потому что 3 сделки с минусом уже требуют реакции, а не min_q.
+                  if _p < 0 and _trades_by_sid.get(_sid, 0) >= max(1, kill_min_trades)}
+
     total_score = sum(sc for _, sc in scores)
 
     # Все в минусе или нет данных — возвращаем текущие квоты как есть
     if total_score <= 0 or not scores:
+        print("  [WHEEL] ВНИМАНИЕ: прибыльных категорий в окне нет — квоты не меняются "
+              f"(убыточных: {len(_loss_sids)}; kill switch не применяется — "
+              f"перераспределять долю некуда)", flush=True)
         return current_quotas
 
     target_weights = {sid: sc / total_score for sid, sc in scores}
@@ -204,12 +239,40 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
     # ── 2. EMA + Floor/Ceiling для стратегий со сделками ──
     new_quotas = {}
     for sid, target in target_weights.items():
+        if sid in _loss_sids:
+            continue  # убыточная категория — политика потерь (2b), без пола min_q
         current = current_quotas.get(sid, 0.0)
         raw_new = alpha * target + (1.0 - alpha) * current
         new_quotas[sid] = max(min_q, min(max_q, raw_new))
 
-    # ── 3. Стратегии БЕЗ сделок за окно → минимум (нет прибыли = нет объёма) ──
-    # (раньше сохраняли текущую долю — это ломало синхрон с деревом)
+    # ── 2b идёт ДО шага 3: убыточные не должны получить пол min_q как «нет данных» ──
+    # Карантинный лот упирается в min_lot (одна минимальная позиция) — это ожидаемо.
+    # ── 2b. ПОЛИТИКА ПОТЕРЬ: карантин / kill switch ──
+    # Карантин: квота = min_q × loss_decay (маленькая, но не полная).
+    # Kill: убыток превысил порог → квота 0, стратегии категории не торгуют.
+    _killed, _quarantined = [], []
+    for _sid in sorted(_loss_sids):
+        _pnl = _pnl_by_sid[_sid]
+        _n = _trades_by_sid.get(_sid, 0)
+        _kill = False
+        if kill_pnl_rub > 0 and _pnl <= -kill_pnl_rub:
+            _kill = True
+        if quota_rub > 0 and kill_pnl_pct > 0 and _pnl <= -kill_pnl_pct * quota_rub:
+            _kill = True
+        if _kill:
+            new_quotas[_sid] = 0.0
+            _killed.append((_sid, _pnl, _n))
+        else:
+            new_quotas[_sid] = min_q * loss_decay
+            _quarantined.append((_sid, _pnl, _n))
+    for _sid, _pnl, _n in _killed:
+        print(f"  [WHEEL] KILL: {_sid} → q=0 (PnL {_pnl:+,.0f} ₽, {_n} сд.) — "
+              f"категория выключена до восстановления", flush=True)
+    for _sid, _pnl, _n in _quarantined:
+        print(f"  [WHEEL] карантин: {_sid} q→{min_q * loss_decay:.5f} "
+              f"(PnL {_pnl:+,.0f} ₽, {_n} сд.)", flush=True)
+
+    # ── 3. Категории БЕЗ сделок за окно → минимум (нет данных, не наказание) ──
     scored_ids = set(target_weights.keys())
     base_share = 1.0 / len(current_quotas) if current_quotas else 0.0
     for sid in current_quotas:
@@ -238,7 +301,8 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
                 new_quotas = {k: 1.0 / _n for k in new_quotas}
                 break
             _norm = {k: v / _tot for k, v in new_quotas.items()}
-            _clamped = {k: max(min_q, min(_cap, v)) for k, v in _norm.items()}
+            # Явный ноль (kill switch) полом min_q НЕ воскрешаем: категория выключена.
+            _clamped = {k: (0.0 if v <= 0 else max(min_q, min(_cap, v))) for k, v in _norm.items()}
             if all(abs(_clamped[k] - _norm[k]) < 1e-12 for k in _norm):
                 new_quotas = _clamped
                 break

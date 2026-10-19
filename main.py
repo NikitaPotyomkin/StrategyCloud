@@ -370,7 +370,9 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
     """
     journal_dir = journal_dir or JOURNAL_DIR
     st = {'changed': 0, 'synced': 0, 'no_quota': 0, 'bad_sl': 0, 'no_budget': 0,
+          'killed': 0,
           'with_position': 0, 'unchanged': 0, 'categories': 0, 'source': 'none'}
+    # st: счётчики прогона (killed — сколько стратегий остановил kill switch)
     _tag = f" {tag}" if tag else ''
     print(f"\n  [STEERING] Старт{_tag}: {len(active_strategies or {})} стратегий, "
           f"окно {steering_cfg.lookback_days} дн., баланс {balance:,.0f} ₽", flush=True)
@@ -411,6 +413,12 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
                     'min_trades': steering_cfg.min_trades,
                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
                     'score_volume_prior': getattr(steering_cfg, 'score_volume_prior', 0.0),
+                    # Политика потерь (kill switch): порог в рублях, рублёвая риск-квота
+                    'quota_rub': balance * risk_cfg.max_risk_pct,
+                    'loss_decay': getattr(steering_cfg, 'loss_decay', 0.25),
+                    'kill_pnl_pct': getattr(steering_cfg, 'kill_pnl_pct', 0.02),
+                    'kill_pnl_rub': getattr(steering_cfg, 'kill_pnl_rub', 0.0),
+                    'kill_min_trades': getattr(steering_cfg, 'kill_min_trades', 3),
                 }
             )
             with open(quotas_path, 'w', encoding='utf-8') as _qf:
@@ -465,11 +473,16 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
                                         + max(float(_s.get('score') or 0.0), 0.0))
 
         _free_sids = {_sid_by_key[_k] for _k in _free_keys} - {None}
-        _q_covered = sum(new_quotas.get(_sid, 0.0) for _sid in _free_sids)
+        _free_sids = {_sid_by_key[_k] for _k in _free_keys} - {None}
+        # Бюджет делим на ВСЕ категории с ненулевой квотой, а не только на
+        # свободные: иначе свободная стратегия с квотой-полом (1.04%) забирала
+        # весь незанятый бюджет и получала риск в 1.8× от номинала
+        # (17.10: EURUSDrf_pin_bar — 4,003 ₽ вместо 2,214 ₽).
+        _q_covered = sum(v for v in new_quotas.values() if v > 0)
         _budget = max(0.0, risk_quota - _used_risk)
         print(f"  [STEERING] Свободных {len(_free_keys)} | в позициях {st['with_position']} | "
               f"риск позиций {_used_risk:,.0f} ₽ | бюджет {_budget:,.0f} ₽ из "
-              f"{risk_quota:,.0f} ₽ | Σq свободных {_q_covered:.3f}", flush=True)
+              f"{risk_quota:,.0f} ₽ | Σq всех категорий {_q_covered:.3f}", flush=True)
         if _budget <= 0:
             print("  [ERROR] Штурвал: свободного бюджета нет (квота занята открытыми "
                   "позициями) — лоты не переложены", flush=True)
@@ -486,6 +499,21 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
                 print(f"  [WARN] Штурвал: {key} — нет квоты для категории {sid!r}, "
                       f"лот не тронут", flush=True)
                 continue
+            _m = _slm.get(key, 0.0)
+            if q_new <= 0:
+                # Kill switch: категория убыточна (квота 0) → новые входы запрещены.
+                if s.get('enabled', True) or float(s.get('lot') or 0) > 0:
+                    print(f"  [WHEEL] KILL {key}: q=0 → торговля остановлена "
+                          f"(категория {sid}, лот {s['lot']:.3f} → 0)", flush=True)
+                s['lot'] = 0.0
+                s['enabled'] = False
+                s['disabled_reason'] = f'steering: квота категории {sid} = 0 (живой убыток)'
+                st['killed'] += 1
+                continue
+            if s.get('enabled', True) is False:
+                print(f"  [WHEEL] возврат в работу: {key} (категория {sid} снова в плюсе)", flush=True)
+                s['enabled'] = True
+                s.pop('disabled_reason', None)
             _m = _slm.get(key, 0.0)
             if _m <= 0 or _q_covered <= 0:
                 st['bad_sl'] += 1
@@ -529,6 +557,9 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
               f"синхронизировано в план {st['synced']} | пропуски: в позиции "
               f"{st['with_position']}, нет квоты {st['no_quota']}, sl_money/Σq "
               f"{st['bad_sl']}, бюджет {st['no_budget']}", flush=True)
+        if st['killed']:
+            print(f"  [STEERING] Kill switch: {st['killed']} стратегий остановлено "
+                  f"(квота категории = 0) — новые входы по ним запрещены", flush=True)
         return st
 
     except Exception as se:
@@ -1007,6 +1038,12 @@ if __name__ == '__main__':
                                     'min_trades': steering_cfg.min_trades,
                                     'gamma': getattr(steering_cfg, 'gamma', 1.5),
                                     'score_volume_prior': getattr(steering_cfg, 'score_volume_prior', 0.0),
+                    # Политика потерь (kill switch): порог в рублях, рублёвая риск-квота
+                    'quota_rub': balance * risk_cfg.max_risk_pct,
+                    'loss_decay': getattr(steering_cfg, 'loss_decay', 0.25),
+                    'kill_pnl_pct': getattr(steering_cfg, 'kill_pnl_pct', 0.02),
+                    'kill_pnl_rub': getattr(steering_cfg, 'kill_pnl_rub', 0.0),
+                    'kill_min_trades': getattr(steering_cfg, 'kill_min_trades', 3),
                                     # если gamma ещё нет в cfg — подставим дефолт
                                 }
                             )
@@ -1064,6 +1101,21 @@ if __name__ == '__main__':
                                 if q_new is None:
                                     continue
                                 _m = _slm.get(key, 0.0)
+            if q_new <= 0:
+                # Kill switch: категория убыточна (квота 0) → новые входы запрещены.
+                if s.get('enabled', True) or float(s.get('lot') or 0) > 0:
+                    print(f"  [WHEEL] KILL {key}: q=0 → торговля остановлена "
+                          f"(категория {sid}, лот {s['lot']:.3f} → 0)", flush=True)
+                s['lot'] = 0.0
+                s['enabled'] = False
+                s['disabled_reason'] = f'steering: квота категории {sid} = 0 (живой убыток)'
+                st['killed'] += 1
+                continue
+            if s.get('enabled', True) is False:
+                print(f"  [WHEEL] возврат в работу: {key} (категория {sid} снова в плюсе)", flush=True)
+                s['enabled'] = True
+                s.pop('disabled_reason', None)
+            _m = _slm.get(key, 0.0)
                                 if _m <= 0 or _budget <= 0 or _q_covered <= 0:
                                     continue
                                 # Доля внутри категории — по score бэктеста (как в
