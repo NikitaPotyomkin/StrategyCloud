@@ -1101,21 +1101,24 @@ if __name__ == '__main__':
                                 if q_new is None:
                                     continue
                                 _m = _slm.get(key, 0.0)
-            if q_new <= 0:
-                # Kill switch: категория убыточна (квота 0) → новые входы запрещены.
-                if s.get('enabled', True) or float(s.get('lot') or 0) > 0:
-                    print(f"  [WHEEL] KILL {key}: q=0 → торговля остановлена "
-                          f"(категория {sid}, лот {s['lot']:.3f} → 0)", flush=True)
-                s['lot'] = 0.0
-                s['enabled'] = False
-                s['disabled_reason'] = f'steering: квота категории {sid} = 0 (живой убыток)'
-                st['killed'] += 1
-                continue
-            if s.get('enabled', True) is False:
-                print(f"  [WHEEL] возврат в работу: {key} (категория {sid} снова в плюсе)", flush=True)
-                s['enabled'] = True
-                s.pop('disabled_reason', None)
-            _m = _slm.get(key, 0.0)
+
+                                # Kill switch: категория убыточна (квота 0) → новые входы запрещены.
+                                if q_new <= 0:
+                                    if s.get('enabled', True) or float(s.get('lot') or 0) > 0:
+                                        print(f"  [WHEEL] KILL {key}: q=0 → торговля остановлена "
+                                              f"(категория {sid}, лот {s['lot']:.3f} → 0)", flush=True)
+                                    s['lot'] = 0.0
+                                    s['enabled'] = False
+                                    s['disabled_reason'] = f'steering: квота категории {sid} = 0 (живой убыток)'
+                                    st['killed'] += 1
+                                    continue
+
+                                # Возврат в работу: категория снова в плюсе
+                                if s.get('enabled', True) is False:
+                                    print(f"  [WHEEL] возврат в работу: {key} (категория {sid} снова в плюсе)", flush=True)
+                                    s['enabled'] = True
+                                    s.pop('disabled_reason', None)
+
                                 if _m <= 0 or _budget <= 0 or _q_covered <= 0:
                                     continue
                                 # Доля внутри категории — по score бэктеста (как в
