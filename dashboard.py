@@ -575,6 +575,31 @@ with tab_daily:
         # ── План ↔ Strategy Tree: тот же уровень гранулярности (категория symbol+family) ──
         # Tree считает PnL по реальным закрытым сделкам окна аллокации; план — по стратегиям.
         # Здесь сводим их вместе, чтобы было видно: куда реально идёт объём.
+        # ── Гистограмма: Σ объём по КАТЕГОРИЯМ (символ + семейство) ──
+        # Квота живёт на категории, поэтому и объём показываем категорией.
+        # Разбивка по стратегиям — на графике ниже (там param_key уместен).
+        if PLOTLY_AVAILABLE and not df_plan.empty:
+            _cbar = (df_plan.groupby('sid')
+                     .agg(lot=('lot', 'sum'), category=('category', 'first'),
+                          pnl=('Tree PnL ₽', 'first'), n=('sid', 'size'))).reset_index()
+            _cbar = _cbar[_cbar['lot'] > 0].sort_values('lot', ascending=True).reset_index(drop=True)
+            if not _cbar.empty:
+                _cbar['color'] = _cbar['pnl'].apply(
+                    lambda v: '#DA3633' if (v is not None and v == v and v < 0) else '#2EA043')
+                _cbar['pnl_txt'] = _cbar['pnl'].apply(
+                    lambda v: (f"{v:,.0f}".replace(',', ' ') + ' ₽') if (v is not None and v == v) else '—')
+                _cbar['hover'] = _cbar.apply(
+                    lambda r: f"Tree PnL: {r['pnl_txt']} · стратегий: {r['n']}", axis=1)
+                fig_cat = go.Figure(go.Bar(
+                    x=_cbar['category'], y=_cbar['lot'], marker_color=_cbar['color'],
+                    customdata=_cbar[['hover']].values,
+                    hovertemplate='<b>%{x}</b><br>Σ объём: %{y:.2f} лот<br>'
+                                  '%{customdata[0]}<extra></extra>'))
+                plotly_dark_layout(fig_cat, height=560)
+                fig_cat.update_xaxes(tickangle=-60)
+                fig_cat.update_yaxes(title_text='Σ объём, лот')
+                st.markdown("#### Объём по категориям (символ + семейство)")
+                st.plotly_chart(fig_cat, use_container_width=True)
         st.markdown("#### План по категориям (символ + семейство) — тот же уровень, что Strategy Tree")
         _cat_rows = []
         for _sid, _grp in df_plan.groupby('sid'):
@@ -639,7 +664,7 @@ with tab_daily:
             plotly_dark_layout(fig_bar, height=560)
             fig_bar.update_xaxes(tickangle=-60)
             fig_bar.update_yaxes(title_text='Объём, лот')
-            st.markdown("#### План объёма")
+            st.markdown("#### План объёма по стратегиям (лот на стратегию)")
             st.plotly_chart(fig_bar, use_container_width=True)
 
             # ── Гистограмма С ПОПРАВКОЙ: объём по реальным сделкам ──
