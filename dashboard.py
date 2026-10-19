@@ -575,7 +575,7 @@ with tab_daily:
         # ── План ↔ Strategy Tree: тот же уровень гранулярности (категория symbol+family) ──
         # Tree считает PnL по реальным закрытым сделкам окна аллокации; план — по стратегиям.
         # Здесь сводим их вместе, чтобы было видно: куда реально идёт объём.
-        _tree_reconcile_disabled = r"""
+        st.markdown("#### План по категориям (символ + семейство) — тот же уровень, что Strategy Tree")
         _cat_rows = []
         for _sid, _grp in df_plan.groupby('sid'):
             _ccat = _cat_by_id.get(_sid, {})
@@ -621,7 +621,7 @@ with tab_daily:
                        f"Strategy Tree (окно {ALLOC_DAYS} дн.).")
             st.dataframe(_dfc.drop(columns=['_pnl', '_lot']).sort_values('Σ lot', ascending=False),
                          use_container_width=True, hide_index=True)
-"""
+
 
         # ── Гистограмма: план объёма по стратегиям ──
         if PLOTLY_AVAILABLE and not df_plan.empty:
