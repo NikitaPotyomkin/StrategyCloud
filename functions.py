@@ -47,6 +47,83 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
     return rec
 
 
+# ═══ ЕДИНЫЙ СЧЁТ КОМБИНАЦИЙ ═══
+# Пропускная способность бэктеста (замеры journals/run.log, 4 процесса):
+# ~5.6 комб/с суммарно ≈ 1.4 комб/с на процесс. Используется для оценки времени.
+BACKTEST_COMBOS_PER_SEC_PER_PROCESS = 1.4
+
+# Человекочитаемые названия стратегий для отчёта бюджета (ключи — как в test_strategy).
+STRATEGY_COMBO_LABELS = {
+    'stoch': 'Stoch', 'parabolic': 'Parabolic', 'ma': 'MA', 'rf': 'RandomForest',
+    'logreg': 'LogReg', 'macd_cross': 'MACD-Cross', 'rsi_rev': 'RSI-Rev',
+    'bollinger': 'Bollinger', 'ema_cross': 'EMA', 'rsi_div': 'RSI-Div',
+    'ichimoku': 'Ichimoku', 'zscore': 'Zscore', 'autocorr': 'Autocorr', 'hurst': 'Hurst',
+    'lrc': 'LRC', 'percentile': 'Percentile', 'runs': 'Runs', 'coint': 'Coint',
+    'sharpe': 'Sharpe', 'skewness': 'Skewness', 'kurtosis': 'Kurtosis',
+    'bayesian': 'Bayesian', 'chi_square': 'ChiSq', 'vwap': 'VWAP', 'momentum': 'Momentum',
+    'pin_bar': 'PinBar', 'prev_daily': 'PrevDaily', 'corr_momentum': 'CorrMomentum',
+    'williams_r': 'WilliamsR', 'macd_histogram': 'MACD-Hist', 'bb_squeeze': 'BB-Squeeze',
+    'donchian': 'Donchian', 'engulfing': 'Engulfing', 'cci': 'CCI', 'supertrend': 'SuperTrend',
+    'adx': 'ADX', 'obv': 'OBV', 'morning_star': 'MorningStar',
+}
+
+
+def strategy_combos_per_symbol(sp):
+    """Единый источник счёта комбинаций на 1 символ: {strategy_key: combos}.
+
+    Ключи совпадают с test_strategy (легаси) + реестр standalone (ENABLED_BATCH).
+    sp — namespace с полями-списками параметров (config.StrategyParams).
+    Используется бэктестом (итоги, оценка времени) и отчётом бюджета в main.py,
+    чтобы 9018/10503/11043 не расходились.
+    """
+    m = {
+        'stoch': len(sp.k_periods) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'parabolic': len(sp.parabolic_steps) * len(sp.parabolic_maxs) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'ma': len(sp.ma_periods) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'rf': len(sp.rf_lookbacks) * len(sp.rf_nbars) * len(sp.rf_thresholds) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'logreg': len(sp.logreg_lookbacks) * len(sp.logreg_nbars) * len(sp.logreg_thresholds) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'macd_cross': len(sp.macd_cross_fast_list) * len(sp.macd_cross_slow_list) * len(sp.macd_cross_signal_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'rsi_rev': len(sp.rsi_rev_period_list) * len(sp.rsi_rev_oversold_list) * len(sp.rsi_rev_overbought_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'bollinger': len(sp.bb_period_list) * len(sp.bb_std_list) * len(sp.volume_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'ema_cross': len(sp.ema_fast_list) * len(sp.ema_slow_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'rsi_div': len(sp.rsi_div_period_list) * len(sp.rsi_div_lookback_list) * len(sp.rsi_div_threshold_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'ichimoku': len(sp.tenkan_list) * len(sp.kijun_list) * len(sp.senkou_b_list) * len(sp.displacement_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'zscore': len(sp.zscore_sma_period_list) * len(sp.zscore_threshold_list) * len(sp.zscore_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'autocorr': len(sp.autocorr_lag_list) * len(sp.autocorr_threshold_list) * len(sp.autocorr_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'hurst': len(sp.hurst_window_list) * len(sp.hurst_trend_threshold_list) * len(sp.hurst_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'lrc': len(sp.lrc_period_list) * len(sp.lrc_std_threshold_list) * len(sp.lrc_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'percentile': len(sp.pct_period_list) * len(sp.pct_low_list) * len(sp.pct_high_list) * len(sp.pct_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'runs': len(sp.runs_window_list) * len(sp.runs_threshold_list) * len(sp.runs_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'coint': len(sp.coint_window_list) * len(sp.coint_threshold_list) * len(sp.coint_beta_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'sharpe': len(sp.sharpe_window_list) * len(sp.sharpe_threshold_list) * len(sp.sharpe_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'skewness': len(sp.skew_window_list) * len(sp.skew_threshold_list) * len(sp.skew_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'bayesian': len(sp.bayes_window_list) * len(sp.bayes_threshold_list) * len(sp.bayes_prior_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'kurtosis': len(sp.kurt_window_list) * len(sp.kurt_threshold_list) * len(sp.kurt_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'chi_square': len(sp.chisq_window_list) * len(sp.chisq_entry_list) * len(sp.chisq_exit_list) * len(sp.chisq_vol_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'vwap': len(sp.vwap_vol_period_list) * len(sp.vwap_std_mult_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'momentum': len(sp.momentum_period_list) * len(sp.momentum_threshold_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'pin_bar': len(sp.pin_bar_body_ratio_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'prev_daily': len(sp.prev_daily_hold_bars_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'corr_momentum': len(sp.corr_window_list) * len(sp.corr_threshold_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'williams_r': len(sp.williams_r_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'macd_histogram': len(sp.macd_histogram_fast_list) * len(sp.macd_histogram_slow_list) * len(sp.macd_histogram_signal_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'bb_squeeze': len(sp.bb_squeeze_period_list) * len(sp.bb_squeeze_std_list) * len(sp.bb_squeeze_pct_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'donchian': len(sp.donchian_period_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'engulfing': len(sp.engulfing_dummy) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'cci': len(sp.cci_period_list) * len(sp.cci_threshold_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'supertrend': len(sp.supertrend_period_list) * len(sp.supertrend_multiplier_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'adx': len(sp.adx_period_list) * len(sp.adx_threshold_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'obv': len(sp.obv_period_list) * len(sp.obv_threshold_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+        'morning_star': len(sp.morning_star_body_ratio_list) * len(sp.sl_points_list) * len(sp.tp_points_list),
+    }
+    try:
+        from strategies._registry import enabled_combos as _enabled_combos
+        m.update(_enabled_combos(sp.sl_points_list, sp.tp_points_list))
+    except Exception as exc:
+        print(f"  -> [WARN] реестр комбинаций: {exc!r}", flush=True)
+    return m
+
+
 def _checkpoint_dir():
     """Путь к папке чекпойнтов."""
     base = os.path.dirname(os.path.abspath(__file__))
@@ -703,6 +780,14 @@ def _backtest_symbol(args):
         'obv': obv_per_symbol,
         'morning_star': morning_star_per_symbol,
     }
+
+    # Реестр standalone (ENABLED_BATCH) — тот же счёт, что в run_full_backtest и main.py,
+    # иначе прогресс символа (10503) расходился с итогом (11043).
+    try:
+        from strategies._registry import enabled_combos as _enabled_combos
+        _strategy_map.update(_enabled_combos(SL_POINTS_LIST, TP_POINTS_LIST))
+    except Exception as _reg_err:
+        print(f"  -> [WARN] реестр комбинаций: {_reg_err}", flush=True)
 
     if isinstance(test_strategy, str) and test_strategy in _strategy_map:
         active_combos = _strategy_map[test_strategy]
@@ -2381,7 +2466,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             continue
         valid_symbols.append(symbol)
 
-    total_symbols = len(valid_symbols)
+    total_symbols = len(valid_symbols)                      # к пересчёту в этом прогоне
+    basket_symbols = total_symbols + len(skipped_symbols)   # вся корзина (пересчёт + чекпойнты)
 
     # ── Сбор аргументов для каждого символа ──
     symbol_args = []
@@ -2436,16 +2522,17 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             family_fp, partial_recalc.get(symbol, (None, None))[1]
         ))
 
-    total_combos = combos_per_symbol * total_symbols
+    total_combos = combos_per_symbol * total_symbols          # работа в этом прогоне (к пересчёту)
+    combos_plan = combos_per_symbol * basket_symbols          # полный план корзины
     n_skipped = len(skipped_symbols)
 
     # ── Вывод плана бэктеста ──
     print(f"\n{'═' * 60}")
     if n_skipped > 0:
-        print(f"  БЭКТЕСТ | {total_symbols} символов × {combos_per_symbol} комб. = {total_combos} всего")
-        print(f"  ⏭ Пропущено расчетов после загрузки чекпойнтов: {n_skipped} символов")
+        print(f"  БЭКТЕСТ | {basket_symbols} символов в корзине × {combos_per_symbol} комб. = {combos_plan} всего")
+        print(f"  ⏭ Из чекпойнтов: {n_skipped} симв. | к пересчёту: {total_symbols} симв. = {total_combos} комб.")
     else:
-        print(f"  БЭКТЕСТ | {total_symbols} символов × {combos_per_symbol} комб. = {total_combos} всего")
+        print(f"  БЭКТЕСТ | {basket_symbols} символов в корзине × {combos_per_symbol} комб. = {combos_plan} всего")
     print(f"{'═' * 60}")
 
     # ── Какие стратегии считаются ──
@@ -2554,8 +2641,10 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             est_sec = max(1, int(last_run['elapsed_sec'] * (total_combos / max(1, last_run['combos']))))
             est_note = f"по прошлому прогону ({last_run['elapsed_sec']:.0f}с на {last_run['combos']} комб.)"
         else:
-            est_sec = max(1, int(total_combos / (4 * 30)))
-            est_note = "грубая оценка: ~30 комбинаций в секунду на 1 процесс, всего 4 процесса"
+            _est_procs = min(4, max(1, os.cpu_count() or 1))
+            est_sec = max(1, int(total_combos / (_est_procs * BACKTEST_COMBOS_PER_SEC_PER_PROCESS)))
+            est_note = (f"грубая оценка: ~{BACKTEST_COMBOS_PER_SEC_PER_PROCESS:g} комб/с на процесс "
+                        f"× {_est_procs} процессов (по замерам run.log)")
         print(f"  ⏱  Ориентировочно расчёт займёт ~{est_sec / 60:.0f} минут. {est_note}")
     elif total_symbols == 0:
         print(f"  ✅ Всё готово из чекпойнтов — расчёт не нужен")
@@ -2599,7 +2688,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 print(f"    {symbol_done} | {strat_name} ✓")
 
     # ── Сбор результатов ──
-    # ФАКТ посчитанных комбинаций (в отличие от total_combos — это ПЛАН задания)
+    # ФАКТ посчитанных комбинаций (total_combos — работа к пересчёту; combos_plan — вся корзина)
     combos_done_total = sum(int((it[2] if len(it) > 2 else 0) or 0) for it in results_list)
 
     all_results = list(cached_results)   # ← начинаем с кэша пропущенных
@@ -2673,6 +2762,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         append_backtest_history(
             total_elapsed, total_symbols, total_combos, len(all_results),
             combos_done=combos_done_total,
+            symbols_total=basket_symbols,
+            combos_plan=combos_plan,
             kind=('full' if force_full_recalc
                   else ('partial' if partial_recalc else 'light')),
             skipped=len(skipped_symbols),

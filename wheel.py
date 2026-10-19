@@ -17,6 +17,33 @@ def category_label(symbol: str, family: str) -> str:
     """Имя категории «символ + семейство»: 'EUR - parabolic'."""
     return f"{_ccy_base(symbol)} - {family}"
 
+
+def category_id(symbol: str, family: str) -> str:
+    """ЕДИНЫЙ ключ категории «символ + семейство»: 'USDJPYrfd_pin_bar'.
+
+    На этом ключе живут квота, зона Strategy Tree и steering_quotas.json.
+    Любое место, строящее sid, обязано звать эту функцию: иначе категория
+    молча деградирует в param_key и квоты перестают агрегироваться.
+    """
+    return f"{symbol}_{family}"
+
+
+def record_category_id(r):
+    """Унифицированный построитель sid из записи (active_state / dict).
+
+    Семейство берётся из 'type' или 'family'. Тихий фолбэк на param_key запрещён:
+    категории 'symbol_param_key' нет ни в compute_categories, ни в steering_quotas.json,
+    поэтому квота по ней не находится и лот молча схлопывается в min_lot.
+    При неизвестном семействе возвращается None — вызывающий код обязан
+    пропустить стратегию (лот не трогать), а не подставлять param_key.
+    """
+    fam = r.get('type') or r.get('family')
+    if not fam:
+        print(f"  [WARN] record_category_id: нет type/family у {r.get('symbol')}/{r.get('param_key')} — категория не определена", flush=True)
+        return None
+    return category_id(r.get('symbol', ''), fam)
+
+
 def compute_categories(trades_df, family_col='strategy_type', symbol_col='symbol',
                        pnl_col='profit_net', volume_col='volume'):
     """ЕДИНЫЙ источник категорий «символ + семейство» из окна сделок.
@@ -56,7 +83,7 @@ def compute_categories(trades_df, family_col='strategy_type', symbol_col='symbol
         volume = float(grp[volume_col].sum()) if has_vol else 0.0
         vol = float(profits.std(ddof=0)) if len(profits) > 1 else 0.0
         metrics.append({
-            'id': f"{symbol}_{fam}",
+            'id': category_id(symbol, fam),
             'label': category_label(symbol, fam),
             'family': fam,
             'symbol': symbol,
@@ -252,6 +279,7 @@ def build_metrics_from_journal(journal_df, n_last=10, family_map=None, min_trade
             axis=1)
         fam_col = 'strategy_type'
     else:
+        print(f"  [WARN] build_metrics_from_journal: нет колонки 'strategy_type' — фоллбэк на param_key (риск деградации категории)")
         df['strategy_type'] = df['param_key'].astype(str)
         fam_col = 'strategy_type'
 
@@ -538,7 +566,7 @@ def apply_tree_weighting(active, symbol_data, balance, risk_pct,
             slm = _sl_money_per_lot(r['symbol'], info, r.get('sl_points') or 0)
         except Exception:
             slm = None
-        items.append({'key': i, 'sid': f"{r['symbol']}_{r.get('type', 'stoch')}",
+        items.append({'key': i, 'sid': record_category_id(r),
                       'score': r.get('score'), 'sl_money': slm})
 
     # Защита: если нет ни одного валидного sl_money (символы не в Market Watch /

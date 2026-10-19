@@ -786,6 +786,15 @@ def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
     if journal_df is not None and JOURNAL_FILE is not None:
         record_trade_fn(trade, journal_df, JOURNAL_FILE)
     print(f"  -> [{key}] Закрыт ({reason}): profit={profit:.2f}")
+    # ── Сразу в SQLite (после каждого закрытия) ──
+    # Сделки позиции → trades.db немедленно. Fail-safe: ошибка БД не ломает торговлю.
+    # Ночной ingest остаётся страховкой (UPSERT) на случай, если выход-сделка
+    # в истории MT5 появится чуть позже момента закрытия.
+    try:
+        import trades_db
+        trades_db.record_position(s['position']['ticket'])
+    except Exception:
+        pass
     s['position'] = None
     return profit
 def _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,

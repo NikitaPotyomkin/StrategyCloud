@@ -564,6 +564,43 @@ def vacuum_into(out_path=None, path=None, verbose=True):
         return None
 
 
+def record_position(position_ticket, path=None, verbose=False):
+    """Записать сделки ОДНОЙ закрытой позиции сразу после закрытия.
+
+    Точечный pull: mt5.history_deals_get(position=ticket) → upsert (идемпотентно).
+    Ночной ingest остаётся страховкой: если на момент закрытия выход-сделка ещё
+    не видна в истории, её доберёт ближайший ingest (UPSERT, дублей не будет).
+    Fail-safe: любая ошибка → 0, торговлю не трогает.
+    """
+    if mt5 is None or not position_ticket:
+        return 0
+    try:
+        deals = mt5.history_deals_get(position=int(position_ticket)) or []
+        if not deals:
+            return 0
+        con = connect(path)
+        ensure_schema(con)
+        registry = load_registry()
+        acc = _account_dict()
+        payload = []
+        for d in deals:
+            try:
+                payload.append(_row_from_deal(d, registry, acc))
+            except Exception:
+                continue  # одна кривая сделка не роняет запись
+        if payload:
+            con.executemany(_SQL_UPSERT, payload)
+            con.commit()
+        con.close()
+        if verbose:
+            print(f"  [trades_db] record_position {int(position_ticket)}: {len(payload)} deal(ок)", flush=True)
+        return len(payload)
+    except Exception as exc:
+        if verbose:
+            print(f"  [trades_db] record_position не выполнен: {exc!r}", flush=True)
+        return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description='История сделок StrategyCloud в SQLite')
     sub = ap.add_subparsers(dest='cmd')

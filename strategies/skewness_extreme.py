@@ -2,16 +2,22 @@
 import numpy as np
 import pandas as pd
 
+# Пороги входа/выхода по умолчанию.
+# Live (strategy_engine.check_active_signals) передаёт их из param_key аргументами
+# check_entry/check_exit; бэктест — из грида SKEW_THRESHOLD_LIST.
+SKEW_ENTRY = 1.0
+SKEW_EXIT = 0.3
 
-def calc_skewness(df, window, skew_entry=1.0, skew_exit=0.3):
+
+def calc_skewness(df, window, skew_entry=SKEW_ENTRY):
     """
-    Добавляет колонку 'skewness' с коэффициентом асимметии.
+    Добавляет колонку 'skewness' с коэффициентом асимметрии.
     
     Args:
         df: DataFrame с OHLCV
         window: размер окна для расчёта
-        skew_entry: порог Skewness для входа
-        skew_exit: порог Skewness для выхода
+        skew_entry: порог входа (принимается для совместимости с контрактом
+            движка; на сам расчёт асимметрии не влияет)
     
     Returns:
         DataFrame с колонкой 'skewness'
@@ -40,12 +46,18 @@ def calc_skewness(df, window, skew_entry=1.0, skew_exit=0.3):
     return df
 
 
-def check_entry(prev_skew, curr_skew, skew_entry):
+def check_entry(prev_skew, curr_skew, skew_entry=SKEW_ENTRY, skew_exit=SKEW_EXIT):
     """
-    Вход при экстремальной асимметии.
-    
+    Вход при экстремальной асимметрии.
+
+    Args:
+        skew_entry: порог Skewness для входа (из грида/param_key)
+        skew_exit: порог выхода — принимается для совместимости с контрактом
+            движка (в проверке входа не используется)
+
     Returns:
-        'long' (отрицательная skewness → хвост влево → разворот вверх), 'short' (положительная) или None
+        'long' (отрицательная skewness → хвост влево → разворот вверх),
+        'short' (положительная) или None
     """
     # Long: был в нейтральной зоне, теперь skew < -skew_entry
     if prev_skew >= -skew_entry and curr_skew < -skew_entry:
@@ -56,13 +68,14 @@ def check_entry(prev_skew, curr_skew, skew_entry):
     return None
 
 
-def check_exit(prev_skew, curr_skew, skew_exit, direction):
+def check_exit(prev_skew, curr_skew, skew_exit=SKEW_EXIT, direction=None):
     """
-    Выход при возврате асимметии к нулю.
-    
+    Выход при возврате асимметрии к нулю.
+
     Args:
+        skew_exit: порог Skewness для выхода (из грида/param_key)
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -81,11 +94,11 @@ def backtest(df, window, skew_entry, skew_exit, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с Skewness extreme.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
-    df = calc_skewness(df, window, skew_entry, skew_exit)
+    df = calc_skewness(df, window, skew_entry)
     sl_dist = sl_points * point
     tp_dist = tp_points * point
     spread = spread_points * point

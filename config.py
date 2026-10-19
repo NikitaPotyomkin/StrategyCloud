@@ -79,48 +79,48 @@ DISPLACEMENT_RANGE = (22, 30, 4)
 # Z-score reversion
 ZSCORE_SMA_PERIOD_RANGE = (20, 50, 10)
 ZSCORE_THRESHOLD_RANGE = (1.5, 2.5, 0.5)
-ZSCORE_VOL_PERIOD_RANGE = (15, 25, 5)
+ZSCORE_VOL_PERIOD_RANGE = (15, 15, 5)    # схлопнуто: calc_zscore считает vol_ma, но вход/выход его не читают
 
 # Autocorrelation momentum
 AUTOCORR_LAG_RANGE = (1, 5, 2)
 AUTOCORR_THRESHOLD_RANGE = (0.2, 0.4, 0.1)
-AUTOCORR_VOL_PERIOD_RANGE = (15, 25, 5)
+AUTOCORR_VOL_PERIOD_RANGE = (15, 15, 5)  # схлопнуто: vol_period в calc_autocorrelation не используется
 
 # Hurst regime filter
 HURST_WINDOW_RANGE = (20, 60, 10)
 HURST_TREND_THRESHOLD_RANGE = (0.5, 0.7, 0.1)
-HURST_VOL_PERIOD_RANGE = (20, 50, 10)
+HURST_VOL_PERIOD_RANGE = (20, 20, 10)    # схлопнуто: calc_hurst не принимает vol_period
 
 # Linear Regression Channel
 LRC_PERIOD_RANGE = (20, 50, 10)
 LRC_STD_THRESHOLD_RANGE = (1.5, 2.5, 0.5)
-LRC_VOL_PERIOD_RANGE = (15, 25, 5)
+LRC_VOL_PERIOD_RANGE = (15, 15, 5)       # схлопнуто: модуль LRC vol_period не принимает
 
 # Percentile reversion
 PCT_PERIOD_RANGE = (20, 50, 10)
 PCT_LOW_RANGE = (3, 7, 2)            # -> [3, 5, 7] (было [3,5,7,8] — хвост шага 1)
 PCT_HIGH_RANGE = (93, 97, 2)         # -> [93, 95, 97] (было [92,94,96,97] — хвост шага 1)
-PCT_VOL_PERIOD_RANGE = (15, 25, 5)
+PCT_VOL_PERIOD_RANGE = (15, 15, 5)       # схлопнуто: модуль percentile vol_period не принимает
 
 # Runs Test trend
 RUNS_WINDOW_RANGE = (20, 50, 10)
 RUNS_THRESHOLD_RANGE = (1.5, 2.0, 0.2)
-RUNS_VOL_PERIOD_RANGE = (15, 25, 5)
+RUNS_VOL_PERIOD_RANGE = (15, 15, 5)      # схлопнуто: модуль runs vol_period не принимает
 
 # Cointegration pairs
 COINT_WINDOW_RANGE = (20, 60, 10)
 COINT_THRESHOLD_RANGE = (1.5, 2.5, 0.5)
-COINT_BETA_PEROID_RANGE = (20, 50, 10)
+COINT_BETA_PEROID_RANGE = (20, 20, 10)   # схлопнуто: beta_period в _backtest_coint захардкожен (0.0)
 
 # Rolling Sharpe filter
 SHARPE_WINDOW_RANGE = (20, 60, 10)
 SHARPE_THRESHOLD_RANGE = (0.3, 0.7, 0.1)
-SHARPE_VOL_PERIOD_RANGE = (15, 25, 5)
+SHARPE_VOL_PERIOD_RANGE = (15, 15, 5)    # схлопнуто: _backtest_sharpe передаёт 0.0 вместо vol_period
 
 # Skewness extreme
 SKEW_WINDOW_RANGE = (20, 50, 10)
 SKEW_THRESHOLD_RANGE = (0.8, 1.2, 0.2)
-SKEW_VOL_PERIOD_RANGE = (15, 25, 5)
+SKEW_VOL_PERIOD_RANGE = (15, 15, 5)      # схлопнуто: _backtest_skewness передаёт 0.3 вместо vol_period
 
 # Bayesian trend update
 BAYES_WINDOW_RANGE = (20, 50, 10)
@@ -130,13 +130,13 @@ BAYES_PRIOR_RANGE = (0.4, 0.6, 0.1)
 # Kurtosis spike
 KURT_WINDOW_RANGE = (20, 60, 10)
 KURT_THRESHOLD_RANGE = (3.0, 6.0, 1.0)
-KURT_VOL_PERIOD_RANGE = (15, 25, 5)
+KURT_VOL_PERIOD_RANGE = (15, 15, 5)      # схлопнуто: _backtest_kurtosis передаёт 3.0/1.0 вместо vol_period
 
 # Chi-square distribution
 CHISQ_WINDOW_RANGE = (20, 50, 10)
 CHISQ_ENTRY_RANGE = (0.03, 0.07, 0.02)
 CHISQ_EXIT_RANGE = (0.15, 0.25, 0.05)
-CHISQ_VOL_PERIOD_RANGE = (15, 25, 5)
+CHISQ_VOL_PERIOD_RANGE = (15, 15, 5)     # схлопнуто: модуль chi_square vol_period не принимает
 
 # VWAP Reversion
 VWAP_VOL_PERIOD_RANGE = (15, 25, 5)

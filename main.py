@@ -21,7 +21,10 @@ except Exception:
 from functions import terminal_on, run_full_backtest, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
-from wheel import calculate_steering_wheel_quotas, compute_categories, format_allocation_report, apply_tree_weighting
+from wheel import (
+    calculate_steering_wheel_quotas, compute_categories, format_allocation_report,
+    apply_tree_weighting, record_category_id,
+)
 from risk_manager import (
     calc_metrics, composite_score, distribute_lots, check_integration_budget,
     check_daily_loss_limit, check_equity_stop, check_margin_level, realtime_quota_recalc,
@@ -374,7 +377,15 @@ if __name__ == '__main__':
         return result
 
     sp = strategy_params
+    # Единый счёт комбинаций на 1 символ (легаси + реестр) — источник: functions.strategy_combos_per_symbol.
+    # Раньше здесь был свой литерал (9018) без 10 семейств и без батча реестра → расходился с бэктестом.
+    from functions import strategy_combos_per_symbol, STRATEGY_COMBO_LABELS
     integration_budgets_dict = {
+        STRATEGY_COMBO_LABELS.get(k, k): v
+        for k, v in strategy_combos_per_symbol(sp).items()
+    }
+    if False:  # legacy-литерал ниже (не используется); можно удалить вручную
+        _legacy_budgets = {
         'Stoch':          _combo(len(sp.k_periods), len(sp.sl_points_list), len(sp.tp_points_list)),
         'Parabolic':      _combo(len(sp.parabolic_steps), len(sp.parabolic_maxs), len(sp.sl_points_list), len(sp.tp_points_list)),
         'MA':             _combo(len(sp.ma_periods), len(sp.sl_points_list), len(sp.tp_points_list)),
@@ -603,7 +614,10 @@ if __name__ == '__main__':
                              risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
     if getattr(steering_cfg, 'tree_weighting', False):
         try:
-            apply_tree_weighting(active, symbol_data, balance, risk_cfg.max_risk_pct, risk_cfg.min_lot)
+            apply_tree_weighting(
+                active, symbol_data, balance, risk_cfg.max_risk_pct, risk_cfg.min_lot,
+                lookback_days=steering_cfg.lookback_days,
+                min_trades=steering_cfg.min_trades)
         except Exception as _tw_e:
             print(f"  [WARN] tree-weighting: {_tw_e!r}", flush=True)
 
@@ -743,7 +757,10 @@ if __name__ == '__main__':
                                          risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
                 if getattr(steering_cfg, 'tree_weighting', False):
                     try:
-                        apply_tree_weighting(active, symbol_data, balance, risk_cfg.max_risk_pct, risk_cfg.min_lot)
+                        apply_tree_weighting(
+                            active, symbol_data, balance, risk_cfg.max_risk_pct, risk_cfg.min_lot,
+                            lookback_days=steering_cfg.lookback_days,
+                            min_trades=steering_cfg.min_trades)
                     except Exception as _tw_e:
                         print(f"  [WARN] tree-weighting: {_tw_e!r}", flush=True)
                 print(f"Баланс: {balance:.0f} руб | Квота: {balance * risk_cfg.max_risk_pct:.0f} руб | "
@@ -820,38 +837,49 @@ if __name__ == '__main__':
                             _used_risk = 0.0
                             _free_keys = []
                             _n_in_cat = {}
+                            # Σ score свободных стратегий категории — доля внутри категории
+                            # считается по score бэктеста, а не поровну (решение 19.10).
+                            _score_sum_cat = {}
                             _sid_by_key = {}
                             for _k, _s in active_strategies.items():
                                 _info = symbol_data.get(_s['symbol'], {}).get('info')
                                 _m = _sl_money_per_lot(_s['symbol'], _info, _s.get('sl_points') or 0)
                                 _slm[_k] = _m
-                                _sid_by_key[_k] = f"{_s['symbol']}_{_s.get('type') or _s.get('param_key')}"
+                                _sid_by_key[_k] = record_category_id(_s)
                                 if _s['position'] is not None:
                                     _used_risk += float(_s['lot']) * _m
                                 else:
                                     _free_keys.append(_k)
                                     _n_in_cat[_sid_by_key[_k]] = _n_in_cat.get(_sid_by_key[_k], 0) + 1
+                                    _score_sum_cat[_sid_by_key[_k]] = (
+                                        _score_sum_cat.get(_sid_by_key[_k], 0.0)
+                                        + max(float(_s.get('score') or 0.0), 0.0))
                             _q_covered = sum(new_quotas.get(_sid, 0.0) for _sid in set(_sid_by_key[_k] for _k in _free_keys))
                             _budget = max(0.0, risk_quota - _used_risk)
                             changed = 0
                             for key, s in active_strategies.items():
                                 if s['position'] is not None:
                                     continue
-                                sid = f"{s['symbol']}_{s.get('type') or s.get('param_key')}"
+                                sid = record_category_id(s)
                                 q_new = new_quotas.get(sid)
                                 if q_new is None:
                                     continue
                                 _m = _slm.get(key, 0.0)
                                 if _m <= 0 or _budget <= 0 or _q_covered <= 0:
                                     continue
-                                new_lot = _budget * (q_new / _q_covered) / max(1, _n_in_cat.get(sid, 1)) / _m
+                                # Доля внутри категории — по score бэктеста (как в
+                                # tree_weighted_lots); поровну — только если score категории 0.
+                                _sc = max(float(s.get('score') or 0.0), 0.0)
+                                _scat = _score_sum_cat.get(sid, 0.0)
+                                _share = (_sc / _scat) if _scat > 0 else (1.0 / max(1, _n_in_cat.get(sid, 1)))
+                                new_lot = _budget * (q_new / _q_covered) * _share / _m
                                 _info = symbol_data.get(s['symbol'], {}).get('info')
                                 _vol = _normalize_volume(new_lot, _info)
                                 new_lot = max(_vol if _vol is not None else risk_cfg.min_lot,
                                               risk_cfg.min_lot)
                                 if abs(new_lot - s['lot']) > 1e-9:
                                     print(f"  [STEERING] {key}: lot {s['lot']:.3f} -> {new_lot:.3f} "
-                                          f"(q {q_new:.3f}, риск {s['lot'] * _m:,.0f} -> "
+                                          f"(q {q_new:.3f}, score {_sc:.2f}/{_scat:.2f}, риск {s['lot'] * _m:,.0f} -> "
                                           f"{new_lot * _m:,.0f} ₽)")
                                     s['lot'] = new_lot
                                     changed += 1

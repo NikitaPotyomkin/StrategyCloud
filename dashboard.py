@@ -433,8 +433,9 @@ with tab_daily:
         _cur_q, _new_q = {}, {}
         try:
             _df_a = pd.DataFrame(_act)
+            # active_state.json уже содержит 'type' — фолбэк на param_key ломает категорию
             if 'type' not in _df_a.columns:
-                _df_a['type'] = _df_a['param_key'].astype(str)
+                _df_a['type'] = 'unknown'
             _df_a['sid'] = _df_a['symbol'].astype(str) + '_' + _df_a['type'].astype(str)
             _df_cat = _df_a.groupby(['sid'], as_index=False)['lot'].sum()
             _tot_lot = _df_a['lot'].sum()
@@ -463,7 +464,7 @@ with tab_daily:
         rows = []
         for s in _act:
             sym = s.get('symbol')
-            typ = s.get('type') or s.get('param_key')
+            typ = s.get('type') or s.get('family') or 'unknown'  # param_key НЕ фолбэк: категория неизвестна
             pk = s.get('param_key')
             sid = f"{sym}_{typ}"
             cat = _cat_by_id.get(sid, {})
@@ -558,13 +559,13 @@ with tab_daily:
 
         # ── Шапка-сводка ──
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Strategies in plan", len(df_plan))
+        c1.metric("Стратегий в плане", len(df_plan))
         c2.metric("Planned volume", f"{df_plan['lot'].sum():.2f} lots")
         c3.metric("Risk budget", f"{_quota:,.0f} RUB")
         _used = df_plan['risk ₽'].dropna().sum()
         c4.metric("Used risk", f"{_used:,.0f} RUB" if _used > 0 else "—")
         st.caption(f"План обновлён: {_plan_meta.get('updated') or '—'} · баланс "
-                   f"{(float(_plan_meta.get('balance') or 0)):,.0f} RUB · стратегий в плане: "
+                   f"{(float(_plan_meta.get('balance') or 0)):,.0f} RUB · стратегий: "
                    f"{_plan_meta.get('total') or len(df_plan)}")
         _warn = int((df_plan['flag'] != '').sum())
         if _warn:
@@ -684,10 +685,13 @@ with tab_daily:
                 _disp[_c] = _disp[_c].apply(
                     lambda v, _n=_c: '—' if (v is None or v != v)
                     else (str(int(v)) if _n == 'Tree trades' else f"{v:,.0f}".replace(',', ' ')))
-        _cols = [c for c in ['symbol', 'family', 'category', 'param_key', 'SL', 'TP',
+        _cols = [c for c in ['symbol', 'family', 'param_key', 'category', 'SL', 'TP',
                              'lot', 'risk ₽', 'BT score', 'BT PF', 'BT WR %', 'BT trades',
                              'Tree PnL ₽', 'Tree ₽/лот', 'Tree trades',
                              'Q cur %', 'Q new %', 'flag'] if c in df_plan.columns]
+        # Добавляем sid для отладки (показывает, что Tree PnL и квота — по категории)
+        if 'sid' not in _cols:
+            _cols.insert(4, 'sid')
         st.dataframe(
             _disp[_cols].sort_values('lot', ascending=False).reset_index(drop=True),
             use_container_width=True, hide_index=True,
@@ -1539,8 +1543,9 @@ with tab_steering:
             label_map = {s['id']: s.get('label', s['id']) for s in strategies_data}
             if data_alloc.get('active_strategies'):
                 df_active = pd.DataFrame(data_alloc['active_strategies'])
+                # active_state.json уже содержит 'type' — фолбэк на param_key ломает категорию
                 if 'type' not in df_active.columns:
-                    df_active['type'] = df_active['param_key'].astype(str)
+                    df_active['type'] = 'unknown'
                 df_active['sid'] = (
                     df_active['symbol'].astype(str) + '_' + df_active['type'].astype(str)
                 )
@@ -1558,7 +1563,7 @@ with tab_steering:
                 n = len(strategies_data)
                 current_quotas = {s['id']: 1.0 / n for s in strategies_data}
 
-            # min_trades для скоринга берётся из config.SteeringParams (сейчас 2)
+            # min_trades для скоринга берётся из config.SteeringParams.min_trades (не хардкодить здесь)
 
             new_quotas = calculate_steering_wheel_quotas(
                 strategies_data,
@@ -1807,7 +1812,7 @@ with tab_backtest:
         if 'kind' not in df_bt.columns:
             df_bt['kind'] = 'full'
         df_bt['ts'] = pd.to_datetime(df_bt.get('ts'), errors='coerce')
-        for _bt_c in ['elapsed_sec', 'combos', 'combos_done', 'symbols', 'results', 'skipped']:
+        for _bt_c in ['elapsed_sec', 'combos', 'combos_done', 'combos_plan', 'symbols', 'symbols_total', 'results', 'skipped']:
             if _bt_c not in df_bt.columns:
                 df_bt[_bt_c] = np.nan
             df_bt[_bt_c] = pd.to_numeric(df_bt[_bt_c], errors='coerce')
@@ -1819,10 +1824,11 @@ with tab_backtest:
 
         df_bt['minutes'] = df_bt['elapsed_sec'] / 60.0
         df_bt['day'] = df_bt['ts'].dt.normalize()
-        # Факт = реально посчитанные комбинации ('combos_done'), план = 'combos'.
-        # Для старых записей без 'combos_done' факт приравниваем к плану.
+        # Факт = реально посчитанные комбинации ('combos_done'), план = 'combos_plan' (вся корзина).
+        # Для старых записей без новых полей — фолбэк на 'combos'.
         df_bt['done'] = df_bt['combos_done'].where(df_bt['combos_done'].notna(), df_bt['combos'])
-        df_bt['skipped'] = df_bt['skipped'].fillna(0)
+        df_bt['plan'] = df_bt['combos_plan'].where(df_bt['combos_plan'].notna(), df_bt['combos'])
+        # 'skipped'/'symbols_total'/'combos_plan' без fillna: отсутствие данных = «—», а не 0
 
         _bt_ts_min = df_bt['ts'].min()
         _bt_ts_max = df_bt['ts'].max()
@@ -1843,9 +1849,11 @@ with tab_backtest:
         with _m2:
             st.metric("Последний, мин", f"{_bt_last_min:.1f}",
                       delta=f"{_bt_last_min - _bt_avg_all:+.1f}")
-            _l_done = int(_bt_last['done']) if pd.notna(_bt_last.get('done')) else 0
-            _l_plan = int(_bt_last['combos']) if pd.notna(_bt_last['combos']) else 0
-            st.caption(f"последний прогон: считано {_l_done} / план {_l_plan} комб.")
+            _l_done = _bt_last.get('done')
+            _l_plan = _bt_last.get('plan')
+            _l_done_s = f"{int(_l_done):,}".replace(',', ' ') if pd.notna(_l_done) else '—'
+            _l_plan_s = f"{int(_l_plan):,}".replace(',', ' ') if pd.notna(_l_plan) else '—'
+            st.caption(f"последний прогон: считано {_l_done_s} / план {_l_plan_s} комб.")
         with _m3:
             st.metric("Средний полный, мин",
                       f"{_bt_full['minutes'].mean():.1f}" if len(_bt_full) else "—")
@@ -1911,21 +1919,24 @@ with tab_backtest:
 
         # ── Таблица-лог ──
         _bt_log = df_bt.sort_values('ts', ascending=False).copy()
-        st.caption("«Считано» — реально посчитанные комбинации (факт). «План» — сколько комбинаций было в задании. "
-                   "«Символы» — сколько символов пересчитано заново. «Пропущ.» — символов взято из чекпоинтов. "
+        st.caption("«Считано» — реально посчитанные комбинации (факт). «План» — вся корзина комбинаций (пересчёт + чекпойнты). "
+                   "«Символы» — сколько символов пересчитано заново. «В корзине» — символов всего (пересчёт + чекпойнты). «Пропущ.» — символов взято из чекпоинтов. "
                    "«В пуле» — сколько стратегий в пуле результатов после мержа/дедупа. "
                    "Считано=0 при «Лайт» = расчёт не требовался (всё взято из чекпоинтов).")
         _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%Y-%m-%d %H:%M')
         _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный', 'partial': 'Частичный', 'light': 'Лайт'}).fillna(_bt_log['kind'])
         _bt_log['Длительность (мин)'] = _bt_log['minutes'].round(1)
-        _bt_log['Считано'] = _bt_log['done'].apply(lambda v: int(v) if pd.notna(v) else 0)
-        _bt_log['План'] = _bt_log['combos'].apply(lambda v: int(v) if pd.notna(v) else 0)
-        _bt_log['Символы'] = _bt_log['symbols'].apply(lambda v: int(v) if pd.notna(v) else 0)
-        _bt_log['Пропущ.'] = _bt_log['skipped'].apply(lambda v: int(v) if pd.notna(v) else 0)
-        _bt_log['В пуле'] = _bt_log['results'].apply(lambda v: int(v) if pd.notna(v) else 0)
+        def _bt_fmt(v):
+            return int(v) if pd.notna(v) else '—'
+        _bt_log['Считано'] = _bt_log['done'].apply(_bt_fmt)
+        _bt_log['План'] = _bt_log['plan'].apply(_bt_fmt)
+        _bt_log['Символы'] = _bt_log['symbols'].apply(_bt_fmt)
+        _bt_log['В корзине'] = _bt_log['symbols_total'].apply(_bt_fmt)
+        _bt_log['Пропущ.'] = _bt_log['skipped'].apply(_bt_fmt)
+        _bt_log['В пуле'] = _bt_log['results'].apply(_bt_fmt)
 
         st.dataframe(
             _bt_log[['Дата/время', 'Тип', 'Длительность (мин)',
-                     'Считано', 'План', 'Символы', 'Пропущ.', 'В пуле']],
+                     'Считано', 'План', 'Символы', 'В корзине', 'Пропущ.', 'В пуле']],
             use_container_width=True, hide_index=True,
         )
