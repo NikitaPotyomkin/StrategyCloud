@@ -236,7 +236,16 @@ def is_suspect_backtest(r):
         wr = float(r.get('win_rate') or 0.0)
     except (TypeError, ValueError):
         return False
-    return n > 0 and (pf >= SUSPECT_PF or wr >= 100.0)
+    if n <= 0:
+        return False
+    # 3-й признак: max_drawdown == 0 при живых сделках. Кривая закрытых сделок
+    # ни разу не опускалась — либо убытков нет вовсе, либо метрика противоречит
+    # PF (logreg: PF 6.12 при maxDD 0.0). С >= 5 сделок это уже не совпадение.
+    try:
+        mdd = float(r.get('max_drawdown') or 0.0)
+    except (TypeError, ValueError):
+        mdd = 0.0
+    return pf >= SUSPECT_PF or wr >= 100.0 or (mdd <= 0.0 and n >= 5)
 
 
 def apply_probation_cap(ranked_results, cap=SUSPECT_SCORE_CAP, verbose=True):

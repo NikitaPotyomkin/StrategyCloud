@@ -462,6 +462,26 @@ ENABLED_BATCH = (
     'triple_ema', 'adx_di', 'ultimate', 'cmo', 'donchian_vol',
     'hull', 'dualema', 'macdline', 'vwmacd', 'wmaema', 'hhll', 'momthr',
     'dpo', 'ppo', 'vortex', 'elder', 'cmf', 'adline', 'heikin', 'tsi',
+    # ── Батч 2 (19.10): +20 стратегий = +60 параметризаций на символ ──
+    # Итого в батче 40 стратегий → 120 параметризаций × 3 SL × 3 TP = 1080
+    # бэктестов на символ (× 7 символов = 7560 за ночь, вдвое к батчу 1).
+    # Порядок = порядок записи в REGISTRY: MA/тренд → Bollinger/сжатие →
+    # каналы/осцилляторы → корреляции → объём.
+    'ema2050', 'ribbon', 'macdema', 'adxbreak', 'bbwalk', 'bbrsi', 'bbmacd', 'adxbb',
+    'roc', 'forceidx', 'stochma', 'stochrsiema', 'cciext', 'pearson', 'partcorr',
+    'dyncorr', 'corrbreak', 'covbreak', 'obvslope', 'obvema',
+    # ── Батч 3 (19.10): остальные 41 стратегия — реестр включён на 100% ──
+    # Итого 81 стратегия ≈ 240 параметризаций на символ → 240 × 3 SL × 3 TP =
+    # 2160 бэктестов на символ → × 7 символов ≈ 15120 за ночь (×4 к батчу 1).
+    # Если ночное окно перестанет влезать — резать здесь, а не в цикле бэктеста.
+    'voltrend', 'volspike', 'macdrsi', 'emapara',
+    'ichimoku_tk', 'ichimoku_cloud', 'ichimoku_chikou', 'ichimoku_full',
+    'fibonacci', 'atrrev', 'monthlyhl', 'prevweek', 'monpivot', 'weekpivot',
+    'pivotbounce', 'asianbreak', 'firstbar', 'gapfill', 'dowmom', 'rangedaily',
+    'doji', 'dbltopbot', 'srbounce', 'threecrows', 'tweezer', 'keltatr',
+    'strema', 'coinflip', 'smoothedma', 'spearman', 'keltbreak', 'atrchan',
+    'rsiob', 'stochastic_rsi', 'mfi', 'macdzero', 'rsieema', 'donchadx',
+    'insidebar', 'tworsi', 'willstoch',
 )
 
 
