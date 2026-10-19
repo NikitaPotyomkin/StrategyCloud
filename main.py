@@ -352,6 +352,190 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
     print("═" * 66 + "\n")
 
 
+# ═══ ШТУРВАЛ (ОБЯЗАТЕЛЬНЫЙ шаг пайплайна) ═════════════════════════════════════
+def run_steering_wheel(active_strategies, active, symbol_data, balance,
+                       risk_cfg, steering_cfg, journal_dir=None, tag=''):
+    """Пересчёт квот по категориям symbol+family и перекладка лотов по реальным сделкам.
+
+    ОБЯЗАТЕЛЬНЫЙ шаг: вызывается при старте, сразу после ночного пересчёта и далее
+    каждые steering_cfg.interval_sec — независимо от того, был ли бэктест.
+    Раньше блок жил внутри ветки бэктеста и внутри `if metrics:`, поэтому штурвал
+    молча пропускался, если в окне не было сделок. Теперь любая причина пропуска
+    печатается в лог: нет метрик → берём сохранённые квоты; нет квоты у категории,
+    sl_money<=0, бюджет<=0, открытая позиция — считаются отдельно.
+
+    Возвращает dict со счётчиками (changed/synced/no_quota/bad_sl/no_budget/
+    with_position/unchanged/categories/source). Исключения не пробрасываются:
+    пайплайн не должен падать из-за штурвала, но ошибка печатается как [ERROR].
+    """
+    journal_dir = journal_dir or JOURNAL_DIR
+    st = {'changed': 0, 'synced': 0, 'no_quota': 0, 'bad_sl': 0, 'no_budget': 0,
+          'with_position': 0, 'unchanged': 0, 'categories': 0, 'source': 'none'}
+    _tag = f" {tag}" if tag else ''
+    print(f"\n  [STEERING] Старт{_tag}: {len(active_strategies or {})} стратегий, "
+          f"окно {steering_cfg.lookback_days} дн., баланс {balance:,.0f} ₽", flush=True)
+
+    try:
+        quotas_path = os.path.join(journal_dir, steering_cfg.quotas_file)
+        prev_quotas = {}
+        if os.path.exists(quotas_path):
+            try:
+                with open(quotas_path, 'r', encoding='utf-8') as _qf:
+                    prev_quotas = json.load(_qf) or {}
+            except Exception as _qe:
+                print(f"  [ERROR] Штурвал: {quotas_path} не читается ({_qe!r}) — "
+                      f"считаем квоты с нуля", flush=True)
+                prev_quotas = {}
+
+        # ── Источник: Strategy Tree (окно lookback_days), категории symbol+family ──
+        # Та же выборка сделок, что в дереве/штурвале дэшборда: числа совпадают 1-в-1.
+        metrics = []
+        try:
+            _alloc = get_dashboard_data(steering_cfg.lookback_days, manage_connection=False)
+            _adeals = _alloc.get('trades_df') if _alloc else None
+            metrics = compute_categories(_adeals) if _adeals is not None else []
+        except Exception as _de:
+            print(f"  [ERROR] Штурвал: Strategy Tree недоступен ({_de!r}) — "
+                  f"работаем на сохранённых квотах", flush=True)
+
+        new_quotas = dict(prev_quotas)
+        if metrics:
+            new_quotas = calculate_steering_wheel_quotas(
+                metrics,
+                prev_quotas,
+                {
+                    'alpha': steering_cfg.alpha,
+                    'min_q': steering_cfg.min_q,
+                    'max_q': steering_cfg.max_q,
+                    'score_mode': steering_cfg.score_mode,
+                    'min_trades': steering_cfg.min_trades,
+                    'gamma': getattr(steering_cfg, 'gamma', 1.5),
+                    'score_volume_prior': getattr(steering_cfg, 'score_volume_prior', 0.0),
+                }
+            )
+            with open(quotas_path, 'w', encoding='utf-8') as _qf:
+                json.dump(new_quotas, _qf, ensure_ascii=False, indent=2)
+
+            # ── Принт: Strategy Tree → перекладка объёма ──
+            print(f"\n  [WHEEL] Пересчёт квот (score_mode={steering_cfg.score_mode}) "
+                  f"(окно {steering_cfg.lookback_days} дн.).", flush=True)
+            for _line in format_allocation_report(
+                    metrics, prev_quotas, new_quotas,
+                    steering_cfg.lookback_days,
+                    min_trades=steering_cfg.min_trades,
+                    score_mode=steering_cfg.score_mode):
+                print(_line, flush=True)
+            st['source'] = 'tree'
+        else:
+            print(f"  [WHEEL] Свежих сделок за {steering_cfg.lookback_days} дн. нет — "
+                  f"перекладка по сохранённым квотам: {len(new_quotas)} категорий "
+                  f"({steering_cfg.quotas_file})", flush=True)
+            st['source'] = 'saved'
+
+        st['categories'] = len(new_quotas)
+        if not new_quotas:
+            print("  [ERROR] Штурвал: квот нет вообще (нет ни метрик Strategy Tree, ни файла "
+                  f"{steering_cfg.quotas_file}) — лоты не тронуты", flush=True)
+            return st
+
+        # ── Перекладка лотов: АБСОЛЮТНЫЙ целевой лот ──
+        #     lot_i = (budget × q_i / Σq_covered) × (score_i / Σscore_категории) / sl_money_i
+        # budget — свободная часть риск-квоты (за вычетом риска открытых позиций),
+        # поэтому Σ(lot×sl_money) ≤ quota по построению.
+        risk_quota = balance * risk_cfg.max_risk_pct
+        _slm = {}
+        _used_risk = 0.0
+        _free_keys = []
+        _n_in_cat = {}
+        _score_sum_cat = {}
+        _sid_by_key = {}
+        for _k, _s in active_strategies.items():
+            _info = symbol_data.get(_s['symbol'], {}).get('info')
+            _m = _sl_money_per_lot(_s['symbol'], _info, _s.get('sl_points') or 0)
+            _slm[_k] = _m
+            _sid_by_key[_k] = record_category_id(_s)
+            if _s['position'] is not None:
+                _used_risk += float(_s['lot']) * _m
+                st['with_position'] += 1
+            else:
+                _free_keys.append(_k)
+                _sid = _sid_by_key[_k]
+                _n_in_cat[_sid] = _n_in_cat.get(_sid, 0) + 1
+                _score_sum_cat[_sid] = (_score_sum_cat.get(_sid, 0.0)
+                                        + max(float(_s.get('score') or 0.0), 0.0))
+
+        _free_sids = {_sid_by_key[_k] for _k in _free_keys} - {None}
+        _q_covered = sum(new_quotas.get(_sid, 0.0) for _sid in _free_sids)
+        _budget = max(0.0, risk_quota - _used_risk)
+        print(f"  [STEERING] Свободных {len(_free_keys)} | в позициях {st['with_position']} | "
+              f"риск позиций {_used_risk:,.0f} ₽ | бюджет {_budget:,.0f} ₽ из "
+              f"{risk_quota:,.0f} ₽ | Σq свободных {_q_covered:.3f}", flush=True)
+        if _budget <= 0:
+            print("  [ERROR] Штурвал: свободного бюджета нет (квота занята открытыми "
+                  "позициями) — лоты не переложены", flush=True)
+            st['no_budget'] = len(_free_keys)
+            return st
+
+        for key, s in active_strategies.items():
+            if s['position'] is not None:
+                continue
+            sid = record_category_id(s)
+            q_new = new_quotas.get(sid) if sid else None
+            if q_new is None:
+                st['no_quota'] += 1
+                print(f"  [WARN] Штурвал: {key} — нет квоты для категории {sid!r}, "
+                      f"лот не тронут", flush=True)
+                continue
+            _m = _slm.get(key, 0.0)
+            if _m <= 0 or _q_covered <= 0:
+                st['bad_sl'] += 1
+                print(f"  [WARN] Штурвал: {key} — sl_money={_m:,.2f} или Σq={_q_covered:.3f}, "
+                      f"лот не тронут", flush=True)
+                continue
+            # Доля внутри категории — по score бэктеста (как в tree_weighted_lots);
+            # поровну — только если Σscore категории = 0.
+            _sc = max(float(s.get('score') or 0.0), 0.0)
+            _scat = _score_sum_cat.get(sid, 0.0)
+            _share = (_sc / _scat) if _scat > 0 else (1.0 / max(1, _n_in_cat.get(sid, 1)))
+            new_lot = _budget * (q_new / _q_covered) * _share / _m
+            _info = symbol_data.get(s['symbol'], {}).get('info')
+            _vol = _normalize_volume(new_lot, _info)
+            new_lot = max(_vol if _vol is not None else risk_cfg.min_lot, risk_cfg.min_lot)
+            if abs(new_lot - s['lot']) > 1e-9:
+                print(f"  [STEERING] {key}: lot {s['lot']:.3f} -> {new_lot:.3f} "
+                      f"(q {q_new:.3f}, score {_sc:.2f}/{_scat:.2f}, риск "
+                      f"{s['lot'] * _m:,.0f} -> {new_lot * _m:,.0f} ₽)")
+                s['lot'] = new_lot
+                st['changed'] += 1
+            else:
+                st['unchanged'] += 1
+
+        # ── Унификация источника лота ──
+        # Штурвал правит active_strategies — это и есть бой. Переносим итог обратно
+        # в план (active), чтобы active_state.json/дэшборд показывали реальную
+        # перекладку, а не дотюненный tree-weighting лот. После этого active == active_strategies.
+        _lot_by_key = {_k: _v.get('lot') for _k, _v in active_strategies.items()}
+        for _r in (active or []):
+            _rk = strategy_key(_r['symbol'], _r['param_key'],
+                               _r.get('type', 'stoch'),
+                               _r.get('parabolic_max'))
+            _nl = _lot_by_key.get(_rk)
+            if _nl is not None and abs(float(_nl) - float(_r.get('lot') or 0)) > 1e-9:
+                _r['lot'] = _nl
+                st['synced'] += 1
+
+        print(f"  [STEERING] Итог: категорий {st['categories']} (источник: {st['source']}), "
+              f"переложено {st['changed']}, без изменений {st['unchanged']}, "
+              f"синхронизировано в план {st['synced']} | пропуски: в позиции "
+              f"{st['with_position']}, нет квоты {st['no_quota']}, sl_money/Σq "
+              f"{st['bad_sl']}, бюджет {st['no_budget']}", flush=True)
+        return st
+
+    except Exception as se:
+        print(f"  [ERROR] Штурвал: {se!r} — квоты/лоты не изменены", flush=True)
+        return st
+
+
 if __name__ == '__main__':
     start_time = datetime.now()
     print(f"🚀 ЗАПУСК СИСТЕМЫ: {start_time.strftime('%H:%M:%S')}")
@@ -641,6 +825,18 @@ if __name__ == '__main__':
 
     write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
+    # ── Штурвал при старте: обязательный шаг, не ждём ночного бэктеста ──
+    if steering_cfg.enabled:
+        _wheel_st = run_steering_wheel(
+            active_strategies, active, symbol_data, balance,
+            risk_cfg, steering_cfg, journal_dir=JOURNAL_DIR, tag='(старт)')
+        if _wheel_st.get('changed') or _wheel_st.get('synced'):
+            write_active_state(active, active_strategies, balance,
+                               risk_cfg.max_risk_pct, JOURNAL_DIR)
+    else:
+        print("  [WHEEL] ОТКЛЮЧЁН: steering_cfg.enabled=False — квоты/лоты не пересчитываются.",
+              flush=True)
+
     print(f"\nЗапуск цикла. Ctrl+F2 для остановки.\n")
     if now.weekday() >= 5 and not weekend_full_due:
         print("⏳ Выходной: полный пересчёт уже был выполнен ранее — повторно НЕ считаем.\n"
@@ -652,6 +848,9 @@ if __name__ == '__main__':
     last_full_backtest_date = datetime.now().date()
     last_mode_check = datetime.now().date()
     last_state_write = datetime.now()
+    # Штурвал: время последнего пересчёта квот/перекладки лотов (не зависит от бэктеста).
+    # На старте штурвал уже отработал выше → отсчёт interval_sec идёт от текущего момента.
+    last_steering = datetime.now() if steering_cfg.enabled else datetime.min
     last_journal_write = datetime.now()
     journal_month = datetime.now().strftime('%Y%m')
     last_ticks_time = datetime.now()
@@ -772,7 +971,7 @@ if __name__ == '__main__':
                                        strategy_key, assign_magic, bt_cfg.magic_base, len(active))
 
                 # ── Штурвал: плавное перераспределение квот по реальным сделкам ──
-                if steering_cfg.enabled:
+                if False:  # DEPRECATED: логика вынесена в run_steering_wheel() (вызывается безусловно ниже)
                     try:
                         # ── Источник: Strategy Tree (окно аллокации lookback_days) ──
                         # Та же выборка сделок, что и в дереве/штурвале дэшборда:
@@ -914,6 +1113,9 @@ if __name__ == '__main__':
                 yesterday = now.date() - timedelta(days=1)
                 report = generate_daily_report(yesterday)
 
+                # Свежий бэктест → штурвал обязан отработать в этом же цикле
+                # (сбрасываем таймер, чтобы периодический вызов ниже не ждал interval_sec).
+                last_steering = datetime.min
                 print(f"  Готово: {len(all_results)} комбинаций, {len(active)} активных")
 
                 # ── История сделок в SQLite (trades_db): шаг 1 — локальная запись ──
@@ -923,6 +1125,28 @@ if __name__ == '__main__':
                     trades_db.ingest(days=3)
                 except Exception as _tdb_err:
                     print(f"  [WARN] trades_db: {_tdb_err!r}", flush=True)
+
+            # ── Штурвал: ОБЯЗАТЕЛЬНЫЙ пересчёт, НЕ привязан к ночному бэктесту ──
+            # Раньше блок жил внутри `if should_run_backtest:` → если ночной прогон
+            # был пропущен/упал, штурвал не работал вовсе. Теперь он отрабатывает
+            # при старте, сразу после ночного пересчёта (там сбрасывается
+            # last_steering) и далее каждые steering_cfg.interval_sec.
+            _steering_every = int(getattr(steering_cfg, 'interval_sec', 3600) or 3600)
+            if not steering_cfg.enabled:
+                if last_steering != datetime.min:
+                    print("  [WHEEL] ОТКЛЮЧЁН: steering_cfg.enabled=False — квоты/лоты "
+                          "не пересчитываются (это единственная разрешённая причина).", flush=True)
+                    last_steering = datetime.min
+            elif (now - last_steering).total_seconds() >= _steering_every:
+                last_steering = now
+                _wheel_st = run_steering_wheel(
+                    active_strategies, active, symbol_data, balance,
+                    risk_cfg, steering_cfg, journal_dir=JOURNAL_DIR,
+                    tag=f'(плановый, каждые {_steering_every // 60} мин)')
+                if _wheel_st.get('changed') or _wheel_st.get('synced'):
+                    write_active_state(active, active_strategies, balance,
+                                       risk_cfg.max_risk_pct, JOURNAL_DIR)
+                    last_state_write = now
 
             # Периодическое обновление баланса (раз в минуту)
             if (now - last_balance_refresh).total_seconds() >= 60:
