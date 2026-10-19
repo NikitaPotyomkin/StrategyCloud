@@ -1613,7 +1613,6 @@ with tab_steering:
                     'kill_min_trades': getattr(steering_cfg, 'kill_min_trades', 3),
                     'quota_rub': 0.0,  # рублёвой квоты в превью нет → kill только по параметрам
                 }
-                }
             )
 
             # Сборка DataFrame по ВСЕМ категориям (активные + сделковые) — «символ + семейство»
