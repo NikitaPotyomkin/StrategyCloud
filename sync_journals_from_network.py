@@ -186,11 +186,6 @@ def main():
         _print_local_state(project_dir / name)
     print()
 
-    if not args.yes:
-        response = input("  Продолжить? (y/n): ").strip().lower()
-        if response != 'y':
-            print("  Отменено.")
-            return
 
     print()
     print("  Копирование...")

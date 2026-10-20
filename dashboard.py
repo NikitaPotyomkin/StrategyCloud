@@ -202,6 +202,72 @@ def plotly_dark_layout(fig, height=400):
     return fig
 
 
+# ── Карточки метрик и выходные ──
+_CARD_FONT = "'SF Mono', 'Cascadia Code', 'Consolas', monospace"
+
+
+def metric_card(label, value, color=None, sub=None):
+    """Карточка метрики с единой геометрией (замена st.metric в Overview).
+
+    Нативные st.metric в соседних колонках дают разную высоту блока, из-за чего
+    подписи встают на разной линии: «P&L Today» уезжал ниже «Balance» и
+    «Forecast P&L». Здесь разметка у всех карточек одинаковая (padding, кегль,
+    min-height), поэтому подписи выровнены по одной линии.
+    """
+    color = color or COL_TEXT
+    sub_html = (
+        f"<div style='font-size:0.75rem;color:{COL_MUTED};margin-top:0.2rem;'>{sub}</div>"
+        if sub else ''
+    )
+    st.markdown(
+        "<div style='padding:0;min-height:4.4rem;'>"
+        f"<div style='font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;"
+        f"color:{COL_MUTED};margin-bottom:0.3rem;'>{label}</div>"
+        f"<div style='font-size:1.5rem;font-weight:600;font-family:{_CARD_FONT};"
+        f"color:{color};line-height:1.2;'>{value}</div>"
+        f"{sub_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def hide_weekend_gaps(fig, saturday_only=True):
+    """Убирает пустые выходные с временных осей (Plotly rangebreaks).
+
+    FX не торгуется в субботу, поэтому между пятницей и понедельником на осях
+    были широкие пустые полосы. saturday_only=True — скрываем только субботу,
+    воскресный вечерний бар остаётся (часть брокеров открывает рынок
+    ~22:00-24:00 server time). saturday_only=False — выходные целиком
+    (пятница 23:00 -> понедельник 00:00). Данные не фильтруются — скрывается
+    только область оси, поэтому метрики и агрегаты не меняются.
+    """
+    bounds = ['sat', 'sun'] if saturday_only else ['sat', 'mon']
+    fig.update_xaxes(rangebreaks=[dict(bounds=bounds)])
+    return fig
+
+
+def filter_weekends(df, ts_col='timestamp'):
+    """Убирает строки за субботу(5) и воскресенье(6) из DataFrame.
+
+    Используется перед построением графиков чтобы не было пустых полос.
+    """
+    ts = pd.to_datetime(df[ts_col])
+    weekday = ts.dt.weekday
+    return df[weekday < 5].copy()
+
+
+def drop_weekends(df, col='timestamp'):
+    """Выбрасывает субботу и воскресенье из датафрейма графиков Overview.
+
+    FX в выходные не торгуется, поэтому на осях оставались широкие пустые
+    полосы (пятница -> понедельник). Здесь выходные именно удаляются из данных,
+    а не обнуляются, и графики строятся без разрывов.
+    """
+    if df is None or len(df) == 0 or col not in df.columns:
+        return df
+    days = pd.to_datetime(df[col]).dt.weekday
+    return df[days < 5].copy()
+
+
 # ── Заголовок ──
 col_title, col_btn = st.columns([6, 1])
 with col_title:
@@ -218,6 +284,13 @@ with st.sidebar:
     days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, ALLOC_DAYS)
     st.caption(f"Только для просмотра. Strategy Tree / Wheel всегда считают по фикс. периоду аллокации: {ALLOC_DAYS} дн. (config).")
     st.caption("Auto-refresh: 30s")
+    # Метка сборки: какой именно файл и какой версии исполняет Streamlit прямо сейчас.
+    # Нужна, чтобы отличить «правка ещё не подхватилась» от «запущена другая копия кода».
+    try:
+        _build_mtime = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime('%Y-%m-%d %H:%M:%S')
+    except OSError:
+        _build_mtime = '?'
+    st.caption(f"build: {os.path.abspath(__file__)} @ {_build_mtime}")
 
 # ── Загрузка данных ──
 data = load_dashboard_data(days_back)
@@ -252,7 +325,7 @@ with tab_overview:
     updated = datetime.fromisoformat(data['updated']).strftime('%H:%M:%S')
 
     with col1:
-        st.metric("Balance", f"{data['balance']:,.0f} RUB")
+        metric_card("Balance", f"{data['balance']:,.0f} RUB")
     with col2:
         today_pnl = 0.0
         if not data['trades_df'].empty:
@@ -265,7 +338,7 @@ with tab_overview:
             today_pnl = today_trades['profit_net'].sum()
         pnl_color = COL_GREEN_LT if today_pnl >= 0 else COL_RED_LT
         st.markdown(f"""
-        <div style="padding: 1rem 0;">
+        <div style="padding: 0;min-height:4.4rem;">
             <div style="font-size: 0.75rem; text-transform: uppercase;
                         letter-spacing: 0.08em; color: {COL_MUTED};
                         margin-bottom: 0.3rem;">P&L Today</div>
@@ -283,10 +356,10 @@ with tab_overview:
             if pd.notna(daily_avg):
                 forecast_pnl = daily_avg * 21
         if forecast_pnl is not None:
-            st.metric("Forecast P&L (30D)", f"{forecast_pnl:,.1f} RUB",
-                      delta_color="normal")
+            metric_card("Forecast P&L (30D)", f"{forecast_pnl:,.1f} RUB",
+                        sub=None)
         else:
-            st.metric("Forecast P&L (30D)", "—")
+            metric_card("Forecast P&L (30D)", "—")
 
     st.caption(f"Last update: {updated} | Trades ({days_back}D): {data['total_trades']}")
 
@@ -296,41 +369,56 @@ with tab_overview:
 
         with col_vol:
             st.markdown("### Daily Volume")
-            df_daily = data['trades_df'].copy()
-            df_daily['date'] = df_daily['timestamp'].dt.date
+            df_daily = filter_weekends(data['trades_df'])
+            df_daily['date'] = df_daily['timestamp'].dt.strftime('%Y-%m-%d')
             daily_stats = df_daily.groupby('date').agg(
                 volume=('volume', 'sum'),
                 trades=('profit_net', 'count'),
             ).reset_index()
 
+            # Градиент по величине объёма: мелкие дни прозрачнее, крупные — плотнее.
+            _vmax = float(daily_stats['volume'].max() or 0.0)
+            _vmax = _vmax if _vmax > 0 else 1.0
+            _vol_colors = [
+                f'rgba(63, 185, 80, {0.30 + 0.60 * (v / _vmax):.3f})'
+                for v in daily_stats['volume']
+            ]
             fig_vol = go.Figure()
             fig_vol.add_trace(go.Bar(
                 x=daily_stats['date'], y=daily_stats['volume'],
-                name='Volume (lots)', marker_color=COL_BLUE, opacity=0.7,
+                name='Volume (lots)',
+                marker=dict(color=_vol_colors,
+                            line=dict(width=0.5, color='rgba(63, 185, 80, 0.30)')),
+                opacity=1.0,
             ))
             fig_vol.add_trace(go.Scatter(
                 x=daily_stats['date'], y=daily_stats['trades'],
                 name='Trades', mode='lines+markers',
-                line=dict(color=COL_AMBER, width=1.5),
+                line=dict(color=COL_BLUE, width=1.8, shape='spline', smoothing=1.0),
+                marker=dict(size=4, color=COL_BLUE, line=dict(width=0)),
                 yaxis='y2',
             ))
             fig_vol.update_layout(
-                yaxis=dict(title='Volume', side='left'),
-                yaxis2=dict(title='Trades', side='right', overlaying='y'),
+                # Категориальная ось: иначе Plotly распознаёт строки дат как date-ось
+                # и резервирует пустые места под выброшенные выходные (щели между барами).
+                xaxis=dict(type='category'),
+                yaxis=dict(title='Volume (lots)', side='left', tickformat=',.2f', rangemode='tozero'),
+                yaxis2=dict(title='Trades (n)', side='right', overlaying='y',
+                            tickformat='d', showgrid=False, rangemode='tozero'),
                 legend=dict(orientation='h', y=1.12, x=0),
-                bargap=0.15,
+                bargap=0,
             )
             st.plotly_chart(plotly_dark_layout(fig_vol, 260), use_container_width=True,
                            key="overview_daily_volume")
 
         with col_eq:
             st.markdown("### Equity Curve")
-            df_eq = data['trades_df'].sort_values('timestamp').copy()
+            df_eq = filter_weekends(data['trades_df']).sort_values('timestamp').reset_index(drop=True); df_eq['seq'] = list(range(len(df_eq)))
             df_eq['cum_pnl'] = df_eq['profit_net'].cumsum()
 
             fig_eq = go.Figure()
             fig_eq.add_trace(go.Scatter(
-                x=df_eq['timestamp'], y=df_eq['cum_pnl'],
+                x=df_eq['seq'], y=df_eq['cum_pnl'], customdata=df_eq['timestamp'],
                 mode='lines', line=dict(color=COL_GREEN_LT, width=1.5),
                 fill='tozeroy',
                 fillgradient=dict(
@@ -342,22 +430,22 @@ with tab_overview:
                         [1, 'rgba(46, 160, 67, 0.25)'],
                     ],
                 ),
-                hovertemplate='Time: %{x}<br>Cum P&L: %{y:,.1f}<extra></extra>',
+                hovertemplate='Time: %{customdata}<br>Cum P&L: %{y:,.1f}<extra></extra>',
                 name='',
             ))
             fig_eq.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
-            st.plotly_chart(plotly_dark_layout(fig_eq, 260), use_container_width=True,
+            st.plotly_chart(plotly_dark_layout(fig_eq, 260).update_xaxes(showticklabels=False, title=''), use_container_width=True,
                            key="overview_equity_curve")
 
     # ── Trade scatter ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         st.markdown("### Trade Scatter")
-        df_sorted = data['trades_df'].sort_values('timestamp').copy()
+        df_sorted = filter_weekends(data['trades_df']).sort_values('timestamp').reset_index(drop=True); df_sorted['seq'] = list(range(len(df_sorted)))
         colors = [COL_GREEN_LT if x >= 0 else COL_RED_LT for x in df_sorted['profit_net']]
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=df_sorted['timestamp'], y=df_sorted['profit_net'],
+            x=df_sorted['seq'], y=df_sorted['profit_net'],
             mode='markers',
             marker=dict(size=6, color=colors, line=dict(width=0.5, color=COL_PANEL),
                         symbol='diamond'),
@@ -367,8 +455,23 @@ with tab_overview:
             hoverinfo='text', name='',
         ))
         fig.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+
+        # ── Линия тренда (МНК-регрессия P&L по номеру сделки) ──
+        # Наклон = средний дрейф результата сделки: >0 — эдж улучшается, <0 — деградирует.
+        if len(df_sorted) >= 3:
+            _x = df_sorted['seq'].to_numpy(dtype=float)
+            _y = df_sorted['profit_net'].to_numpy(dtype=float)
+            _slope, _intercept = np.polyfit(_x, _y, 1)
+            _fit = _slope * _x + _intercept
+            fig.add_trace(go.Scatter(
+                x=df_sorted['seq'], y=_fit,
+                mode='lines',
+                line=dict(color=COL_AMBER, width=2, dash='dash'),
+                name=f"Тренд: {_slope:+.2f} ₽/сделку",
+                hoverinfo='skip',
+            ))
         fig.update_layout(hovermode='x unified')
-        st.plotly_chart(plotly_dark_layout(fig, 380), use_container_width=True,
+        st.plotly_chart(plotly_dark_layout(fig, 380).update_xaxes(showticklabels=False, title=''), use_container_width=True,
                        key="overview_trade_scatter")
 
 
@@ -655,7 +758,7 @@ with tab_daily:
 
 
         # ── Гистограмма: план объёма по стратегиям ──
-        if PLOTLY_AVAILABLE and not df_plan.empty:
+        if False:  # СКРЫТО (запрос): «План объёма по стратегиям (лот на стратегию)» убран из Daily Plan
             _bar = df_plan[df_plan['lot'] > 0].sort_values('lot', ascending=True).reset_index(drop=True)
             _bar['label'] = _bar.apply(lambda r: f"{r['category']} {r['param_key']}", axis=1)
             _bar['color'] = _bar['Tree PnL ₽'].apply(
@@ -703,6 +806,8 @@ with tab_daily:
             """  # end disabled pie code
 
         # ── Полная таблица плана ──
+        # СКРЫТО (запрос): «Полный план (по стратегиям)» убран из Daily Plan.
+        _unused_full_plan = """
         st.markdown("#### Полный план (по стратегиям)")
         # Tree-метрика NaN = «нет сделок в окне аллокации» (не ноль!). В таблице — «—».
         _n_no_tree = int(df_plan['Tree PnL ₽'].isna().sum()) if 'Tree PnL ₽' in df_plan.columns else 0
@@ -737,6 +842,7 @@ with tab_daily:
                 'Q cur %': st.column_config.NumberColumn(format="%.1f"),
                 'Q new %': st.column_config.NumberColumn(format="%.1f"),
             })
+        """  # СКРЫТО (запрос): «Полный план (по стратегиям)» убран из Daily Plan
 
 
 with tab_risk:
@@ -840,7 +946,7 @@ with tab_risk:
             ))
             fig_risk.update_layout(
                 xaxis_title='Max risk by SL (RUB)',
-                bargap=0.15,
+                bargap=0,
             )
             st.plotly_chart(plotly_dark_layout(fig_risk, max(200, len(df_risk) * 30 + 60)),
                            use_container_width=True, key="risk_by_symbol")
