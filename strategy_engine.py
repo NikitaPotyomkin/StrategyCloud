@@ -166,6 +166,33 @@ def deduplicate_results(results, min_trades=10, min_score=1.0):
               and r.get('score', 0) >= min_score]
     unique.sort(key=lambda r: r['score'], reverse=True)
 
+    # --- Фильтр «плата за риск» ---
+    # Отсекаем комбинации, где риск в разы больше цели (SL=1200 / TP=300):
+    # 1) номинальное TP/SL ниже MIN_TP_SL_RATIO;
+    # 2) фактическая плата бэктеста payoff = PF·(1−WR)/WR ниже MIN_PAYOFF.
+    try:
+        from config import MIN_TP_SL_RATIO, MIN_PAYOFF
+    except Exception:
+        MIN_TP_SL_RATIO, MIN_PAYOFF = 0.5, 0.6
+
+    def _passes_risk_reward(r):
+        _sl = float(r.get('sl_points') or 0.0)
+        _tp = float(r.get('tp_points') or 0.0)
+        if _sl > 0 and _tp > 0 and _tp < MIN_TP_SL_RATIO * _sl:
+            return False  # цель меньше половины риска — не берём
+        _wr = float(r.get('win_rate') or 0.0) / 100.0
+        if _wr <= 0.0:
+            return False
+        _pf = float(r.get('profit_factor') or 0.0)
+        return _pf * (1.0 - _wr) / _wr >= MIN_PAYOFF
+
+    _n_before_rr = len(unique)
+    unique = [r for r in unique if _passes_risk_reward(r)]
+    _n_dropped_rr = _n_before_rr - len(unique)
+    if _n_dropped_rr:
+        print(f"  [RR-FILTER] отсеяно {_n_dropped_rr} из {_n_before_rr} комбинаций: "
+              f"TP/SL < {MIN_TP_SL_RATIO} или payoff < {MIN_PAYOFF}", flush=True)
+
     # --- Лимит по символу: 30% от того, что осталось ---
     n_symbols = len(set(r['symbol'] for r in unique))
     max_per_symbol = max(1, math.ceil(len(unique) * 0.3 / max(n_symbols, 1))) #хардкод

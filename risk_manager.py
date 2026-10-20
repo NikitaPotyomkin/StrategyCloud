@@ -278,7 +278,8 @@ def apply_probation_cap(ranked_results, cap=SUSPECT_SCORE_CAP, verbose=True):
 # ═══ РАСПРЕДЕЛЕНИЕ ЛОТОВ ═══
 
 def distribute_lots(ranked_results, symbol_data, balance,
-                    max_risk_pct=0.05, min_lot=0.01, min_score=0.8, max_per_type=None):
+                    max_risk_pct=0.05, min_lot=0.01, min_score=0.8, max_per_type=None,
+                    per_trade_risk_pct=0.005):
     """Распределяет лоты пропорционально score в рамках квоты риска.
 
     Использует _normalize_volume для округления лотов по шагу брокера
@@ -375,6 +376,23 @@ def distribute_lots(ranked_results, symbol_data, balance,
             else:
                 scaled = max(math.floor(scaled_raw * 100) / 100, min_lot)
             x['lot'] = scaled
+
+    # ── Кап риска на ОДНУ сделку (₽) ──
+    # Широкий SL (1200 пт) + большая квота раньше давали «-20k одной сделкой».
+    # Лот режется до balance*per_trade_risk_pct / sl_money; ниже min_lot не опускаем
+    # (min_lot — брокерский минимум: его риск проверяется отдельно на уровне квоты).
+    if per_trade_risk_pct and per_trade_risk_pct > 0:
+        _per_trade_cap = balance * per_trade_risk_pct
+        for x in active:
+            if x['lot'] * x['sl_money'] <= _per_trade_cap:
+                continue
+            info = symbol_data.get(x['symbol'], {}).get('info')
+            _raw = _per_trade_cap / x['sl_money']
+            if info is not None:
+                _v = _normalize_volume(_raw, info)
+                x['lot'] = max(_v, min_lot) if _v is not None else min_lot
+            else:
+                x['lot'] = max(math.floor(_raw * 100) / 100, min_lot)
 
     # Финальная фильтрация: оставляем только стратегии с lot >= min_lot
     active = [x for x in active if x['lot'] >= min_lot]

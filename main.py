@@ -826,7 +826,7 @@ if __name__ == '__main__':
     print(f"После дедупликации: {len(deduped_results)} комбинаций")
 
     active = distribute_lots(deduped_results, symbol_data, balance,
-                             risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
+                             risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type, risk_cfg.per_trade_risk_pct)
     if getattr(steering_cfg, 'tree_weighting', False):
         try:
             apply_tree_weighting(
@@ -984,7 +984,7 @@ if __name__ == '__main__':
                 balance = acc.balance if acc else 1_000_000
                 deduped_results = all_results
                 active = distribute_lots(deduped_results, symbol_data, balance,
-                                         risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type)
+                                         risk_cfg.max_risk_pct, risk_cfg.min_lot, risk_cfg.min_score, risk_cfg.max_per_type, risk_cfg.per_trade_risk_pct)
                 if getattr(steering_cfg, 'tree_weighting', False):
                     try:
                         apply_tree_weighting(
