@@ -344,7 +344,7 @@ with tab_overview:
                         margin-bottom: 0.3rem;">P&L Today</div>
             <div style="font-size: 1.5rem; font-weight: 600;
                         font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-                        color: {pnl_color};">{today_pnl:+,.1f} RUB</div>
+                        color: {pnl_color};">{int(today_pnl):,} RUB</div>
         </div>
         """, unsafe_allow_html=True)
     with col3:
@@ -356,7 +356,7 @@ with tab_overview:
             if pd.notna(daily_avg):
                 forecast_pnl = daily_avg * 21
         if forecast_pnl is not None:
-            metric_card("Forecast P&L (30D)", f"{forecast_pnl:,.1f} RUB",
+            metric_card("Forecast P&L (30D)", f"{int(forecast_pnl):,} RUB",
                         sub=None)
         else:
             metric_card("Forecast P&L (30D)", "—")
