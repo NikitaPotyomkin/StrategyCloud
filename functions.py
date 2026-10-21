@@ -34,8 +34,12 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
         'kind': 'full' if kind == 'full' else 'light',
         'elapsed_sec': round(float(elapsed_sec), 1),
         'combos': int(combos),
+        'combos_done': int(combos),  # факт = план (для лайт/partial тоже)
+        'combos_plan': int(combos),
         'symbols': int(symbols),
+        'symbols_total': int(symbols),  # все символы
         'results': int(results),
+        'skipped': 0,  # ничего не пропущено
         'is_night_run': bool(is_night_run),
         **extra,
     }

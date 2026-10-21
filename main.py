@@ -889,7 +889,11 @@ if __name__ == '__main__':
     last_balance_refresh = datetime.now()
     last_quota_recalc = datetime.now()
     last_equity_sample = datetime.min          # сэмплер floating → trades_db (daily_peak/equity_samples)
+    last_trades_ingest = datetime.min          # добор сделок в trades_db (deals) в течение дня
     EQUITY_SAMPLE_INTERVAL_SEC = 300           # свой интервал сэмплинга, независим от poll_interval
+    # Добор сделок в trades_db (deals): закрытия пишутся сразу (strategy_engine._record_close →
+    # trades_db.record_position), но страховочный ingest нужен и днём, а не только в 3:00.
+    TRADES_DB_INGEST_INTERVAL_SEC = 900        # 15 мин
     def _net_cashflow(since_dt):
         """Чистый внешний кэшфлоу (пополнения − выводы) в рублях с момента since_dt.
         Нужен, чтобы гварды риска не принимали депо/вывод за торговый убыток."""
@@ -924,6 +928,17 @@ if __name__ == '__main__':
                     trades_db.sample_positions(interval=EQUITY_SAMPLE_INTERVAL_SEC)
                 except Exception as _smp_err:
                     print(f"  [WARN] trades_db.sample: {_smp_err!r}", flush=True)
+
+            # ── Добор сделок в trades_db (deals) — не ждём ночного ingest ──
+            # Закрытия и так пишутся сразу (_record_close → trades_db.record_position),
+            # но это страховка от пропусков (рестарт, закрытие «не нашей» рукой).
+            if (now - last_trades_ingest).total_seconds() >= TRADES_DB_INGEST_INTERVAL_SEC:
+                last_trades_ingest = now
+                try:
+                    import trades_db
+                    trades_db.ingest(days=1, verbose=False)
+                except Exception as _ing_err:
+                    print(f"  [WARN] trades_db.ingest: {_ing_err!r}", flush=True)
 
             # Смена дня
             if now.date() != last_mode_check:
