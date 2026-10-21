@@ -379,8 +379,22 @@ class BacktestConfig:
     force_recalc: bool = False
     full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни лайт, выходные полный)
     auto_weekend_recalc: bool = True  # True = автоматический ПОЛНЫЙ пересчёт в выходные (Сб/Вс); False = только ручной запуск
-    full_recalc_min_gap_days: int = 5  # мин. интервал (дней) между АВТО-ПОЛНЫМИ пересчётами: если полный был в последние N дней — повторно не запускаем
+    full_recalc_daily: bool = False  # True = обновлять ВСЮ корзину каждую ночь (окно выходных не учитывается).
+    # ВРЕМЕННО False (22.10): полный пересчёт — синхронный вызов в боевом цикле и держит его
+    # закрытым 150–230 мин. Включаем обратно, когда пересчёт будет вынесен в фоновый job
+    # (backtest_job.BacktestJob + приём результата в цикле), то есть когда блокировки не будет.
+    async_backtest: bool = True   # True = ПОЛНЫЙ пересчёт считается в фоновом потоке: боевой
+                                  # цикл продолжает жить (бары, сигналы, трейлинг, аварийные
+                                  # защиты), результат применяется по завершении job.
+                                  # False = старое поведение (синхронный проход внутри цикла).
+    full_recalc_only_flat: bool = False  # True = откладывать ПОЛНЫЙ пересчёт, пока есть открытые позиции
+    full_recalc_min_gap_days: int = 1  # мин. интервал (дней) между АВТО-ПОЛНЫМИ пересчётами: если полный был в последние N дней — повторно не запускаем
     night_backtest_hour: int = 3
+    incremental_bars: bool = False  # True = ночью пересчитывать по НОВЫМ барам (инкремент):
+                                    # семейства exact/exp — по срезу с warm-up, cum/model —
+                                    # полным окном. Включать только после parity (strategies/_warmup.py).
+    incremental_warmup_bars: int = 0  # 0 = авто (по классу памяти семейства); иначе фикс. warm-up в барах
+    full_refresh_window_end_hour: int = 10  # окно для ПОЛНОГО обновления в будни: night_backtest_hour..этот час (в выходные — всегда)
     connection_timeout_sec: int = 300
     connection_warn_every_sec: int = 600
     journal_save_every_sec: int = 300

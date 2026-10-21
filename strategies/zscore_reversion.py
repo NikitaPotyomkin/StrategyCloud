@@ -99,7 +99,8 @@ def backtest(df, sma_period, z_threshold, sl_points, tp_points, point,
     profit = 0.0
     n_trades = 0
     position = None
-    trade_profits = []
+    from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
+    trade_profits = TradeList()
 
     for i in range(1, len(df)):
         prev_z = df['zscore'].iloc[i - 1]
@@ -146,6 +147,9 @@ def backtest(df, sma_period, z_threshold, sl_points, tp_points, point,
                 profit += p
                 n_trades += 1
                 trade_profits.append(p)
+                _row = trade_row(df.index, _entry_i, i, position["direction"], p)
+                if _row is not None:
+                    trade_profits.times.append(_row)
                 position = None
 
         # ── Проверка входа ──
@@ -153,10 +157,12 @@ def backtest(df, sma_period, z_threshold, sl_points, tp_points, point,
             # Вход при возврате к SMA после экстремума
             if prev_z > z_threshold and curr_z < z_threshold:
                 entry = curr_close + spread
+                _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
             elif prev_z < -z_threshold and curr_z > -z_threshold:
                 entry = curr_close - spread
+                _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
 

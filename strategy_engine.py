@@ -411,6 +411,26 @@ def _deregister_strategy(magic, symbol, deactivated_at):
 
 
 # ═══ СИНХРОНИЗАЦИЯ АКТИВНЫХ СТРАТЕГИЙ ═══
+# Ранг может пересобираться в середине торговой сессии: фоновый (async) ПОЛНЫЙ
+# пересчёт завершается, например, в 06:00, и sync_active_strategies закрывает всё,
+# что выпало из топа. Свежую позицию, открытую по сигналу, в такой момент не
+# закрываем — сигнал и ранг это разные горизонты, а выход «по факту пересчёта»
+# съедает спред и комиссию впустую. Ждём минимум один H1-бар.
+RERANK_MIN_HOLD_SEC = 3600
+
+
+def _position_age_sec(s, now):
+    """Возраст открытой позиции в секундах (None — если время входа неизвестно)."""
+    pos = s.get('position') or {}
+    t = pos.get('entry_time')
+    if not isinstance(t, datetime.datetime):
+        return None
+    try:
+        return max(0.0, (now - t).total_seconds())
+    except TypeError:
+        return None
+
+
 def sync_active_strategies(top_results, now, symbol_data, active_strategies, close_order_fn,
                            get_deal_exit_price_fn, record_trade_fn, strategy_key_fn,
                            assign_magic_fn, MAGIC_BASE, TOP_N):
@@ -429,6 +449,13 @@ def sync_active_strategies(top_results, now, symbol_data, active_strategies, clo
     for key in to_close:
         s = active_strategies[key]
         if s['position'] is not None:
+            # Гард от rerank-чурна: ранг пересобирается и в середине сессии (фоновый
+            # пересчёт), поэтому свежую позицию не закрываем «по факту пересчёта».
+            _age = _position_age_sec(s, now)
+            if _age is not None and _age < RERANK_MIN_HOLD_SEC:
+                print(f"  -> [{key}] rerank: позиция держится {_age / 60:.0f} мин < "
+                      f"{RERANK_MIN_HOLD_SEC / 60:.0f} мин — не закрываю (отработает по SL/TP)")
+                continue
             exit_price = close_order_fn(s['symbol'], s['position']['ticket'],
                                         s['position']['direction'], s['magic'], symbol_data)
             if exit_price is not None:

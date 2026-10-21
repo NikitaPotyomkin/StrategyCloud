@@ -128,6 +128,15 @@ def strategy_combos_per_symbol(sp):
     return m
 
 
+# ═══ Чекпойнт: формат результата ═══
+# v1 — только агрегаты комбинации (n_trades, win_rate, profit_factor, score).
+# v2 — плюс поле 'trades': журнал сделок [[entry_epoch, exit_epoch, dir, profit], ...].
+#      Он и есть основа инкремента по новым барам: агрегаты окно не сдвигают (см.
+#      trade_log.py). Файлы v1 читаются как раньше, но по ним инкремент невозможен —
+#      символ один раз пересчитывается полностью, дальше пишется v2.
+CHECKPOINT_VERSION = 2
+
+
 def _checkpoint_dir():
     """Путь к папке чекпойнтов."""
     base = os.path.dirname(os.path.abspath(__file__))
@@ -163,6 +172,7 @@ def save_checkpoint(symbol, results, last_bar_time=None, families=None):
         'n_results': len(results),
         'last_bar_time': last_bar_time,
         'families': families,
+        'version': CHECKPOINT_VERSION,
         'results': results
     }
     with open(path, 'w', encoding='utf-8') as f:
@@ -653,6 +663,26 @@ def _run_symbol_safe(args):
 
 def _backtest_symbol(args):
     """Бэктест одного символа (для multiprocessing)."""
+    # ── Инкремент по новым барам (Шаг 2): два прохода в ОДНОМ воркере ──
+    # run_full_backtest кладёт метаданные инкремента последним элементом args (dict).
+    # Разворачиваем их в два рекурсивных прохода: (1) срез [warm-up .. now] для семейств
+    # exact/exp, (2) полное окно для cum/model. Тело ниже не меняется — оно просто
+    # вызывается дважды с разными df и фильтром семейств (_FamilyFilter). Каждый проход
+    # пишет свой (неполный) чекпойнт; финальный мерж журналов и полный save делает
+    # run_full_backtest (шаг «Мерж ИНКРЕМЕНТАЛЬНОГО пересчёта»).
+    _inc_meta = args[-1] if (isinstance(args, tuple) and len(args) > 1) else None
+    if isinstance(_inc_meta, dict) and _inc_meta.get('inc_families'):
+        _base = list(args[:-1])
+        _a1 = list(_base)
+        _a1[2] = _inc_meta['df_slice']
+        _a1[-1] = set(_inc_meta['inc_families'])
+        _r1 = _backtest_symbol(tuple(_a1))
+        _a2 = list(_base)
+        _a2[-1] = set(_inc_meta['full_families'])
+        _r2 = _backtest_symbol(tuple(_a2))
+        return (_r1[0], list(_r1[1]) + list(_r2[1]),
+                int(_r1[2]) + int(_r2[2]), _r1[3],
+                list(_r1[4]) + list(_r2[4]))
     (symbol_idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
 
      PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
@@ -687,7 +717,7 @@ def _backtest_symbol(args):
      MORNING_STAR_BODY_RATIO_LIST,
      BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
 
-     family_fp, recalc_families) = args
+     family_fp, recalc_families, *_extra) = args
 
     # Инкрементальный пересчёт: считаем только указанные семейства.
     if recalc_families is not None:
@@ -805,10 +835,21 @@ def _backtest_symbol(args):
     combos_done = 0
     completed_strategies = []
 
+    # Чекпойнт v2: журналы сделок в порядке вызовов бэктеста (см. _safe_backtest ниже).
+    # Нужны для инкремента по новым барам: из агрегатов окно не сдвинуть.
+    _trade_logs = []
+
     def _safe_backtest(strategy_name, bt_fn, *args, **kwargs):
         nonlocal combos_done
         try:
-            return bt_fn(*args, **kwargs)
+            out = bt_fn(*args, **kwargs)
+            # v2: профиты могут прийти как TradeList — тогда времена сделок лежат
+            # в .times. Обычный list → журнала нет, комбинация остаётся «полный расчёт».
+            try:
+                _trade_logs.append(getattr(out[2], 'times', None) if len(out) > 2 else None)
+            except Exception:
+                _trade_logs.append(None)
+            return out
         except Exception as e:
             print(f"  [ERROR] {symbol} | {strategy_name}: {e}", flush=True)
             return 0, 0, []
@@ -1952,10 +1993,55 @@ def _backtest_symbol(args):
         completed_strategies.append(_e['label'])
         _strategy_map[_key] = len(_e['grid']) * len(SL_POINTS_LIST) * len(TP_POINTS_LIST)
 
+    # ── Чекпойнт v2: привязать журналы сделок к комбинациям ──
+    # Пары «результат ↔ журнал» выравниваются по порядку вызовов бэктеста: каждая
+    # семья в product(...) добавляет ровно один результат на один вызов. Если длины
+    # разошлись — журналы НЕ пишем (WARN): символ останется на полном расчёте, но
+    # ничего не сломается и не разъедется молча.
+    if _trade_logs and len(_trade_logs) == len(results):
+        _attached = 0
+        for _r, _t in zip(results, _trade_logs):
+            if _t is not None:
+                _r['trades'] = _t
+                _attached += 1
+        print(f"  ✔ Чекпойнт v2: журналы сделок записаны для {_attached}/{len(results)} комб.",
+              flush=True)
+    elif _trade_logs:
+        print(f"  [WARN] {symbol}: журналов {len(_trade_logs)} ≠ результатов {len(results)} — "
+              f"пишем чекпойнт БЕЗ сделок (инкремент для символа отключён)", flush=True)
+
     save_checkpoint(symbol, results, last_bar_time=last_bar_time, families=family_fp)
 
     return symbol, results, combos_done, active_combos, completed_strategies
 
+
+
+def backtest_worker_count(backtest_config):
+    """Число процессов пересчёта.
+
+    В фоновом режиме (config.async_backtest) пересчёт живёт рядом с боевым циклом и
+    терминалом, поэтому одно ядро оставляем циклу: опрос тиков и торговые вызовы не
+    должны ждать CPU. Без фонового режима — как раньше (до 4 процессов).
+    """
+    cpu = max(1, os.cpu_count() or 1)
+    reserve = 1 if getattr(backtest_config, 'async_backtest', False) else 0
+    return min(4, max(1, cpu - reserve))
+
+
+def _worker_init():
+    """Инициализатор воркера пула пересчёта: BELOW_NORMAL приоритет процесса.
+
+    Воркеры считают 150–230 мин подряд; при обычном приоритете они отбирают CPU у
+    главного цикла и терминала. Понижение приоритета (Windows) снимает это без
+    потери скорости пересчёта: свободные ядра воркеры по-прежнему занимают полностью.
+    """
+    try:
+        import ctypes
+        BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass  # не Windows / нет прав — считаем как обычно
 
 
 def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
@@ -2337,11 +2423,78 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         else:
             print(f"\n  🌙 нет кэша прошлого прогона — считаем ВСЕ стратегии заново")
 
+    # ── Планирование ИНКРЕМЕНТА по новым барам (Шаг 2) ──
+    # Ничего не считает: решает, применим ли инкремент к символу, и готовит срез.
+    # Возвращает метаданные для _backtest_symbol либо None (тогда символ идёт как
+    # раньше — из кэша / полным окном). Включается флагом config.incremental_bars и
+    # только после parity-проверки (strategies/_warmup.py).
+    def _plan_incremental(symbol, cached, cached_bar_time, current_bar_time, df, _family_fp, cfg):
+        if not getattr(cfg, 'incremental_bars', False):
+            return None
+        try:
+            import trade_log as _tl
+            from strategies._warmup import warmup_bars, can_use_incremental
+        except Exception as _e:
+            print(f"  [WARN] инкремент недоступен: {_e}", flush=True)
+            return None
+        if not cached or df is None or df.empty:
+            return None
+        # Бар кэша в индексе текущего df → сколько НОВЫХ баров появилось.
+        try:
+            _cached_ts = datetime.datetime.fromisoformat(cached_bar_time)
+            _cached_epoch = int(_cached_ts.timestamp())
+            _pos = int(df.index.get_loc(_cached_ts))
+        except (TypeError, ValueError, KeyError):
+            return None
+        bars_new = len(df) - 1 - _pos
+        if bars_new <= 0:
+            return None
+        # Журналы v2 по типам семейств: есть у ВСЕХ комбинаций семейства?
+        _by_type = {}
+        for _r in cached:
+            _by_type.setdefault(_r.get('type', 'stoch'), []).append(_r)
+        _ck_dir = _checkpoint_dir()
+        _win = BACKTEST_DAYS * 24
+        _w_override = int(getattr(cfg, 'incremental_warmup_bars', 0) or 0)
+        inc_families, full_families, max_w = set(), set(), 0
+        for _fam, _rows in _by_type.items():
+            _capable = bool(_rows) and all(
+                ('trades' in _r and isinstance(_r.get('trades'), list)) for _r in _rows)
+            if not (_capable and can_use_incremental(_ck_dir, _fam, None, 0, _win)):
+                full_families.add(_fam)
+                continue
+            _w = _w_override or int(warmup_bars(_fam, None, 0, _win) or 0)
+            if _w <= 0:
+                full_families.add(_fam)
+                continue
+            inc_families.add(_fam)
+            max_w = max(max_w, _w)
+        # Нужны ОБА набора: полный набор — ещё и контрольная точка, что окно считается
+        # целиком (семейства cum/model инкременту не подлежат по определению).
+        if not inc_families or not full_families:
+            return None
+        _slice_bars = max_w + bars_new
+        if _slice_bars >= _win:
+            return None    # срез не короче полного окна — выигрыша нет
+        _last_epoch = int(df.index[-1].timestamp())
+        return {
+            'cached': cached,
+            'cached_bar_epoch': _cached_epoch,
+            'window_start': _last_epoch - _win * 3600,
+            'inc_families': inc_families,
+            'full_families': full_families,
+            'df_slice': df.iloc[-_slice_bars:],
+            'bars_new': bars_new,
+            'warmup_bars': max_w,
+            'slice_bars': _slice_bars,
+        }
+
     # ═══ ЗАГРУЗКА ЧЕКПОЙНТОВ ═══
     existing_checkpoints = list_checkpoints()
     skipped_symbols = {}
     incomplete_symbols = []   # символы с НЕПОЛНЫМ чекпойнтом (меньше комбинаций, чем ожидается)
     partial_recalc = {}
+    incremental_recalc = {}   # символ -> метаданные инкремента по новым барам (см. _plan_incremental)
     reuse_stale = []
     cached_results = []
 
@@ -2406,10 +2559,22 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         else:
             # Данные изменились после ночного пересчёта
             if not recalc_set:
-                # Конфиг не менялся — переиспользуем кэш (инкремент для новых баров)
+                # Конфиг не менялся: сперва пробуем ИНКРЕМЕНТ по новым барам. Если он
+                # применим, символ уходит в incremental_recalc и НЕ попадает ни в skipped
+                # (кэш), ни в partial (пересчёт по семействам).
+                _inc_plan = _plan_incremental(symbol, cached, cached_bar_time,
+                                              current_bar_time, symbol_data[symbol]['df_h1'],
+                                              family_fp, backtest_config)
+                if _inc_plan is not None:
+                    incremental_recalc[symbol] = _inc_plan
+                    continue
+                # Инкремент выключен/неприменим — переиспользуем кэш как есть
                 cached_results.extend(cached)
                 skipped_symbols[symbol] = len(cached)
                 reuse_stale.append(symbol)
+                print(f"  ℹ {symbol}: кэш рассчитан на баре {cached_bar_time}, "
+                      f"сейчас {current_bar_time} — по новым барам не пересчитываем "
+                      f"(полный проход — ночью, фоновым job)", flush=True)
             else:
                 # Конфиг изменился + данные изменились — частичный пересчёт
                 partial_recalc[symbol] = (cached, recalc_set)
@@ -2523,7 +2688,9 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
 
             BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
-            family_fp, partial_recalc.get(symbol, (None, None))[1]
+            family_fp, partial_recalc.get(symbol, (None, None))[1],
+            ({_k: _v for _k, _v in incremental_recalc[symbol].items() if _k != 'cached'}
+             if symbol in incremental_recalc else None)
         ))
 
     total_combos = combos_per_symbol * total_symbols          # работа в этом прогоне (к пересчёту)
@@ -2645,7 +2812,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             est_sec = max(1, int(last_run['elapsed_sec'] * (total_combos / max(1, last_run['combos']))))
             est_note = f"по прошлому прогону ({last_run['elapsed_sec']:.0f}с на {last_run['combos']} комб.)"
         else:
-            _est_procs = min(4, max(1, os.cpu_count() or 1))
+            _est_procs = backtest_worker_count(backtest_config)
             est_sec = max(1, int(total_combos / (_est_procs * BACKTEST_COMBOS_PER_SEC_PER_PROCESS)))
             est_note = (f"грубая оценка: ~{BACKTEST_COMBOS_PER_SEC_PER_PROCESS:g} комб/с на процесс "
                         f"× {_est_procs} процессов (по замерам run.log)")
@@ -2655,7 +2822,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     print(f"{'═' * 60}")
 
     # ── Запуск бэктеста ──
-    n_processes = min(4, max(1, os.cpu_count() or 1))
+    n_processes = backtest_worker_count(backtest_config)
     use_multiprocessing = len(symbol_args) > 1
 
     results_list = []
@@ -2664,7 +2831,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     if use_multiprocessing:
         print(f"\n  Multiprocessing: {n_processes} процессов\n")
         import multiprocessing as mp
-        with mp.Pool(processes=n_processes) as pool:
+        with mp.Pool(processes=n_processes, initializer=_worker_init) as pool:
             for item in pool.imap_unordered(_run_symbol_safe, symbol_args):
                 results_list.append(item)
                 done += 1
@@ -2701,6 +2868,60 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         symbol, results, combos_done, active_combos, completed_strategies = item
         new_by_symbol.setdefault(symbol, []).extend(results)
 
+    # ── Мерж ИНКРЕМЕНТАЛЬНОГО пересчёта (новые бары) ──
+    # Воркер посчитал: семейства inc — на срезе, full — полным окном. Журналы inc
+    # склеиваем с журналами кэша (trade_log.merge_incremental), метрики пересчитываем
+    # ИЗ ПРОФИТОВ (агрегаты окно не сдвигают), чекпойнт сохраняем ПОЛНЫЙ.
+    if incremental_recalc:
+        from strategy_engine import calc_metrics as _calc_m, composite_score as _comp_s
+        import trade_log as _tl
+        for symbol, meta in incremental_recalc.items():
+            cached = meta['cached']
+            inc_fams = meta['inc_families']
+            _by_key = {}
+            for _r in new_by_symbol.get(symbol, []):
+                _by_key[(_r.get('type', 'stoch'), _r.get('param_key'), _r.get('parabolic_max'),
+                         _r.get('sl_points'), _r.get('tp_points'))] = _r
+            _merged = []
+            _upd = 0
+            for r0 in cached:
+                _key = (r0.get('type', 'stoch'), r0.get('param_key'),
+                        r0.get('parabolic_max'), r0.get('sl_points'), r0.get('tp_points'))
+                r1 = _by_key.get(_key)
+                if r0.get('type', 'stoch') not in inc_fams:
+                    _merged.append(r1 if r1 is not None else r0)   # семейство полного прохода
+                    continue
+                if r1 is None:
+                    _merged.append(r0)                             # страховка: нет новой версии
+                    continue
+                _tr = _tl.merge_incremental(r0.get('trades'), r1.get('trades'),
+                                            meta['cached_bar_epoch'], meta['window_start'])
+                _pr = _tl.profits(_tr)
+                _m = _calc_m(_pr)
+                r1 = dict(r1)
+                r1['trades'] = _tr
+                r1['profit'] = round(sum(_pr), 2)
+                r1['n_trades'] = len(_pr)
+                r1['profit_factor'] = _m['profit_factor']
+                r1['max_drawdown'] = _m['max_drawdown']
+                r1['win_rate'] = _m['win_rate']
+                r1['sharpe'] = _m['sharpe']
+                r1['recovery'] = _m['recovery']
+                r1['score'] = _comp_s(_m)
+                _merged.append(r1)
+                _upd += 1
+            all_results.extend(_merged)
+            try:
+                save_checkpoint(symbol, _merged,
+                                last_bar_time=symbol_data[symbol]['df_h1'].index[-1].isoformat(),
+                                families=family_fp)
+            except (OSError, TypeError):
+                pass
+            print(f"  🔄 {symbol}: инкремент по новым барам — обновлено {_upd} комб., "
+                  f"inc-семейств {len(inc_fams)}, full-семейств {len(meta['full_families'])} "
+                  f"(срез {meta['slice_bars']} бар. = warm-up {meta['warmup_bars']} + новых {meta['bars_new']})",
+                  flush=True)
+
     # ── Мерж частичного пересчёта ──
     for symbol, (cached, recalc_set) in partial_recalc.items():
         kept = [r for r in cached
@@ -2715,7 +2936,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             pass
 
     for symbol in new_by_symbol:
-        if symbol not in partial_recalc:
+        if symbol not in partial_recalc and symbol not in incremental_recalc:
             all_results.extend(new_by_symbol[symbol])
 
     total_elapsed = time.time() - global_start
@@ -2752,7 +2973,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     # ── Сохранение чекпойнтов для свежесчитанных символов ──
     for symbol in new_by_symbol:
-        if symbol not in partial_recalc:
+        if symbol not in partial_recalc and symbol not in incremental_recalc:
             try:
                 save_checkpoint(symbol, new_by_symbol[symbol],
                                 last_bar_time=symbol_data[symbol]['df_h1'].index[-1].isoformat(),

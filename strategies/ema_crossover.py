@@ -61,7 +61,8 @@ def backtest_ema_crossover(df, ema_fast, ema_slow, sl_points, tp_points,
     profit = 0.0
     n_trades = 0
     position = None
-    trade_profits = []
+    from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
+    trade_profits = TradeList()
 
     for i in range(1, len(df)):
         prev_signal = df['signal'].iloc[i - 1]
@@ -108,6 +109,9 @@ def backtest_ema_crossover(df, ema_fast, ema_slow, sl_points, tp_points,
                 profit += p
                 n_trades += 1
                 trade_profits.append(p)
+                _row = trade_row(df.index, _entry_i, i, position["direction"], p)
+                if _row is not None:
+                    trade_profits.times.append(_row)
                 position = None
 
         # ── Проверка входа ──
@@ -115,10 +119,12 @@ def backtest_ema_crossover(df, ema_fast, ema_slow, sl_points, tp_points,
             entry_dir = check_entry_ema_crossover(prev_signal, curr_signal)
             if entry_dir == 'long':
                 entry = curr_close + spread
+                _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
                 entry = curr_close - spread
+                _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 

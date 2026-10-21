@@ -12,6 +12,42 @@ import numpy as np
 import pandas as pd
 
 
+# ═══ Чекпойнт v2: журнал сделок ═══
+# Инкремент по новым барам невозможен без списка сделок: из агрегатов (n_trades,
+# profit_factor, win_rate) нельзя снять сделку, вышедшую за 30-дневное окно.
+# Поэтому движок отдаёт не только профиты, но и время каждой сделки.
+#
+# TradeList — наследник list. Это принципиально: ВЕСЬ существующий код работает без
+# правок (`calc_metrics(trade_profits)`, `len()`, `sum()`, распаковка 3-кортежа),
+# а времена сделок едут рядом в атрибуте `times`.
+#
+# Формат записи сделки: [entry_epoch, exit_epoch, dir(+1 long / -1 short), profit].
+# Окно 30 дней отсекается по ВРЕМЕНИ ВЫХОДА: сделка, закрытая внутри окна, остаётся
+# (её результат известен), а закрытая раньше — выбывает.
+class TradeList(list):
+    """Список профитов сделок + времена входа/выхода (атрибут times)."""
+
+    __slots__ = ('times',)
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.times = []
+
+
+def trade_row(index, i_entry, i_exit, direction, profit):
+    """Запись одной сделки для журнала. index — DatetimeIndex баров.
+
+    None, если время бара недоступно: тогда комбинация не станет инкрементальной и
+    будет пересчитываться полностью (безопасный дефолт).
+    """
+    try:
+        t_in = int(index[i_entry].timestamp())
+        t_out = int(index[i_exit].timestamp())
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return None
+    return [t_in, t_out, 1 if direction == 'long' else -1, round(float(profit), 2)]
+
+
 def atr(df, period=14):
     """ATR по Уайлдеру (EMA-сглаживание). На прогреве возвращает NaN (не 0)."""
     high, low, close = df['high'], df['low'], df['close']
@@ -61,7 +97,7 @@ def run_backtest(df, calc_fn, check_entry, check_exit, param_key,
     profit = 0.0
     n_trades = 0
     position = None
-    trade_profits = []
+    trade_profits = TradeList()
 
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i - 1]
@@ -105,16 +141,21 @@ def run_backtest(df, calc_fn, check_entry, check_exit, param_key,
                 profit += p
                 n_trades += 1
                 trade_profits.append(p)
+                _row = trade_row(df.index, _entry_i, i, d, p)
+                if _row is not None:
+                    trade_profits.times.append(_row)
                 position = None
 
         if position is None:
             entry_dir = check_entry(prev_k, curr_k)
             if entry_dir == 'long':
                 entry = close + spread
+                _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
                 entry = close - spread
+                _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 

@@ -18,7 +18,7 @@ try:
 except Exception:
     pass
 
-from functions import terminal_on, run_full_backtest, _checkpoint_dir
+from functions import terminal_on, run_full_backtest, backtest_worker_count, _checkpoint_dir
 from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
 from wheel import (
@@ -255,7 +255,7 @@ def _read_last_full_recalc(marker_path):
     return max(_dates) if _dates else None
 
 
-def _full_recalc_due(now, marker_path, gap_days, is_first_run=False):
+def _full_recalc_due(now, marker_path, gap_days, is_first_run=False, daily=False):
     """Пора ли делать ПОЛНЫЙ пересчёт. Возвращает (due, days_since_full, last_full_date).
 
     Правило: один ПОЛНЫЙ пересчёт на «окно выходных» (Сб–Вс). Окно определяется по субботе:
@@ -270,7 +270,44 @@ def _full_recalc_due(now, marker_path, gap_days, is_first_run=False):
     anchor = now.date() - timedelta(days=(now.weekday() - 5) % 7)  # суббота текущего/прошедшего окна
     in_window = last_full_date >= anchor
     gap_ok = (days_since is None) or (days_since >= gap_days)
+    if daily:
+        # full_recalc_daily=True: обновляем ВСЮ корзину каждую ночь — окно выходных
+        # не учитываем, остаётся только защита от повторов (gap_days).
+        return gap_ok, days_since, last_full_date
     return (not in_window) and gap_ok, days_since, last_full_date
+
+
+def _has_open_positions(magic_min=770000, magic_max=869999):
+    """Есть ли НАШИ открытые позиции (magic в боевом диапазоне).
+
+    Нужно для решения о полном пересчёте: в синхронном режиме, пока он идёт (150–230 мин),
+    не запущен, то есть бары, сигналы, трейлинг и аварийные защиты не проверяются.
+    """
+    try:
+        positions = mt5.positions_get()
+    except Exception:
+        return False
+    if not positions:
+        return False
+    for p in positions:
+        try:
+            m = int(getattr(p, 'magic', 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if magic_min <= m <= magic_max:
+            return True
+    return False
+
+
+def _in_full_window(now, end_hour=10, start_hour=3):
+    """Допустим ли ПОЛНЫЙ пересчёт сейчас: выходные — всегда, будни — только в ночном окне.
+
+    Днём полный проход (150–230 мин) заблокировал бы боевой цикл на самое активное
+    время, поэтому дневные старты остаются лайтовыми, а обновление уходит в ночь.
+    """
+    if now.weekday() >= 5:
+        return True
+    return start_hour <= now.hour < end_hour
 
 
 def _write_full_recalc_marker(marker_path, ts=None):
@@ -279,6 +316,91 @@ def _write_full_recalc_marker(marker_path, ts=None):
         ts = datetime.now()
     with open(marker_path, 'w', encoding='utf-8') as f:
         json.dump({'last_full_recalc': ts.isoformat()}, f, ensure_ascii=False, indent=2)
+
+
+# ═══ Фоновый (async) ПОЛНЫЙ пересчёт ═══
+# Полный проход (150–230 мин) исторически держал боевой цикл закрытым: бары не
+# опрашивались, сигналы не рождались, трейлинг и аварийные защиты (daily loss,
+# equity stop, margin) не срабатывали. Теперь тяжёлая часть считается в отдельном
+# потоке (backtest_job.BacktestJob), цикл живёт обычной жизнью, а результат
+# применяется по завершении job — повторным входом в ночной блок в лайт-режиме:
+# job пишет чекпойнты сам, поэтому передавать результаты «в руки» не нужно.
+_bg_job = None       # активный BacktestJob (одновременно не более одного)
+_bg_ready = False    # завершённый job ждёт применения (чекпойнты уже свежие)
+_bg_failed = None    # текст ошибки завершившегося с ошибкой job (для лога)
+_bg_elapsed_min = 0.0
+
+
+def _bg_running():
+    """Идёт ли фоновый пересчёт прямо сейчас."""
+    return _bg_job is not None and _bg_job.running()
+
+
+def _bg_start(symbols, symbol_data, strategy_params, bt_cfg):
+    """Поставить фоновый ПОЛНЫЙ пересчёт. Возвращает job."""
+    global _bg_job, _bg_ready, _bg_failed
+    from backtest_job import BacktestJob
+    _bg_ready = False
+    _bg_failed = None
+    _bg_job = BacktestJob(symbols, symbol_data, strategy_params, bt_cfg,
+                          force_recalc=True, is_night_run=True).start()
+    return _bg_job
+
+
+def _bg_poll():
+    """Опросить фоновый пересчёт. True — job завершился (смотри _bg_ready/_bg_failed).
+
+    Завершённый job «съедается»: ссылка сбрасывается, чтобы следующей ночью можно
+    было поставить новый, а исход фиксируется в _bg_ready / _bg_failed.
+    """
+    global _bg_job, _bg_ready, _bg_failed, _bg_elapsed_min
+    if _bg_job is None or _bg_job.running():
+        return False
+    _bg_elapsed_min = _bg_job.elapsed_min()
+    if _bg_job.ok():
+        _bg_ready = True
+        _bg_failed = None
+    else:
+        _bg_ready = False
+        _bg_failed = _bg_job.error()
+    _bg_job = None
+    return True
+
+
+# ═══ Фоновый добор сделок в trades_db (не блокирует торговый цикл) ═══
+_ingest_thread = None    # живой поток добора (None — свободно)
+_ingest_error = None     # repr последней ошибки фонового добора (для лога)
+
+
+def _ingest_start(days=1, verbose=False):
+    """Запустить добор сделок в trades_db в отдельном демон-потоке.
+
+    Зачем: mt5.history_deals_get + запись в SQLite могут занимать от секунд до
+    минут (широкое окно, конкуренция за файл БД). В главном цикле это задерживало
+    опрос баров, сигналы, трейлинг и аварийные защиты — поэтому добор вынесен
+    из блокирующего участка: цикл ставит задачу и идёт дальше.
+
+    Одновременно живёт не более одного добора. Поток-демон: умирает с процессом,
+    торговлю не трогает. Ошибки не летят в вызывающий код, а копятся в
+    _ingest_error (печатается при следующем запуске добора).
+    """
+    global _ingest_thread, _ingest_error
+    if _ingest_thread is not None and _ingest_thread.is_alive():
+        return False
+    _ingest_error = None
+
+    def _run():
+        global _ingest_error
+        try:
+            import trades_db
+            trades_db.ingest(days=days, verbose=verbose)
+        except Exception as exc:   # fail-safe: БД не должна ронять пайплайн
+            _ingest_error = repr(exc)
+
+    import threading
+    _ingest_thread = threading.Thread(target=_run, name='trades_db_ingest', daemon=True)
+    _ingest_thread.start()
+    return True
 
 
 # ═══ Утилита: диагностика — что код «видит» по последним расчётам ═══
@@ -733,7 +855,7 @@ if __name__ == '__main__':
     now = datetime.now()
     weekend_full_due = False
     days_since_full = None   # для диагностики: сколько дней с последнего ПОЛНОГО пересчёта
-    if bt_cfg.auto_weekend_recalc:  # окно выходных + догон в будни, если уик-энд пропущен
+    if bt_cfg.auto_weekend_recalc or bt_cfg.full_recalc_daily:  # окно выходных + догон в будни, если уик-энд пропущен
         # Один ПОЛНЫЙ пересчёт на окно выходных (Сб–Вс). Если окно пропущено — догон в будни (см. _full_recalc_due).
         # Дата последнего ПОЛНОГО пересчёта берётся из last_full_recalc.json
         # (night_reset.json не годится — его перезаписывают в том числе лайт-прогоны в будни).
@@ -747,7 +869,8 @@ if __name__ == '__main__':
                     # Правило: один ПОЛНЫЙ на окно выходных (Сб–Вс) + догон в будни, если окно пропущено.
                     # Пора ли ПОЛНЫЙ: окно выходных (Сб–Вс) либо догон, если окно пропущено
                     weekend_full_due, days_since_full, _last_full_date = _full_recalc_due(
-                        now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days)
+                        now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days,
+                        daily=bt_cfg.full_recalc_daily)
                     if False and not weekend_full_due:  # краткое решение печатает _log_recalc_chain()
                         print(f"  ℹ️  ПОЛНЫЙ пересчёт уже был ({days_since_full} дн. назад / в текущем окне выходных) — повторно НЕ запускаем. "
                               + (" Ждём открытия рынка (Пн) — торговли в выходные нет." if now.weekday() >= 5 else " Работаем в обычном режиме (мониторинг сигналов)."))
@@ -756,10 +879,40 @@ if __name__ == '__main__':
                     weekend_full_due = True
             except (OSError, ValueError, json.JSONDecodeError):
                 weekend_full_due = True
+        # Полный пересчёт держит боевой цикл закрытым 150–230 мин: пока он идёт,
+        # бары/сигналы/трейлинг не проверяются. full_recalc_only_flat=True — отложить.
+        # Днём полный пересчёт откладываем до ночного окна (кроме первого запуска).
+        if (weekend_full_due and not is_first_run
+                and not _in_full_window(now, bt_cfg.full_refresh_window_end_hour,
+                                        bt_cfg.night_backtest_hour)):
+            print(f"  ⏸  ПОЛНЫЙ пересчёт отложен до ночного окна "
+                  f"({bt_cfg.night_backtest_hour}:00–{bt_cfg.full_refresh_window_end_hour}:00): "
+                  f"сейчас {now.strftime('%H:%M')} — работаем на чекпойнтах")
+            weekend_full_due = False
+        if weekend_full_due and _has_open_positions():
+            if bt_cfg.full_recalc_only_flat:
+                print("  ⏸  ПОЛНЫЙ пересчёт отложен: есть открытые позиции "
+                      "(full_recalc_only_flat=True)")
+                weekend_full_due = False
+            else:
+                print("  ⚠️  ПОЛНЫЙ пересчёт при открытых позициях: пока идёт расчёт, "
+                      "бары и сигналы не проверяются", flush=True)
         if is_first_run or weekend_full_due:
             FORCE_RECALC = True
             weekend_full_due = True
-            print(f"  🌙 ПОЛНЫЙ пересчёт ({now.strftime('%A')} {now.strftime('%Y-%m-%d %H:%M')}) — окно выходных / догон")
+            # Фоновый режим: полный проход ставим в фон, а стартуем на чекпойнтах — иначе
+            # рестарт внутри ночного окна снова встал бы на 150–230 мин. Синхронно оставляем
+            # первый запуск (чекпойнтов ещё нет) и ручной full_recalc_mode.
+            if (getattr(bt_cfg, 'async_backtest', False)
+                    and not is_first_run and not manual_full):
+                _bg_start(bt_cfg.symbols, symbol_data, strategy_params, bt_cfg)
+                FORCE_RECALC = False
+                weekend_full_due = False
+                print(f"  🚀 ПОЛНЫЙ пересчёт поставлен в фон "
+                      f"({backtest_worker_count(bt_cfg)} процессов) — старт на чекпойнтах, "
+                      f"результат применится по завершении")
+            else:
+                print(f"  🌙 ПОЛНЫЙ пересчёт ({now.strftime('%A')} {now.strftime('%Y-%m-%d %H:%M')}) — окно выходных / догон")
         
             
             
@@ -868,6 +1021,12 @@ if __name__ == '__main__':
         print("  [WHEEL] ОТКЛЮЧЁН: steering_cfg.enabled=False — квоты/лоты не пересчитываются.",
               flush=True)
 
+    # ── Однократный ДОГОН истории сделок при старте (в фоне) ──
+    # Широкое окно (30 суток) закрывает дыры, накопленные простоем бота/машины или
+    # прежним «сжимающимся» окном ingest (сделка 20.10 16:45 не попала именно так).
+    # Идемпотентно (UPSERT по deal_ticket), идёт в фоне — цикл не задерживается.
+    _ingest_start(days=30, verbose=True)
+
     print(f"\nЗапуск цикла. Ctrl+F2 для остановки.\n")
     if now.weekday() >= 5 and not weekend_full_due:
         print("⏳ Выходной: полный пересчёт уже был выполнен ранее — повторно НЕ считаем.\n"
@@ -929,14 +1088,17 @@ if __name__ == '__main__':
                 except Exception as _smp_err:
                     print(f"  [WARN] trades_db.sample: {_smp_err!r}", flush=True)
 
-            # ── Добор сделок в trades_db (deals) — не ждём ночного ingest ──
+            # ── Добор сделок в trades_db (deals) — в ФОНЕ, цикл не блокируется ──
             # Закрытия и так пишутся сразу (_record_close → trades_db.record_position),
             # но это страховка от пропусков (рестарт, закрытие «не нашей» рукой).
             if (now - last_trades_ingest).total_seconds() >= TRADES_DB_INGEST_INTERVAL_SEC:
                 last_trades_ingest = now
                 try:
                     import trades_db
-                    trades_db.ingest(days=1, verbose=False)
+                    _ingest_start(days=1)     # фон: MT5-запрос и запись в БД не тормозят цикл
+                    if _ingest_error:         # ошибка предыдущего фонового добора
+                        print(f"  [WARN] trades_db.ingest: {_ingest_error}", flush=True)
+                        _ingest_error = None
                 except Exception as _ing_err:
                     print(f"  [WARN] trades_db.ingest: {_ing_err!r}", flush=True)
 
@@ -956,38 +1118,117 @@ if __name__ == '__main__':
             # Ночной прогон: раз в день после 3:00, повторно в тот же день не запускается
             # force_recalc=True (полный) ставится только на выходных; в будни — лайт
             
+            # ── Фоновый ПОЛНЫЙ пересчёт: приём результата ──
+            # Job считался в отдельном потоке: цикл всё это время жил обычной жизнью
+            # (тики, бары, сигналы, трейлинг, аварийные защиты). Применяем его результат
+            # тем же путём, что и синхронный ночной прогон (см. блок ниже).
+            _bg_finished = _bg_poll()
+            if _bg_finished and _bg_failed is not None:
+                print(f"\n  ⚠️  Фоновый ПОЛНЫЙ пересчёт не удался: {_bg_failed} — "
+                      f"чекпойнты могут быть обновлены частично, повторим следующей ночью",
+                      flush=True)
+                last_full_backtest_date = now.date()
+            elif _bg_ready:
+                print(f"\n[{now.strftime('%H:%M:%S')}] ✅ Фоновый ПОЛНЫЙ пересчёт завершён "
+                      f"({_bg_elapsed_min:.0f} мин) — применяю результат, цикл не останавливался",
+                      flush=True)
+
             should_run_backtest = False
-            if now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
+            if _bg_ready:
+                # Результат фонового job готов → идём ночным путём: считать нечего,
+                # свежие чекпойнты уже на диске (см. _bg_apply внутри блока ниже).
+                should_run_backtest = True
+            elif now.hour >= bt_cfg.night_backtest_hour and now.date() != last_full_backtest_date:
                 should_run_backtest = True
             
             if should_run_backtest:
+                # Фоновый job завершился → результат применяем СЕЙЧАС: чекпойнты уже
+                # свежие, пересчитывать нечего (см. force_recalc ниже). Флаг переносим в
+                # локальную переменную, чтобы _bg_ready не «залипал» на следующие ночи:
+                # _bg_apply живёт только текущую итерацию и решает: считать ли этот прогон
+                # ПОЛНЫМ (маркер пересчёта) и надо ли ставить новый job.
+                _bg_apply = _bg_ready
+                _bg_ready = False
                 
                 # auto_weekend_recalc=False — в выходной пересчёт не запускаем
-                if is_weekend and not bt_cfg.auto_weekend_recalc:
+                if is_weekend and not bt_cfg.auto_weekend_recalc and not _bg_apply:
                     print(f"\n[{now.strftime('%H:%M:%S')}] ⏸ Выходной ({now.strftime('%A')}) — авто-пересчёт отключён (auto_weekend_recalc=False)")
                     last_full_backtest_date = now.date()
                     continue
                 
                 # Пора ли ПОЛНЫЙ: окно выходных (Сб–Вс) либо догон в будни
                 _night_full_due, _, _ = _full_recalc_due(
-                    now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days)
-                if not bt_cfg.auto_weekend_recalc:
+                    now, full_recalc_marker_path, bt_cfg.full_recalc_min_gap_days,
+                    daily=bt_cfg.full_recalc_daily)
+                if not bt_cfg.auto_weekend_recalc and not bt_cfg.full_recalc_daily:
                     _night_full_due = False
+
+                # ── Фоновый job уже отработал ПОЛНЫЙ проход ──
+                # Фиксируем это как ПОЛНЫЙ пересчёт, даже если по календарю окно выходных
+                # закрыто: иначе не сдвинется маркер last_full_recalc, и следующей ночью
+                # стартует ещё один полный проход.
+                if _bg_apply:
+                    _night_full_due = True
+
+                # ── Окно ПОЛНОГО пересчёта ──
+                # Синхронный режим (async_backtest=False): полный пересчёт держит боевой цикл
+                # закрытым 150–230 мин — бары не опрашиваются, сигналы не рождаются,
+                # трейлинг и аварийные защиты (daily loss, equity stop, margin) не работают.
+                # Поэтому днём полный проход откладывается до ночного окна (см. ниже).
+                # В фоновом режиме (async_backtest=True) цикл не блокируется, поэтому
+                # ограничение по времени суток становится мягким: днём берём чекпойнты,
+                # а полный проход уходит в ночное окно.
+                if not _bg_apply and not _in_full_window(now, bt_cfg.full_refresh_window_end_hour, bt_cfg.night_backtest_hour):
+                # (в фоновом режиме окно не критично — цикл всё равно не встанет)
+                # Окно ПОЛНОГО пересчёта: 3:00–10:00 в будни; в выходные — без ограничения.
+                    if _night_full_due:
+                        print(f"  ⏸  ПОЛНЫЙ пересчёт отложен до ночного окна "
+                              f"({bt_cfg.night_backtest_hour}:00–{bt_cfg.full_refresh_window_end_hour}:00): "
+                              f"сейчас {now.strftime('%H:%M')} — лайт на чекпойнтах")
+                    _night_full_due = False
+                if _night_full_due and not _bg_apply and _has_open_positions():
+                    if bt_cfg.full_recalc_only_flat:
+                        print("  ⏸  ПОЛНЫЙ пересчёт отложен: есть открытые позиции "
+                              "(full_recalc_only_flat=True) — в этот цикл лайт")
+                        _night_full_due = False
+                    else:
+                        print("  ⚠️  ПОЛНЫЙ пересчёт при открытых позициях: пока идёт расчёт, "
+                              "бары и сигналы не проверяются", flush=True)
 
                 # Определяем причину запуска
                 if _night_full_due:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Ночной ПОЛНЫЙ пересчёт ({now.strftime('%A')}) — окно выходных / догон...")
+                    _reason = " — результат фонового job" if _bg_apply else " — окно выходных / догон..."
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Ночной ПОЛНЫЙ пересчёт ({now.strftime('%A')}){_reason}")
                 elif is_weekday:
                     print(f"\n[{now.strftime('%H:%M:%S')}] 🌙 Ночной лайт-пересчёт (инкремент по чекпойнтам)...")
                 else:
                     print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Выходной ({now.strftime('%A')}) — лайт-пересчёт (инкремент по чекпойнтам)...")
 
                 try:
+                    # ── Фоновый (async) ПОЛНЫЙ пересчёт: цикл больше не блокируется ──
+                    # Было: run_full_backtest — синхронный вызов, 150–230 минут боевой цикл
+                    # стоял. Стало: тяжёлая часть считается в отдельном потоке
+                    # (backtest_job.BacktestJob), а результат применяется по завершении job —
+                    # следующей итерацией, повторным входом в этот блок по _bg_ready.
+                    if (getattr(bt_cfg, 'async_backtest', False)
+                            and _night_full_due and not _bg_apply):
+                        if _bg_running():
+                            print(f"  ⏳ Фоновый пересчёт уже идёт — новый не ставлю", flush=True)
+                        else:
+                            _bg_start(bt_cfg.symbols, symbol_data, strategy_params, bt_cfg)
+                            print(f"  🚀 Фоновый ПОЛНЫЙ пересчёт поставлен "
+                                  f"({backtest_worker_count(bt_cfg)} процессов, приоритет below normal) — "
+                                  f"боевой цикл продолжает работать", flush=True)
+                        last_full_backtest_date = now.date()
+                        continue
+
                     _, all_results = run_full_backtest(
                         bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
                         test_strategy=None,
                         test_mode=False,
-                        force_recalc=_night_full_due,  # полный по графику окна выходных (с догоном), иначе лайт
+                        # Фоновый job уже прогрел чекпойнты → пересчитывать нечего: читаем
+                        # готовое (лайт-режим, ~1 с). Иначе — обычный синхронный путь.
+                        force_recalc=(bool(_night_full_due) and not _bg_apply),
                         is_night_run=True
                     )
                 except Exception as exc:
@@ -1192,7 +1433,7 @@ if __name__ == '__main__':
                 # Fail-safe: любая ошибка БД не должна ронять пайплайн.
                 try:
                     import trades_db
-                    trades_db.ingest(days=3)
+                    _ingest_start(days=3)     # тот же ФОН: добор не тормозит ночной блок
                 except Exception as _tdb_err:
                     print(f"  [WARN] trades_db: {_tdb_err!r}", flush=True)
 

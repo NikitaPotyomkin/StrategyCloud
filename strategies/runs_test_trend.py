@@ -126,7 +126,8 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
     profit = 0.0
     n_trades = 0
     position = None
-    trade_profits = []
+    from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
+    trade_profits = TradeList()
 
     for i in range(1, len(df)):
         prev_up = df['trend_up'].iloc[i - 1]
@@ -175,6 +176,9 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
                 profit += p
                 n_trades += 1
                 trade_profits.append(p)
+                _row = trade_row(df.index, _entry_i, i, position["direction"], p)
+                if _row is not None:
+                    trade_profits.times.append(_row)
                 position = None
 
         # ── Проверка входа ──
@@ -182,10 +186,12 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
             entry_dir = check_entry(prev_up, prev_down, curr_up, curr_down)
             if entry_dir == 'long':
                 entry = curr_close - spread
+                _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
                 entry = curr_close + spread
+                _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 

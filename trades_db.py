@@ -26,6 +26,7 @@
 
 CLI:
     python trades_db.py ingest [--days N] [--db PATH]   # добрать историю из MT5
+    python trades_db.py catch-up [--days N] [--db PATH] # однократный догон при старте
     python trades_db.py stats  [--db PATH]              # сводка по БД
     python trades_db.py vacuum [--out PATH] [--db PATH] # консистентный снапшот файла
 """
@@ -46,6 +47,10 @@ _DEFAULT_DB = os.path.join(_BASE_DIR, 'journals', 'trades.db')
 # Диапазон пула magic наших стратегий (см. strategy_engine.make_magic/assign_magic)
 MAGIC_POOL_LO = 770000
 MAGIC_POOL_HI = 869999
+
+# Максимальная глубина добора истории из MT5 (сутки). Защита от гигантского
+# запроса, если last_time в БД оказался очень старым (долгий простой бота).
+MAX_INGEST_DAYS = 90
 
 # DEAL_ENTRY_* (числа фиксированы в MT5 API; не тянем mt5, чтобы читать БД без терминала)
 _ENTRY_IN, _ENTRY_OUT, _ENTRY_INOUT = 0, 1, 2
@@ -72,13 +77,16 @@ def connect(path=None, readonly=False):
     """Открыть БД. readonly=True — только чтение (для дева/сетевой папки)."""
     p = db_path(path)
     if readonly:
-        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=30)
     else:
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        con = sqlite3.connect(p)
+        # timeout=30: ingest идёт в ФОНОВОМ потоке (main.py: _ingest_start) и может
+        # конкурировать за запись с record_position/sample_positions — ждём, не падаем.
+        con = sqlite3.connect(p, timeout=30)
         # DELETE (не WAL): один самодостаточный файл — безопасно копировать/шарить.
         con.execute('PRAGMA journal_mode=DELETE')
         con.execute('PRAGMA synchronous=NORMAL')
+        con.execute('PRAGMA busy_timeout=30000')   # не падать на «database is locked»
     con.row_factory = sqlite3.Row
     return con
 
@@ -317,7 +325,7 @@ def _snapshot_registry(con, registry):
 def ingest(days=7, path=None, verbose=True):
     """Добрать сделки из MT5-истории в БД. Возвращает число обработанных deals (0 при сбое).
 
-    Окно: от max(последний ingest, now-days) с суточным перехлёстом — ничего не теряем.
+    Окно: от min(now-days, last_time − 1 день) с суточным перехлёстом — ничего не теряем.
     """
     if mt5 is None:
         if verbose:
@@ -328,15 +336,26 @@ def ingest(days=7, path=None, verbose=True):
         ensure_schema(con)
         registry = load_registry()
 
-        from_dt = datetime.datetime.now() - datetime.timedelta(days=int(days))
+        now = datetime.datetime.now()
+        from_dt = now - datetime.timedelta(days=int(days))
         row = con.execute("SELECT last_time FROM ingest_log WHERE id=1").fetchone()
         if row and row['last_time']:
             resume = datetime.datetime.fromtimestamp(int(row['last_time'])) - datetime.timedelta(days=1)
-            if resume > from_dt:
+            # МИНИМУМ, а не максимум: если бот простоял дольше окна `days`
+            # (рестарт, синхронный бэктест, простой машины), окно РАСШИРЯЕТСЯ
+            # назад до last_time. Раньше граница бралась вперёд (max) и дыра
+            # в истории — закрытия старше окна — терялась навсегда.
+            if resume < from_dt:
                 from_dt = resume
 
+        # Окно запроса: не глубже MAX_INGEST_DAYS (страховка от гигантского запроса),
+        # и не позже last_time — суточный перехлёст назад (см. resume выше).
+        floor_dt = now - datetime.timedelta(days=MAX_INGEST_DAYS)
+        if from_dt < floor_dt:
+            from_dt = floor_dt
+
         # +6ч к «сейчас», как в main.py — страховка от сдвига серверного времени
-        to_dt = datetime.datetime.now() + datetime.timedelta(hours=6)
+        to_dt = now + datetime.timedelta(hours=6)
         deals = mt5.history_deals_get(from_dt, to_dt) or []
         acc = _account_dict()
 
@@ -367,6 +386,24 @@ def ingest(days=7, path=None, verbose=True):
     except Exception as exc:
         if verbose:
             print(f"  [trades_db] ingest не выполнен: {exc!r}", flush=True)
+        return 0
+
+
+def catch_up(days=30, path=None, verbose=True):
+    """Однократный ДОГОН истории при старте: намеренно широкое окно.
+
+    Зачем: рабочий ingest() тянет узкое окно (минуты/сутки), поэтому если бот или
+    машина простояли дольше окна (или БД отставала из-за старой границы ingest
+    max()), закрытия могли не попасть в БД вовсе. Здесь окно просится ШИРОКО и
+    один раз за запуск процесса. Идемпотентно: UPSERT по deal_ticket, дублей нет.
+
+    Возвращает число обработанных deals (0 при сбое).
+    """
+    try:
+        return ingest(days=max(int(days), 1), path=path, verbose=verbose)
+    except Exception as exc:
+        if verbose:
+            print(f"  [trades_db] catch_up не выполнен: {exc!r}", flush=True)
         return 0
 
 
@@ -606,15 +643,19 @@ def main():
     sub = ap.add_subparsers(dest='cmd')
     p_i = sub.add_parser('ingest', help='добрать сделки из MT5-истории')
     p_i.add_argument('--days', type=int, default=7)
+    p_c = sub.add_parser('catch-up', help='однократный догон истории при старте (широкое окно)')
+    p_c.add_argument('--days', type=int, default=30)
     p_s = sub.add_parser('stats', help='сводка по БД')
     p_sm = sub.add_parser('sample', help='сэмпл открытых позиций: daily_peak + equity_samples')
     p_v = sub.add_parser('vacuum', help='консистентный снапшот файла БД')
     p_v.add_argument('--out', default=None)
-    for p in (p_i, p_s, p_sm, p_v):
+    for p in (p_i, p_c, p_s, p_sm, p_v):
         p.add_argument('--db', default=None)
     args = ap.parse_args()
 
-    if args.cmd == 'ingest':
+    if args.cmd == 'catch-up':
+        catch_up(days=args.days, path=args.db)
+    elif args.cmd == 'ingest':
         ingest(days=args.days, path=args.db)
     elif args.cmd == 'stats':
         stats(path=args.db)
