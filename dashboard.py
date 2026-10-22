@@ -1927,7 +1927,7 @@ with tab_pipeline:
 #  BACKTEST
 # ═══════════════════════════════════════════════════════════════
 with tab_backtest:
-    st.markdown("### Backtest — длительность прогонов")
+    st.markdown("### Backtest — длительность, скейл и инкремент")
 
     # Читаем журнал напрямую (без st.cache_data), чтобы данные не «залипали».
     _bt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1959,7 +1959,18 @@ with tab_backtest:
                 df_bt[_bt_c] = np.nan
             df_bt[_bt_c] = pd.to_numeric(df_bt[_bt_c], errors='coerce')
         df_bt = df_bt.dropna(subset=['ts'])
-        if df_bt.empty:
+        # ── Отсекаем «пустые» ночи (ничего не считалось: всё взято из кэша) ──
+        # Раньше они давали в таблице нули и портили средние. Теперь это отдельный
+        # счётчик: в статистику прогонов и на график они не попадают.
+        _bt_cache_mask = (df_bt['combos'].fillna(0) == 0) & (df_bt['kind'] == 'light')
+        _bt_cache_n = int(_bt_cache_mask.sum())
+        df_bt = df_bt[~_bt_cache_mask]
+        if df_bt.shape[0] == 0:
+            st.info("Прогоны с реальным счётом появятся после первого полного или "
+                    "инкрементального пересчёта. Пока в журнале только чтение кэша "
+                    f"({_bt_cache_n} ночей).")
+            st.stop()
+        if df_bt.empty:  # pragma: no cover — пустой журнал уже отсечён выше
             st.info("Журнал прогонов пуст — появится после первого бэктеста "
                     "(checkpoints/backtest_history.jsonl)")
             st.stop()
@@ -2016,7 +2027,8 @@ with tab_backtest:
             for _kind, _name, _color, _symbol in [
                 ('full', 'Полный пересчёт', COL_GREEN_LT, 'circle'),
                 ('partial', 'Частичный пересчёт', '#D29922', 'diamond'),
-                ('light', 'Лайт (инкремент)', COL_MUTED, 'square'),
+                ('incremental', 'Инкремент (новые бары)', COL_BLUE, 'triangle-up'),
+                ('light', 'Лайт (только чтение кэша)', COL_MUTED, 'square'),
             ]:
                 _sub = df_bt[df_bt['kind'] == _kind].sort_values('ts')
                 if _sub.empty:
@@ -2059,15 +2071,87 @@ with tab_backtest:
             st.plotly_chart(plotly_dark_layout(fig_bt, 420),
                             use_container_width=True, key="backtest_chart")
 
+        # ── Скейл обсчёта: скорость и «цена» 1000 комбинаций по режимам ──
+        st.markdown("#### Скейл обсчёта")
+        _bt_sc = df_bt.sort_values('ts').copy()
+        _bt_sc['cpp'] = _bt_sc['done'] / _bt_sc['elapsed_sec'].replace(0, np.nan)
+        _bt_sc['sec1000'] = 1000.0 / _bt_sc['cpp']
+        _sc_rows = []
+        for _k, _name in [('full', 'Полный'), ('incremental', 'Инкремент'),
+                          ('partial', 'Частичный'), ('light', 'Лайт')]:
+            _s = _bt_sc[_bt_sc['kind'] == _k]
+            if _s.empty:
+                continue
+            _last_s = _s.iloc[-1]
+            _sc_rows.append({
+                'Режим': _name,
+                'Прогонов': len(_s),
+                'Медиана, мин': round(float(_s['minutes'].median()), 1),
+                'Последний, мин': round(float(_last_s['minutes']), 1),
+                'Комб/с (медиана)': (round(float(_s['cpp'].median()), 2)
+                                     if _s['cpp'].notna().any() else None),
+                'Сек на 1000 комб': (round(float(_s['sec1000'].median()), 1)
+                                     if _s['sec1000'].notna().any() else None),
+                'Комбинаций (последний)': (int(_last_s['done'])
+                                           if pd.notna(_last_s['done']) else 0),
+            })
+        if _sc_rows:
+            st.dataframe(pd.DataFrame(_sc_rows), use_container_width=True, hide_index=True)
+            st.caption("«Комб/с» = фактически считано ÷ длительность. «Сек на 1000 комб» — прямой "
+                       "масштаб: во сколько обойдётся пересчёт 1000 комбинаций в этом режиме. "
+                       "Сравнив «Полный» и «Инкремент», видно реальный выигрыш ночи.")
+        else:
+            st.info("Скорость пока не посчитать — нет прогонов с реальным счётом.")
+        if _bt_cache_n:
+            st.caption(f"Не в статистике: {_bt_cache_n} ноч. без счёта (всё взято из чекпойнтов).")
+
+        # ── Инкремент: что именно обновлялось и на каком срезе ──
+        if 'inc' in df_bt.columns and (df_bt['kind'] == 'incremental').any():
+            _inc_rows = []
+            for _, _r in df_bt[df_bt['kind'] == 'incremental'].sort_values('ts').iterrows():
+                _inc = _r.get('inc')
+                if not isinstance(_inc, dict) or not _inc:
+                    continue
+                _win = int(_inc.get('window_bars') or 0)
+                _slice = int(_inc.get('slice_bars') or 0)
+                _el = _r.get('elapsed_sec')
+                _dn = _r.get('done')
+                _inc_rows.append({
+                    'Дата/время': _r['ts'].strftime('%Y-%m-%d %H:%M'),
+                    'Мин': round(float(_r['minutes']), 1),
+                    'Символов': int(_inc.get('inc_symbols') or 0),
+                    'Семейств inc/full': (f"{int(_inc.get('inc_families') or 0)} / "
+                                          f"{int(_inc.get('full_families') or 0)}"),
+                    'Обновлено комб.': int(_inc.get('inc_combos') or 0),
+                    'Срез, бар': _slice,
+                    'Окно, бар': _win,
+                    'Срез/окно': (f"{_slice / _win * 100:.0f}%" if _win else '—'),
+                    'Warm-up / новых': (f"{int(_inc.get('warmup_bars') or 0)} / "
+                                        f"{int(_inc.get('bars_new') or 0)}"),
+                    'Комб/с': (round(float(_dn) / float(_el), 2)
+                               if (pd.notna(_el) and float(_el) > 0 and pd.notna(_dn)) else None),
+                })
+            if _inc_rows:
+                st.markdown("#### Инкремент — детали по ночам")
+                st.dataframe(pd.DataFrame(_inc_rows), use_container_width=True, hide_index=True)
+                st.caption("«Срез/окно» — какая доля 30-дневного окна реально пересчитывалась: "
+                           "чем меньше, тем дешевле ночь. «Семейств inc/full» — сколько семейств "
+                           "считалось срезом, сколько полным окном (cum/model всегда полным).")
+            else:
+                st.caption("Инкрементальные прогоны есть, но без деталей (старый формат журнала).")
+
         # ── Таблица-лог ──
         _bt_log = df_bt.sort_values('ts', ascending=False).copy()
         st.caption("«Считано» — реально посчитанные комбинации (факт). «План» — вся корзина комбинаций (пересчёт + чекпойнты). "
                    "«Символы» — сколько символов пересчитано заново. «В корзине» — символов всего (пересчёт + чекпойнты). «Пропущ.» — символов взято из чекпоинтов. "
                    "«В пуле» — сколько стратегий в пуле результатов после мержа/дедупа. "
-                   "Считано=0 при «Лайт» = расчёт не требовался (всё взято из чекпоинтов).")
+                   "Ночи без счёта (всё из чекпойнтов) в таблицу не попадают — они в счётчике выше.")
         _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%Y-%m-%d %H:%M')
-        _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный', 'partial': 'Частичный', 'light': 'Лайт'}).fillna(_bt_log['kind'])
+        _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный', 'partial': 'Частичный',
+                                              'incremental': 'Инкремент', 'light': 'Лайт'}).fillna(_bt_log['kind'])
         _bt_log['Длительность (мин)'] = _bt_log['minutes'].round(1)
+        # Скорость режима: фактически посчитанные комбинации в секунду.
+        _bt_log['Комб/с'] = (_bt_log['done'] / _bt_log['elapsed_sec'].replace(0, np.nan)).round(2)
         def _bt_fmt(v):
             return int(v) if pd.notna(v) else '—'
         _bt_log['Считано'] = _bt_log['done'].apply(_bt_fmt)
@@ -2078,7 +2162,7 @@ with tab_backtest:
         _bt_log['В пуле'] = _bt_log['results'].apply(_bt_fmt)
 
         st.dataframe(
-            _bt_log[['Дата/время', 'Тип', 'Длительность (мин)',
+            _bt_log[['Дата/время', 'Тип', 'Длительность (мин)', 'Комб/с',
                      'Считано', 'План', 'Символы', 'В корзине', 'Пропущ.', 'В пуле']],
             use_container_width=True, hide_index=True,
         )

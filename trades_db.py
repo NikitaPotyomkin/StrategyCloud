@@ -27,7 +27,7 @@
 CLI:
     python trades_db.py ingest [--days N] [--db PATH]   # добрать историю из MT5
     python trades_db.py catch-up [--days N] [--db PATH] # однократный догон при старте
-    python trades_db.py stats  [--db PATH]              # сводка по БД
+    python trades_db.py stats  [--db PATH]              # сводка по БД (+ family_status)
     python trades_db.py vacuum [--out PATH] [--db PATH] # консистентный снапшот файла
 """
 import argparse
@@ -183,6 +183,54 @@ def ensure_schema(con):
     CREATE INDEX IF NOT EXISTS ix_peak_day ON daily_peak(day);
 
     -- Одна строка состояния ингеста.
+    -- ── Статус семейств: кто реально участвует в ночных рэнкингах ─────────
+    -- Снапшот (перезапись), пишется ПОСЛЕ реранка (main.py: сразу за
+    -- sync_active_strategies). Одна строка = одно (symbol, family).
+    -- Вопрос «кто сейчас готов к торговле» решается одним SELECT по ключу —
+    -- без оконных «последняя строка на ключ», из-за которых ranking.txt
+    -- выглядел как «100+ стратегий необнаружимы».
+    -- first_ready_at/last_ready_at/ready_runs переносятся из прежнего снапшота:
+    -- минимальная история «когда вошло/вышло» без отдельного журнала.
+    CREATE TABLE IF NOT EXISTS family_status (
+        symbol         TEXT,     -- GBPUSDrfd
+        family         TEXT,     -- системный тип семейства (stoch, percentile, ...)
+        label          TEXT,     -- человекочитаемый ярлык (Percentile)
+        in_plan        INTEGER,  -- 1 = семейство есть в плане прогона для символа
+        combos_planned INTEGER,  -- сколько комбинаций семейства в плане
+        combos_cached  INTEGER,  -- сколько реально посчитано (лежит в чекпойнте)
+        coverage_pct   REAL,     -- combos_cached / combos_planned * 100
+        participates   INTEGER,  -- 1 = ПОЛНОСТЬЮ участвует в ночных рэнкингах
+        n_ranked       INTEGER,  -- комбинаций прошло дедуп и фильтры (ranking)
+        n_active       INTEGER,  -- комбинаций в торговом наборе (active)
+        best_param_key TEXT,     -- лучшая комбинация семейства
+        best_score     REAL,
+        min_score      REAL,     -- порог score этого прогона (risk_cfg.min_score)
+        score_ok       INTEGER,  -- 1 = best_score >= min_score
+        ready_to_trade INTEGER,  -- 1 = есть активная комбинация и score_ok
+        magic          INTEGER,  -- magic активной комбинации (если есть)
+        run_kind       TEXT,     -- full / incremental / partial / light
+        first_ready_at TEXT,     -- когда семейство впервые стало готовым
+        last_ready_at  TEXT,     -- когда последний раз было готовым
+        ready_runs     INTEGER,  -- в скольких прогонах было ready_to_trade
+        snapshot_at    TEXT,     -- время записи снапшота
+        PRIMARY KEY (symbol, family)
+    );
+    CREATE INDEX IF NOT EXISTS ix_family_status_ready ON family_status(ready_to_trade);
+
+    -- ── Журнал ПЕРЕХОДОВ флага (append, только смена состояния) ────────────
+    -- Строка пишется лишь когда ready_to_trade/participates меняет значение:
+    -- десятки строк в неделю, полная история «когда вошло/вышло» бесплатно.
+    CREATE TABLE IF NOT EXISTS family_status_log (
+        ts         TEXT,     -- время перехода
+        symbol     TEXT,
+        family     TEXT,
+        event      TEXT,     -- ready_on / ready_off / participate_on / participate_off
+        best_score REAL,
+        min_score  REAL,
+        run_kind   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_family_log_key ON family_status_log(symbol, family, ts);
+
     CREATE TABLE IF NOT EXISTS ingest_log (
         id         INTEGER PRIMARY KEY CHECK (id = 1),
         last_time  INTEGER,  -- максимальный deal.time после последнего ingest
@@ -435,6 +483,17 @@ def stats(path=None, verbose=True):
         acc = con.execute(
             "SELECT DISTINCT account_login, account_server, account_currency FROM deals").fetchall()
         out['accounts'] = [dict(a) for a in acc]
+        # Статус семейств (family_status): кто участвует в рэнкинге и готов к
+        # торговле на момент последнего реранка. Читаем до con.close().
+        if _table_exists(con, 'family_status'):
+            fs = con.execute("""
+                SELECT COUNT(*) AS rows_n,
+                       COUNT(DISTINCT family) AS families,
+                       SUM(participates) AS participates,
+                       SUM(ready_to_trade) AS ready
+                FROM family_status
+            """).fetchone()
+            out['family_status'] = {k: fs[k] for k in fs.keys()}
         con.close()
         if verbose:
             def _ts(v):
@@ -446,6 +505,11 @@ def stats(path=None, verbose=True):
             for a in out['accounts']:
                 print(f"    аккаунт: {a['account_login']} @ {a['account_server']} "
                       f"({a['account_currency']})", flush=True)
+            fs = out.get('family_status')
+            if fs:
+                print(f"    family_status: {fs['rows_n']} строк, семейств {fs['families']}, "
+                      f"участвуют в рэнкинге {fs['participates']}, "
+                      f"готовы к торговле {fs['ready']}", flush=True)
     except Exception as exc:
         if verbose:
             print(f"  [trades_db] stats не выполнен: {exc!r}", flush=True)
@@ -599,6 +663,112 @@ def vacuum_into(out_path=None, path=None, verbose=True):
         if verbose:
             print(f"  [trades_db] vacuum не выполнен: {exc!r}", flush=True)
         return None
+
+
+def record_family_status(rows, path=None, verbose=True):
+    """Перезаписать снапшот статуса семейств и дописать переходы флагов.
+
+    rows — список словарей от functions.family_status_rows(): одна строка на
+    (symbol, family). Вызывается ПОСЛЕ реранка (main.py: сразу за
+    sync_active_strategies), когда ranking и торговый набор уже собраны.
+
+    Поведение:
+      * family_status — ПОЛНАЯ перезапись (DELETE + INSERT): это таблица
+        состояния, а не журнал. Одна строка на ключ, ответ одним SELECT.
+      * first_ready_at/last_ready_at/ready_runs переносятся из прежнего снапшота
+        (иначе терялась бы история «когда семейство вошло в торговлю»).
+      * family_status_log — append ТОЛЬКО при смене ready_to_trade/participates.
+
+    Fail-safe: любая ошибка → 0, ночной цикл не роняется.
+    """
+    if not rows:
+        return 0
+    try:
+        con = connect(path)
+        ensure_schema(con)
+        now = datetime.datetime.now().isoformat(timespec='seconds')
+
+        # Прежний снапшот: что уже было готово — чтобы не терять историю.
+        prev = {}
+        try:
+            for r in con.execute(
+                    "SELECT symbol, family, ready_to_trade, participates, "
+                    "first_ready_at, last_ready_at, ready_runs FROM family_status"):
+                prev[(r['symbol'], r['family'])] = dict(r)
+        except sqlite3.Error:
+            prev = {}
+
+        payload, log_rows = [], []
+        for row in rows:
+            old = prev.get((row.get('symbol'), row.get('family'))) or {}
+            ready = 1 if row.get('ready_to_trade') else 0
+            part = 1 if row.get('participates') else 0
+
+            first_ready = old.get('first_ready_at') or ''
+            last_ready = old.get('last_ready_at') or ''
+            ready_runs = _safe_int(old.get('ready_runs'), 0)
+            if ready:
+                ready_runs += 1
+                last_ready = now
+                if not first_ready:
+                    first_ready = now
+
+            payload.append((
+                row.get('symbol'), row.get('family'), row.get('label') or '',
+                1 if row.get('in_plan') else 0,
+                _safe_int(row.get('combos_planned'), 0),
+                _safe_int(row.get('combos_cached'), 0),
+                round(float(row.get('coverage_pct') or 0.0), 2),
+                part,
+                _safe_int(row.get('n_ranked'), 0),
+                _safe_int(row.get('n_active'), 0),
+                row.get('best_param_key') or '',
+                round(float(row.get('best_score') or 0.0), 6),
+                round(float(row.get('min_score') or 0.0), 6),
+                1 if row.get('score_ok') else 0,
+                ready,
+                row.get('magic'),
+                row.get('run_kind') or '',
+                first_ready, last_ready, ready_runs, now,
+            ))
+
+            # Переходы флага — в журнал (только смена, не каждый прогон).
+            if old:
+                for col, name, is_now in (('ready_to_trade', 'ready', ready),
+                                          ('participates', 'participate', part)):
+                    if (1 if old.get(col) else 0) != is_now:
+                        log_rows.append((now, row.get('symbol'), row.get('family'),
+                                         f"{name}_{'on' if is_now else 'off'}",
+                                         round(float(row.get('best_score') or 0.0), 6),
+                                         round(float(row.get('min_score') or 0.0), 6),
+                                         row.get('run_kind') or ''))
+
+        con.execute("DELETE FROM family_status")
+        con.executemany(
+            "INSERT OR REPLACE INTO family_status "
+            "(symbol, family, label, in_plan, combos_planned, combos_cached, coverage_pct, "
+            "participates, n_ranked, n_active, best_param_key, best_score, min_score, "
+            "score_ok, ready_to_trade, magic, run_kind, first_ready_at, last_ready_at, "
+            "ready_runs, snapshot_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            payload)
+        if log_rows:
+            con.executemany(
+                "INSERT INTO family_status_log "
+                "(ts, symbol, family, event, best_score, min_score, run_kind) "
+                "VALUES (?,?,?,?,?,?,?)", log_rows)
+        con.commit()
+        con.close()
+        if verbose:
+            _ready = sum(1 for r in payload if r[14])
+            _part = sum(1 for r in payload if r[7])
+            print(f"  [trades_db] family_status: {len(payload)} строк "
+                  f"({_part} участвуют в рэнкинге, {_ready} готовы к торговле), "
+                  f"переходов флагов: {len(log_rows)}", flush=True)
+        return len(payload)
+    except Exception as exc:
+        if verbose:
+            print(f"  [trades_db] family_status не записан: {exc!r}", flush=True)
+        return 0
 
 
 def record_position(position_ticket, path=None, verbose=False):

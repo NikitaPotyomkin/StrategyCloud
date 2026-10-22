@@ -394,6 +394,9 @@ class BacktestConfig:
                                     # семейства exact/exp — по срезу с warm-up, cum/model —
                                     # полным окном. Включать только после parity (strategies/_warmup.py).
     incremental_warmup_bars: int = 0  # 0 = авто (по классу памяти семейства); иначе фикс. warm-up в барах
+    calc_cache: bool = True  # True = свёртка SL/TP: подготовка (calc_*) считается 1 раз на комбинацию
+                             # параметров, а не на каждую из 9 пар SL/TP (см. strategies/_calc_cache.py).
+                             # False = откат к прежнему поведению (расчёт на каждую пару).
     full_refresh_window_end_hour: int = 10  # окно для ПОЛНОГО обновления в будни: night_backtest_hour..этот час (в выходные — всегда)
     connection_timeout_sec: int = 300
     connection_warn_every_sec: int = 600

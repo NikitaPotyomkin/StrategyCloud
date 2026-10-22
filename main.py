@@ -18,7 +18,8 @@ try:
 except Exception:
     pass
 
-from functions import terminal_on, run_full_backtest, backtest_worker_count, _checkpoint_dir
+from functions import (terminal_on, run_full_backtest, backtest_worker_count,
+                        _checkpoint_dir, family_status_rows, strategy_combos_per_symbol)
 from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
 from wheel import (
@@ -401,6 +402,39 @@ def _ingest_start(days=1, verbose=False):
     _ingest_thread = threading.Thread(target=_run, name='trades_db_ingest', daemon=True)
     _ingest_thread.start()
     return True
+
+
+# ═══ Статус семейств в БД (таблица family_status, journals/trades.db) ═══
+def _record_family_status(all_results, active, run_kind=None):
+    """Снапшот family_status — строго ПОСЛЕ реранка (после sync_active_strategies).
+
+    Отвечает на вопрос «какие семейства полностью участвуют в ночных рэнкингах и
+    готовы к торговле». Это ПЕРЕЗАПИСЬ состояния, а не лог: одна строка на
+    (symbol, family), ответ одним SELECT по ключу. История «когда вошло/вышло»
+    живёт в first_ready_at/last_ready_at + журнал переходов family_status_log.
+
+    run_kind — режим прогона (full/incremental/partial/light); по умолчанию
+    берётся из functions.LAST_RUN_KIND (его выставляет run_full_backtest).
+    Fail-safe: любая ошибка гасится, цикл и торговлю не трогает.
+    """
+    try:
+        import trades_db
+        if run_kind is None:
+            try:
+                import functions as _fn
+                run_kind = getattr(_fn, 'LAST_RUN_KIND', None) or 'light'
+            except Exception:
+                run_kind = 'light'
+        rows = family_status_rows(
+            bt_cfg.symbols, all_results, active, active_strategies,
+            plan_by_family=strategy_combos_per_symbol(strategy_params),
+            min_score=risk_cfg.min_score,
+            run_kind=run_kind,
+            key_fn=strategy_key,
+        )
+        trades_db.record_family_status(rows)
+    except Exception as exc:
+        print(f"  [WARN] family_status: {exc!r}", flush=True)
 
 
 # ═══ Утилита: диагностика — что код «видит» по последним расчётам ═══
@@ -1007,6 +1041,9 @@ if __name__ == '__main__':
                            close_order, get_deal_exit_price, record_trade,
                            strategy_key, assign_magic, bt_cfg.magic_base, len(active))
 
+    # ── Статус семейств в БД (после реранка): участие в рэнкинге и готовность ──
+    _record_family_status(all_results, active)
+
     write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
 
     # ── Штурвал при старте: обязательный шаг, не ждём ночного бэктеста ──
@@ -1257,6 +1294,9 @@ if __name__ == '__main__':
                                        close_order, get_deal_exit_price, record_trade,
                                        strategy_key, assign_magic, bt_cfg.magic_base, len(active))
 
+                # ── Статус семейств в БД (после реранка): участие в рэнкинге и готовность ──
+                _record_family_status(all_results, active)
+
                 # ── Штурвал: плавное перераспределение квот по реальным сделкам ──
                 if False:  # DEPRECATED: логика вынесена в run_steering_wheel() (вызывается безусловно ниже)
                     try:
@@ -1415,6 +1455,9 @@ if __name__ == '__main__':
                     except Exception as se:
                         print(f"\n[WARN] Ошибка штурвала: {se!r} — квоты не изменены", flush=True)
                 write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
+
+
+
 
                 # --- обновляем night_reset.json после ночного перерасчёта ---
                 _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results), ts=now)
@@ -1648,6 +1691,9 @@ if __name__ == '__main__':
             # Обновление active_state.json примерно раз в минуту
             if (now - last_state_write).total_seconds() >= 60:
                 write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
+
+
+
                 last_state_write = now
 
             # Смена месяца → новый файл журнала
@@ -1698,6 +1744,9 @@ if __name__ == '__main__':
     finally:
         save_journal(journal_df, JOURNAL_FILE)
         write_active_state(active, active_strategies, balance, risk_cfg.max_risk_pct, JOURNAL_DIR)
+
+
+
         try:
             mt5.shutdown()
         except Exception:

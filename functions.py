@@ -31,7 +31,9 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
     """
     rec = {
         'ts': (ts or datetime.datetime.now()).isoformat(timespec='seconds'),
-        'kind': 'full' if kind == 'full' else 'light',
+        # kind сохраняем как есть (full / partial / incremental / light): дэшборд
+        # рисует их отдельными сериями и считает скорость по каждому режиму.
+        'kind': kind if kind in ('full', 'partial', 'incremental') else 'light',
         'elapsed_sec': round(float(elapsed_sec), 1),
         'combos': int(combos),
         'combos_done': int(combos),  # факт = план (для лайт/partial тоже)
@@ -48,7 +50,124 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
             f.write(json.dumps(rec, ensure_ascii=False) + '\n')
     except OSError as exc:
         print(f"  [WARN] Журнал прогонов не записан: {exc!r}")
+    # Режим прогона — наружу: main.py пишет его в таблицу family_status
+    # (trades_db). Импорт по имени не годится — значение меняется в рантайме.
+    global LAST_RUN_KIND
+    LAST_RUN_KIND = rec['kind']
     return rec
+
+
+# ═══ СТАТУС СЕМЕЙСТВ: кто участвует в ночных рэнкингах ═══
+def family_status_rows(symbols, all_results, active, active_strategies,
+                       plan_by_family=None, min_score=0.0, run_kind='light',
+                       key_fn=None):
+    """Строки таблицы family_status: одно (symbol, family) → участие и готовность.
+
+    Источники (все уже под рукой в main.py сразу после реранка):
+      * plan_by_family — strategy_combos_per_symbol(strategy_params): план числа
+        комбинаций семейства на один символ;
+      * чекпойнты символов — сколько комбинаций каждого семейства РЕАЛЬНО посчитано
+        (это и есть «участие в ночных рэнкингах»);
+      * all_results — комбинации, прошедшие дедупликацию и фильтры (ranking);
+      * active + active_strategies — торговый набор и его magic.
+
+    Флаги:
+      participates   — семейство есть в плане И посчитано на 100% (полностью
+                       участвует в ночных рэнкингах);
+      ready_to_trade — есть комбинация в торговом наборе И её score >= min_score
+                       (score «совпал» с порогом отбора).
+
+    key_fn — strategy_engine.strategy_key. Передаётся снаружи намеренно: functions.py
+    остаётся без зависимости от live-движка (strategy_engine), циклический импорт
+    нам не нужен.
+    """
+    plan_by_family = plan_by_family or {}
+    symbols = list(symbols or [])
+
+    def _label(fam):
+        try:
+            from strategies._registry import label_for as _lf
+            _l = _lf(fam)
+            if _l:
+                return _l
+        except Exception:
+            pass
+        return STRATEGY_COMBO_LABELS.get(fam, fam)
+
+    def _magic(r):
+        if key_fn is None:
+            return None
+        try:
+            _k = key_fn(r['symbol'], r.get('param_key'), r.get('type', 'stoch'),
+                        r.get('parabolic_max'))
+            return (active_strategies.get(_k) or {}).get('magic')
+        except Exception:
+            return None
+
+    # Посчитано по факту: чекпойнт символа → {family: число комбинаций}
+    cached_by_sym = {}
+    for sym in symbols:
+        res, _bar, _fams = load_checkpoint(sym)
+        cnt = {}
+        for r in (res or []):
+            _t = r.get('type', 'stoch')
+            cnt[_t] = cnt.get(_t, 0) + 1
+        cached_by_sym[sym] = cnt
+
+    def _group(rows):
+        g = {}
+        for r in (rows or []):
+            g.setdefault((r['symbol'], r.get('type', 'stoch')), []).append(r)
+        return g
+
+    ranked_by = _group(all_results)
+    active_by = _group(active)
+
+    # Семейства к показу: план ∪ посчитано ∪ в ranking ∪ в active. Символы, которых
+    # нет в корзине, но которые есть в ranking/active, тоже показываем — иначе
+    # «невидимые» стратегии так и остались бы невидимыми.
+    fams_by_sym = {}
+    for sym in symbols:
+        s = set(plan_by_family.keys())
+        s |= set(cached_by_sym.get(sym, {}).keys())
+        s |= {f for (sy, f) in ranked_by if sy == sym}
+        s |= {f for (sy, f) in active_by if sy == sym}
+        fams_by_sym[sym] = s
+    for (sy, f) in list(ranked_by.keys()) + list(active_by.keys()):
+        fams_by_sym.setdefault(sy, set()).add(f)
+
+    rows = []
+    for sym, fams in fams_by_sym.items():
+        for fam in sorted(fams):
+            planned = int(plan_by_family.get(fam) or 0)
+            cached = int(cached_by_sym.get(sym, {}).get(fam) or 0)
+            ranked = ranked_by.get((sym, fam), [])
+            act = active_by.get((sym, fam), [])
+            coverage = (cached / planned * 100.0) if planned > 0 else 0.0
+            best = max(ranked, key=lambda x: x.get('score') or 0.0) if ranked else None
+            best_score = float(best.get('score') or 0.0) if best else 0.0
+            _min = float(min_score or 0.0)
+            score_ok = bool(best is not None and best_score >= _min)
+            rows.append({
+                'symbol': sym,
+                'family': fam,
+                'label': _label(fam),
+                'in_plan': planned > 0,
+                'combos_planned': planned,
+                'combos_cached': cached,
+                'coverage_pct': coverage,
+                'participates': bool(planned > 0 and cached >= planned),
+                'n_ranked': len(ranked),
+                'n_active': len(act),
+                'best_param_key': (best or {}).get('param_key', ''),
+                'best_score': best_score,
+                'min_score': _min,
+                'score_ok': score_ok,
+                'ready_to_trade': bool(act) and score_ok,
+                'magic': _magic(act[0]) if act else None,
+                'run_kind': run_kind,
+            })
+    return rows
 
 
 # ═══ ЕДИНЫЙ СЧЁТ КОМБИНАЦИЙ ═══
@@ -135,6 +254,13 @@ def strategy_combos_per_symbol(sp):
 #      trade_log.py). Файлы v1 читаются как раньше, но по ним инкремент невозможен —
 #      символ один раз пересчитывается полностью, дальше пишется v2.
 CHECKPOINT_VERSION = 2
+
+# Режим последнего прогона бэктеста (full / incremental / partial / light).
+# run_full_backtest выставляет его в конце; main.py читает и пишет в таблицу
+# family_status (trades_db), чтобы по каждому семейству было видно, в каком
+# режиме оно обсчитывалось. Импортировать значение по имени нельзя — оно
+# меняется во время работы, поэтому читаем через модуль.
+LAST_RUN_KIND = None
 
 
 def _checkpoint_dir():
@@ -653,7 +779,13 @@ def _run_symbol_safe(args):
     """Безопасный запуск бэктеста одного символа: ошибка внутри него
     не роняет весь расчёт — воркер возвращает пустой результат."""
     try:
-        return _backtest_symbol(args)
+        _symbol_out = _backtest_symbol(args)
+        try:
+            from strategies._calc_cache import log_stats as _log_calc_cache
+            _log_calc_cache('символ готов')
+        except Exception:
+            pass
+        return _symbol_out
     except Exception as exc:
         symbol = args[1] if len(args) > 1 else '?'
         print(f"\n  [ERROR] Символ {symbol} не рассчитан: {exc!r} — пропускаем",
@@ -833,6 +965,17 @@ def _backtest_symbol(args):
 
     results = []
     combos_done = 0
+
+    # ── Свёртка SL/TP: подготовка (calc_*) считается 1 раз на комбинацию параметров,
+    # а не на каждую из 9 пар SL/TP (strategies/_calc_cache.py). Сигналы от SL/TP не
+    # зависят, а пары идут подряд — 8 вызовов из 9 обслуживаются из кэша.
+    # Установка идемпотентна и нужна в КАЖДОМ процессе (родитель + воркеры multiprocessing).
+    # Откат: config.BacktestConfig.calc_cache = False (или без правки кода — паритет/EXCLUDE). ──
+    try:
+        from strategies._calc_cache import install as _install_calc_cache
+        _install_calc_cache()
+    except Exception as _cc_err:
+        print(f"  -> [WARN] calc_cache: {_cc_err}", flush=True)
     completed_strategies = []
 
     # Чекпойнт v2: журналы сделок в порядке вызовов бэктеста (см. _safe_backtest ниже).
@@ -2868,6 +3011,23 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         symbol, results, combos_done, active_combos, completed_strategies = item
         new_by_symbol.setdefault(symbol, []).extend(results)
 
+    # ── Сводка по инкременту (для журнала прогонов / вкладки Backtest) ──
+    # Нужна, чтобы в дэшборде был виден масштаб ночи: сколько семейств считалось
+    # срезом, сколько полным окном, на каком срезе и сколько комбинаций обновлено.
+    _inc_stat = None
+    if incremental_recalc:
+        _inc_vals = list(incremental_recalc.values())
+        _inc_stat = {
+            'inc_symbols': len(_inc_vals),
+            'inc_families': sum(len(m.get('inc_families') or ()) for m in _inc_vals),
+            'full_families': sum(len(m.get('full_families') or ()) for m in _inc_vals),
+            'slice_bars': max([int(m.get('slice_bars') or 0) for m in _inc_vals] or [0]),
+            'warmup_bars': max([int(m.get('warmup_bars') or 0) for m in _inc_vals] or [0]),
+            'bars_new': max([int(m.get('bars_new') or 0) for m in _inc_vals] or [0]),
+            'window_bars': int(getattr(backtest_config, 'backtest_days', 0) or 0) * 24,
+            'inc_combos': 0,
+        }
+
     # ── Мерж ИНКРЕМЕНТАЛЬНОГО пересчёта (новые бары) ──
     # Воркер посчитал: семейства inc — на срезе, full — полным окном. Журналы inc
     # склеиваем с журналами кэша (trade_log.merge_incremental), метрики пересчитываем
@@ -2910,6 +3070,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 r1['score'] = _comp_s(_m)
                 _merged.append(r1)
                 _upd += 1
+                if _inc_stat is not None:
+                    _inc_stat['inc_combos'] += 1
             all_results.extend(_merged)
             try:
                 save_checkpoint(symbol, _merged,
@@ -2990,10 +3152,13 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             symbols_total=basket_symbols,
             combos_plan=combos_plan,
             kind=('full' if force_full_recalc
-                  else ('partial' if partial_recalc else 'light')),
+                  else ('incremental' if incremental_recalc
+                        else ('partial' if partial_recalc else 'light'))),
             skipped=len(skipped_symbols),
             ok=True,
             is_night_run=is_night_run,
+            inc=(_inc_stat or {}),
+            inc_applied=bool(_inc_stat),
         )
 
         with open(last_run_path, 'w', encoding='utf-8') as f:
