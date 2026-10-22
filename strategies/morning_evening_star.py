@@ -6,95 +6,74 @@ import pandas as pd
 def calc_morning_evening_star(df, min_body_ratio=0.3):
     """
     Добавляет колонку 'star_signal' с сигналом разворотного паттерна Morning/Evening Star.
-    
+
     Args:
         df: DataFrame с OHLCV
         min_body_ratio: минимальное отношение тела первой свечи к диапазону (по умолчанию 0.3)
-    
+
     Returns:
         DataFrame с колонкой 'star_signal'
     """
     df = df.copy()
-    
+
     # Расчёт параметров свечи
     df['body'] = abs(df['close'] - df['open'])
     df['range'] = df['high'] - df['low']
     df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
     df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
-    
+
     # Morning Star (бычий разворот):
     # 1. Первая свеча — длинная медвежья (close < open)
     # 2. Вторая свеча — маленькая (doji/spinning top), пробел от первой
     # 3. Третья свеча — длинная бычья (close > open), закрывается в тело первой
-    
+
     # Evening Star (медвежий разворот):
     # 1. Первая свеча — длинная бычья (close > open)
     # 2. Вторая свеча — маленькая (doji/spinning top), пробел от первой
     # 3. Третья свеча — длинная медвежья (close < open), закрывается в тело первой
-    
-    df['star_signal'] = 0
-    
-    for i in range(2, len(df)):
-        # Свеча 1 (прошлая-прошлая)
-        c1 = df['close'].iloc[i - 2]
-        o1 = df['open'].iloc[i - 2]
-        body1 = df['body'].iloc[i - 2]
-        range1 = df['range'].iloc[i - 2]
-        
-        # Свеча 2 (прошлая)
-        c2 = df['close'].iloc[i - 1]
-        o2 = df['open'].iloc[i - 1]
-        body2 = df['body'].iloc[i - 1]
-        range2 = df['range'].iloc[i - 1]
-        
-        # Свеча 3 (текущая)
-        c3 = df['close'].iloc[i]
-        o3 = df['open'].iloc[i]
-        body3 = df['body'].iloc[i]
-        range3 = df['range'].iloc[i]
-        
-        # Проверка Morning Star (бычий разворот)
-        is_bearish1 = c1 < o1  # Первая медвежья
-        is_doji2 = body2 < range2 * min_body_ratio  # Вторая маленькая
-        is_bullish3_morning = c3 > o3  # Третья бычья
-        
-        # Проверка пробела между свечами 1 и 2
-        gap_down = o2 < c1  # Вторая ниже первой
-        
-        # Третья закрывается в тело первой
-        closes_in_body1_morning = c3 > o1
-        
-        # Третья свеча длинная
-        long_third_morning = body3 > range3 * 0.6
-        
-        if (is_bearish1 and is_doji2 and is_bullish3_morning and 
-            gap_down and closes_in_body1_morning and long_third_morning):
-            df.loc[df.index[i], 'star_signal'] = 1
-        
-        # Проверка Evening Star (медвежий разворот) — уникальные переменные
-        is_bullish1_evening = c1 > o1  # Первая бычья
-        is_bearish3_evening = c3 < o3  # Третья медвежья
-        
-        # Проверка пробела между свечами 1 и 2
-        gap_up = o2 > c1  # Вторая выше первой
-        
-        # Третья закрывается в тело первой
-        closes_in_body1_evening = c3 < o1
-        
-        # Третья свеча длинная
-        long_third_evening = body3 > range3 * 0.6
-        
-        if (is_bullish1_evening and is_doji2 and is_bearish3_evening and 
-            gap_up and closes_in_body1_evening and long_third_evening):
-            df.loc[df.index[i], 'star_signal'] = -1
-    
+
+    # ── Поиск паттерна (векторно, без цикла по барам) ──
+    # Свеча 1 = i-2, свеча 2 = i-1, свеча 3 = i. Условия — как в старом коде
+    # (свеча 1/2/3 по open/close/body/range). Morning проверяется первым, затем
+    # Evening перезаписывает при совпадении обоих — тот же порядок, что в цикле.
+    open_arr = df['open'].to_numpy(dtype=float)
+    close_arr = df['close'].to_numpy(dtype=float)
+    body_arr = df['body'].to_numpy(dtype=float)
+    range_arr = df['range'].to_numpy(dtype=float)
+    n = len(df)
+
+    signal = np.zeros(n, dtype=int)
+    if n > 2:
+        c1 = close_arr[:-2]
+        o1 = open_arr[:-2]
+        o2 = open_arr[1:-1]
+        c3 = close_arr[2:]
+        o3 = open_arr[2:]
+        body2 = body_arr[1:-1]
+        range2 = range_arr[1:-1]
+        body3 = body_arr[2:]
+        range3 = range_arr[2:]
+
+        is_doji2 = body2 < range2 * min_body_ratio          # Вторая свеча маленькая
+        long_third = body3 > range3 * 0.6                   # Третья свеча длинная
+
+        morning = ((c1 < o1) & is_doji2 & (c3 > o3) &       # первая медвежья, третья бычья
+                   (o2 < c1) & (c3 > o1) & long_third)      # пробел вниз, закрытие в тело первой
+        evening = ((c1 > o1) & is_doji2 & (c3 < o3) &       # первая бычья, третья медвежья
+                   (o2 > c1) & (c3 < o1) & long_third)      # пробел вверх, закрытие в тело первой
+
+        signal[2:][morning] = 1
+        signal[2:][evening] = -1
+
+    df['star_signal'] = signal
+
     return df
 
 
 def check_entry(prev_signal, curr_signal):
     """
     Вход при появлении разворотного паттерна Morning/Evening Star.
-    
+
     Returns:
         'long', 'short' или None
     """
@@ -110,10 +89,10 @@ def check_entry(prev_signal, curr_signal):
 def check_exit(prev_signal, curr_signal, direction):
     """
     Выход при появлении противоположного сигнала.
-    
+
     Args:
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -132,7 +111,7 @@ def backtest(df, min_body_ratio, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с Morning/Evening Star.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -147,12 +126,16 @@ def backtest(df, min_body_ratio, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_star_signal = df['star_signal'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_signal = df['star_signal'].iloc[i - 1]
-        curr_signal = df['star_signal'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_signal = _c_star_signal[i - 1]
+        curr_signal = _c_star_signal[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

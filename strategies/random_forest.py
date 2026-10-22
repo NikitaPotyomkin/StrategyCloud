@@ -6,7 +6,21 @@ bfill удалён — он заполнял пропуски будущими �
 """
 import numpy as np
 import pandas as pd
+import os
+
 from config import RF_RETRAIN_EVERY
+
+# ── Мемо walk-forward прогнозов ──
+# rf_prob НЕ зависит от threshold: порог влияет только на rf_signal, а backtest сам
+# считает rf_sig_thresh из rf_prob. Значит обучение модели не нужно повторять для каждого
+# порога грида (RF_THRESHOLD_RANGE) — кэшируем прогноз по ключу
+# (отпечаток df, lookback, n_bars, n_estimators, max_depth, retrain_every).
+# id(df) в ключ НЕ входит: calc_random_forest_once сам делает df.copy() и make_features()
+# (там ещё один copy) — каждый вызов получает СВЕЖИЙ объект, и с id(df) кэш не попадал бы.
+# Откат: STRATEGYCLOUD_RF_MEMO=0.
+RF_MEMO_PROB = os.environ.get('STRATEGYCLOUD_RF_MEMO', '1').strip().lower() not in ('0', 'false', 'no', 'off', '')
+_PROB_CACHE = {}
+_PROB_CACHE_MAX = 16
 
 
 def make_features(df, lookback):
@@ -65,6 +79,22 @@ def train_model(X, y, n_estimators=50, max_depth=5):
     return model
 
 
+def _df_fingerprint(df):
+    """Дешёвый отпечаток кадра для мемо: длина, границы индекса, последний close, хэш OHLC.
+
+    Ловит правку НА МЕСТЕ (дописывание нового бара в тот же объект)."""
+    try:
+        n = len(df)
+        if n == 0:
+            return (0, None, None, None)
+        cols = [c for c in ('high', 'low', 'close') if c in df.columns]
+        blob = b''.join(np.ascontiguousarray(df[c].to_numpy(dtype=float)).tobytes()
+                        for c in cols)
+        return (n, df.index[0], df.index[-1], float(df['close'].iloc[-1]), hash(blob))
+    except Exception:
+        return None
+
+
 def calc_random_forest_once(df, lookback, n_bars, threshold=0.6,
                             n_estimators=50, max_depth=5, retrain_every=RF_RETRAIN_EVERY):
     """Считает признаки и прогнозами Walk-Forward Random Forest.
@@ -96,17 +126,32 @@ def calc_random_forest_once(df, lookback, n_bars, threshold=0.6,
     retrain_every = max(1, retrain_every)
     start = lookback + n_bars
 
-    while start < n:
+    # Признаки и таргет один раз в numpy — walk-forward цикл больше не режет pandas
+    # на каждой итерации. Значения те же, что дают df.iloc[…][feature_cols] и
+    # df.iloc[…]['target'] (позиционные срезы), поэтому прогнозы не меняются.
+    F = df[feature_cols].to_numpy(dtype=float)
+    F_ok = ~np.isnan(F).any(axis=1)
+    y_all = df['target'].to_numpy(dtype=float)
+    # Мемо: тот же кадр/параметры модели → прогноз уже посчитан (threshold в ключ НЕ входит)
+    memo_key = None
+    prob = None
+    if RF_MEMO_PROB:
+        memo_key = (_df_fingerprint(df), int(lookback), int(n_bars),
+                    int(n_estimators), int(max_depth), int(retrain_every))
+        prob = _PROB_CACHE.get(memo_key)
+
+    prob_cached = prob is not None
+    if prob is None:
+        prob = np.full(n, np.nan, dtype=float)
+
+    while not prob_cached and start < n:
         # --- Обучение только на прошлом (без будущего) ---
         train_start = max(0, start - lookback)
         train_end = start - n_bars  # последняя строка с известным таргетом
 
-        X_train = df.iloc[train_start:train_end][feature_cols]
-        y_train = df.iloc[train_start:train_end]['target']
-
-        valid = y_train.notna() & X_train.notna().all(axis=1)
-        X_valid = X_train[valid].values
-        y_valid = y_train[valid].values.astype(int)
+        valid = F_ok[train_start:train_end] & ~np.isnan(y_all[train_start:train_end])
+        X_valid = F[train_start:train_end][valid]
+        y_valid = y_all[train_start:train_end][valid].astype(int)
 
         if len(X_valid) < 50 or len(np.unique(y_valid)) < 2:
             start += retrain_every
@@ -119,15 +164,21 @@ def calc_random_forest_once(df, lookback, n_bars, threshold=0.6,
 
         # --- Предсказание для баров [start, end) ---
         end = min(start + retrain_every, n)
-        X_pred = df.iloc[start:end][feature_cols]
-        valid_pred = X_pred.notna().all(axis=1)
+        valid_pred = F_ok[start:end]
 
         if valid_pred.any():
-            probs = model.predict_proba(X_pred[valid_pred].values)[:, 1]
-            pred_idx = X_pred.index[valid_pred]
-            df.loc[pred_idx, 'rf_prob'] = probs
+            probs = model.predict_proba(F[start:end][valid_pred])[:, 1]
+            prob[start:end][valid_pred] = probs
 
         start = end
+
+    # Кладём копию, чтобы кадр/вызов не могли испортить закэшированный массив
+    if RF_MEMO_PROB and memo_key is not None and not prob_cached:
+        if len(_PROB_CACHE) >= _PROB_CACHE_MAX:
+            _PROB_CACHE.clear()
+        _PROB_CACHE[memo_key] = prob.copy()
+
+    df['rf_prob'] = prob
 
     # --- Сигналы по порогу ---
     df.loc[df['rf_prob'] >= threshold, 'rf_signal'] = 1
@@ -186,12 +237,16 @@ def backtest(df, lookback, n_bars, threshold, sl_points, tp_points, point,
     df_calc.loc[df_calc['rf_prob'] >= threshold, 'rf_sig_thresh'] = 1
     df_calc.loc[df_calc['rf_prob'] <= (1 - threshold), 'rf_sig_thresh'] = -1
 
+    _c_df_calc_rf_sig_thresh = df_calc['rf_sig_thresh'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_df_calc_close = df_calc['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_df_calc_high = df_calc['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_df_calc_low = df_calc['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df_calc)):
-        prev_signal = df_calc['rf_sig_thresh'].iloc[i - 1]
-        curr_signal = df_calc['rf_sig_thresh'].iloc[i]
-        curr_close = df_calc['close'].iloc[i]
-        current_high = df_calc['high'].iloc[i]
-        current_low = df_calc['low'].iloc[i]
+        prev_signal = _c_df_calc_rf_sig_thresh[i - 1]
+        curr_signal = _c_df_calc_rf_sig_thresh[i]
+        curr_close = _c_df_calc_close[i]
+        current_high = _c_df_calc_high[i]
+        current_low = _c_df_calc_low[i]
 
         # ── Проверка выхода ──
         if position:
@@ -247,5 +302,5 @@ def backtest(df, lookback, n_bars, threshold, sl_points, tp_points, point,
     return profit, n_trades, trade_profits
 
 
-# Алиас для совместимости с check_active_signals
+# Алиас для движка/live: main.py импортирует calc_random_forest
 calc_random_forest = calc_random_forest_once

@@ -61,14 +61,20 @@ def backtest_rsi_reversal(df, rsi_period, rsi_oversold, rsi_overbought,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_signal = df['signal'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_rsi = df['rsi'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_trend = df['trend'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(max(rsi_period + 1, 201), len(df)):
-        prev_signal = df['signal'].iloc[i - 1]
-        curr_signal = df['signal'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        curr_rsi = df['rsi'].iloc[i]
-        curr_trend = df['trend'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_signal = _c_signal[i - 1]
+        curr_signal = _c_signal[i]
+        curr_close = _c_close[i]
+        curr_rsi = _c_rsi[i]
+        curr_trend = _c_trend[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Выход ──
         if position:

@@ -6,68 +6,66 @@ import pandas as pd
 def calc_bb_squeeze(df, bb_period=20, bb_std=2.0, squeeze_pct=0.5):
     """
     Добавляет колонку 'bb_signal' с сигналом пробоя после сжатия Bollinger Bands.
-    
+
     Args:
         df: DataFrame с OHLCV
         bb_period: период для расчёта Bollinger Bands
         bb_std: стандартное отклонение для Bollinger Bands
         squeeze_pct: относительный порог сжатия (процент от средней ширины)
-    
+
     Returns:
         DataFrame с колонками 'bb_middle', 'bb_width', 'bb_squeezing', 'bb_signal'
     """
     df = df.copy()
-    
+
     # Средняя линия (SMA)
     df['bb_middle'] = df['close'].rolling(bb_period).mean()
-    
+
     # Стандартное отклонение
     bb_std_dev = df['close'].rolling(bb_period).std()
-    
+
     # Верхняя и нижняя линии
     df['bb_upper'] = df['bb_middle'] + bb_std * bb_std_dev
     df['bb_lower'] = df['bb_middle'] - bb_std * bb_std_dev
-    
+
     # Ширина полос (нормализованная — относительная)
     df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
+
     # Определение сжатия: ширина полос меньше squeeze_pct от скользящей средней ширины
     # Используем rolling mean ширины с окном побольше для стабильной оценки
     rolling_window = max(bb_period * 2, 50)
     df['bb_width_ma'] = df['bb_width'].rolling(rolling_window, min_periods=20).mean()
     df['bb_squeezing'] = (df['bb_width'] < df['bb_width_ma'] * squeeze_pct).astype(int)
-    
-    # Флаг для отслеживания состояния squeeze
-    df['squeeze_active'] = 0
-    squeeze_state = 0
-    
-    # Сигнал пробоя: было/есть сжатие, затем пробой за пределы
-    df['bb_signal'] = 0
-    for i in range(1, len(df)):
-        is_squeeze = df['bb_squeezing'].iloc[i] == 1
-        
-        # Обновляем состояние squeeze
-        if is_squeeze:
-            squeeze_state = 1
-        else:
-            squeeze_state = 0
-        
-        df.loc[df.index[i], 'squeeze_active'] = squeeze_state
-        
-        # Сигнал генерируется пока squeeze активен И цена пробивает за пределы
-        if squeeze_state == 1:
-            if df['close'].iloc[i] > df['bb_upper'].iloc[i]:
-                df.loc[df.index[i], 'bb_signal'] = 1
-            elif df['close'].iloc[i] < df['bb_lower'].iloc[i]:
-                df.loc[df.index[i], 'bb_signal'] = -1
-    
+
+    # ── Сигнал пробоя (векторно, без цикла по барам) ──
+    # squeeze_active[i] = bb_squeezing[i] для i >= 1 (состояние сбрасывается на каждом баре,
+    # где сжатия нет), squeeze_active[0] = 0 — старый цикл начинался с i=1.
+    # bb_signal[i] = ±1, если сжатие активно И цена закрытия вышла за полосу, иначе 0.
+    n = len(df)
+    squeezing = df['bb_squeezing'].to_numpy(dtype=np.int64)
+    squeeze_active = np.zeros(n, dtype=int)
+    if n > 1:
+        squeeze_active[1:] = squeezing[1:]
+    df['squeeze_active'] = squeeze_active
+
+    close = df['close'].to_numpy(dtype=float)
+    upper = df['bb_upper'].to_numpy(dtype=float)
+    lower = df['bb_lower'].to_numpy(dtype=float)
+    active = squeeze_active == 1
+    up_break = active & (close > upper)      # NaN в полосах → False (как в pandas-сравнении)
+    dn_break = active & (close < lower)
+    signal = np.zeros(n, dtype=int)
+    signal[up_break] = 1
+    signal[dn_break] = -1
+    df['bb_signal'] = signal
+
     return df
 
 
 def check_entry(prev_signal, curr_signal):
     """
     Вход при пробое после сжатия Bollinger Bands.
-    
+
     Returns:
         'long', 'short' или None
     """
@@ -83,13 +81,13 @@ def check_entry(prev_signal, curr_signal):
 def check_exit(prev_signal, curr_signal, direction, bb_middle=None, prev_close=None, curr_close=None):
     """
     Выход при возврате цены к средней линии BB или смене направления.
-    
+
     Args:
         direction: 'long' или 'short'
         bb_middle: текущее значение bb_middle (опционально)
         prev_close: цена закрытия предыдущего бара
         curr_close: цена закрытия текущего бара
-    
+
     Returns:
         True если нужно выйти
     """
@@ -128,7 +126,7 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с BB squeeze-breakout.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -143,12 +141,17 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_bb_signal = df['bb_signal'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_bb_middle = df['bb_middle'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_signal = df['bb_signal'].iloc[i - 1]
-        curr_signal = df['bb_signal'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_signal = _c_bb_signal[i - 1]
+        curr_signal = _c_bb_signal[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:
@@ -167,8 +170,8 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
                 elif check_exit(prev_signal, curr_signal, 'long',
-                               bb_middle=df['bb_middle'].iloc[next_i],
-                               prev_close=df['close'].iloc[i-1] if i > 0 else curr_close,
+                               bb_middle=_c_bb_middle[next_i],
+                               prev_close=_c_close[i-1] if i > 0 else curr_close,
                                curr_close=curr_close):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'long')
@@ -183,8 +186,8 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
                 elif check_exit(prev_signal, curr_signal, 'short',
-                               bb_middle=df['bb_middle'].iloc[next_i],
-                               prev_close=df['close'].iloc[i-1] if i > 0 else curr_close,
+                               bb_middle=_c_bb_middle[next_i],
+                               prev_close=_c_close[i-1] if i > 0 else curr_close,
                                curr_close=curr_close):
                     p = _profit(position['entry'], curr_close,
                                 tick_value, tick_size, sim_lot, 'short')

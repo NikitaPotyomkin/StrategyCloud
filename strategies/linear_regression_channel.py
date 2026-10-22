@@ -2,74 +2,91 @@
 import numpy as np
 import pandas as pd
 
+try:
+    from numpy.lib.stride_tricks import sliding_window_view
+except ImportError:  # numpy < 1.20
+    def sliding_window_view(a, w):
+        shape = (a.size - w + 1, w)
+        strides = (a.strides[0], a.strides[0])
+        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+
 
 def calc_lr_channel(df, lr_period, sigma_mult=2.0):
     """
     Добавляет колонки 'lr_line', 'lr_upper', 'lr_lower' с линией регрессии и каналами.
-    
+
     Args:
         df: DataFrame с OHLCV
         lr_period: период для линейной регрессии
         sigma_mult: множитель стандартного отклонения для каналов
-    
+
     Returns:
         DataFrame с колонками 'lr_line', 'lr_upper', 'lr_lower', 'lr_signal'
     """
     df = df.copy()
     n = len(df)
-    lr_line = []
-    lr_upper = []
-    lr_lower = []
-    
-    for i in range(n):
-        if i < lr_period - 1:
-            lr_line.append(df['close'].iloc[i])
-            lr_upper.append(df['close'].iloc[i])
-            lr_lower.append(df['close'].iloc[i])
-        else:
-            x = np.arange(lr_period)
-            y = df['close'].iloc[i - lr_period + 1:i + 1].values
-            
-            # Линейная регрессия y = a + b*x
-            x_mean = x.mean()
-            y_mean = y.mean()
-            num = ((x - x_mean) * (y - y_mean)).sum()
-            den = ((x - x_mean) ** 2).sum()
-            
-            if den == 0:
-                a = y_mean
-                b = 0
-            else:
-                b = num / den
-                a = y_mean - b * x_mean
-            
-            # Значение линии на последнем баре
-            line_value = a + b * (lr_period - 1)
-            lr_line.append(line_value)
-            
-            # Стандартное отклонение
-            residuals = y - (a + b * x)
-            std = residuals.std()
-            
-            lr_upper.append(line_value + sigma_mult * std)
-            lr_lower.append(line_value - sigma_mult * std)
-    
+    p = int(lr_period)
+
+    # ── Линейная регрессия по окну (векторно, без цикла по барам) ──
+    # Окно y = close[i-p+1 : i+1] (p значений), x = arange(p). Регрессия y = a + b·x:
+    # b = Σ(x-xm)(y-ym)/Σ(x-xm)², a = ym - b·xm, линия в последней точке: a + b·(p-1).
+    # σ — по остаткам y - (a + b·x) как numpy .std() (ddof=0, population: y берётся .values).
+    # как в старом коде; для i < p-1 линия/каналы равны close[i].
+    lr_line = np.empty(n, dtype=float)
+    lr_upper = np.empty(n, dtype=float)
+    lr_lower = np.empty(n, dtype=float)
+
+    close_arr = df['close'].to_numpy(dtype=float)
+    head = min(max(p - 1, 0), n)          # i < p-1 → проход цены как есть
+    if head > 0:
+        lr_line[:head] = close_arr[:head]
+        lr_upper[:head] = close_arr[:head]
+        lr_lower[:head] = close_arr[:head]
+
+    if p >= 1 and n >= p:
+        x = np.arange(p, dtype=float)
+        x_mean = x.mean()
+        xc = x - x_mean
+        den = (xc * xc).sum()
+        windows = sliding_window_view(close_arr, p)      # строки s: close[s : s+p], бар i = s+p-1
+        chunk = max(1, 2_000_000 // p)
+        total = n - p + 1
+        with np.errstate(divide='ignore', invalid='ignore'):
+            for start in range(0, total, chunk):
+                stop = min(start + chunk, total)
+                block = windows[start:stop]
+                y_mean = block.mean(axis=1)
+                num = ((block - y_mean[:, None]) * xc).sum(axis=1)
+                if den == 0:
+                    a = y_mean
+                    b = np.zeros_like(y_mean)
+                else:
+                    b = num / den
+                    a = y_mean - b * x_mean
+                line = a + b * (p - 1)
+                residuals = block - (a[:, None] + b[:, None] * x)
+                std = residuals.std(axis=1)                # ddof=0 — как numpy .std() на .values
+                dst = slice(start + p - 1, stop + p - 1)
+                lr_line[dst] = line
+                lr_upper[dst] = line + sigma_mult * std
+                lr_lower[dst] = line - sigma_mult * std
+
     df['lr_line'] = lr_line
     df['lr_upper'] = lr_upper
     df['lr_lower'] = lr_lower
-    
+
     # Сигнал: цена выше верхней границы → short, ниже нижней → long
     df['lr_signal'] = 0
     df.loc[df['close'] > df['lr_upper'], 'lr_signal'] = -1
     df.loc[df['close'] < df['lr_lower'], 'lr_signal'] = 1
-    
+
     return df
 
 
 def check_entry(prev_signal, curr_signal):
     """
     Вход при уходе цены за пределы канала.
-    
+
     Returns:
         'long', 'short' или None
     """
@@ -85,10 +102,10 @@ def check_entry(prev_signal, curr_signal):
 def check_exit(prev_signal, curr_signal, direction):
     """
     Выход при возврате к линии регрессии.
-    
+
     Args:
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -107,7 +124,7 @@ def backtest(df, lr_period, sigma_mult, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с Linear Regression Channel.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -122,12 +139,16 @@ def backtest(df, lr_period, sigma_mult, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_lr_signal = df['lr_signal'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_signal = df['lr_signal'].iloc[i - 1]
-        curr_signal = df['lr_signal'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_signal = _c_lr_signal[i - 1]
+        curr_signal = _c_lr_signal[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

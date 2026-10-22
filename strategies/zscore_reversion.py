@@ -102,12 +102,16 @@ def backtest(df, sma_period, z_threshold, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_zscore = df['zscore'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_z = df['zscore'].iloc[i - 1]
-        curr_z = df['zscore'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_z = _c_zscore[i - 1]
+        curr_z = _c_zscore[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

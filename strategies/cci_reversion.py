@@ -2,48 +2,69 @@
 import numpy as np
 import pandas as pd
 
+try:
+    from numpy.lib.stride_tricks import sliding_window_view
+except ImportError:  # numpy < 1.20
+    def sliding_window_view(a, w):
+        shape = (a.size - w + 1, w)
+        strides = (a.strides[0], a.strides[0])
+        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+
 
 def calc_cci(df, period=14, threshold=100):
     """
     Добавляет колонку 'cci' с Commodity Channel Index и сигналом.
-    
+
     Args:
         df: DataFrame с OHLCV
         period: период для расчёта CCI
         threshold: пороговое значение CCI (по умолчанию 100)
-    
+
     Returns:
         DataFrame с колонками 'cci', 'cci_signal'
     """
     df = df.copy()
-    
+
     # Typical Price
     tp = (df['high'] + df['low'] + df['close']) / 3
-    
+
     # Mean Price
     mean_price = tp.rolling(period).mean()
-    
-    # Mean Deviation
-    dev = tp.rolling(period).apply(lambda x: np.abs(x - x.mean()).mean())
-    
+
+    # Mean Deviation (векторно: rolling.apply заменён на среднее |x-μ| по скользящему окну).
+    # Окно trailing (как rolling): строки tp[s : s+period] → бар i = s+period-1.
+    # Для первых period-1 баров значение NaN — как у rolling.apply с min_periods=period.
+    tp_arr = tp.to_numpy(dtype=float)
+    n = len(df)
+    dev = np.full(n, np.nan, dtype=float)
+    if period > 0 and n >= period:
+        windows = sliding_window_view(tp_arr, period)
+        chunk = max(1, 2_000_000 // period)
+        total = n - period + 1
+        for start in range(0, total, chunk):
+            stop = min(start + chunk, total)
+            block = windows[start:stop]
+            mu = block.mean(axis=1)
+            dev[start + period - 1:stop + period - 1] = np.abs(block - mu[:, None]).mean(axis=1)
+
     # CCI = (Typical Price - Mean Price) / (0.015 * Mean Deviation)
     # 0.015 — стандартный множитель для CCI
     df['cci'] = np.where(dev != 0,
                          (tp - mean_price) / (0.015 * dev),
                          0)
-    
+
     # Сигнал: CCI < -threshold → LONG (перепроданность), CCI > threshold → SHORT (перекупленность)
     df['cci_signal'] = 0
     df.loc[df['cci'] < -threshold, 'cci_signal'] = 1
     df.loc[df['cci'] > threshold, 'cci_signal'] = -1
-    
+
     return df
 
 
 def check_entry(prev_signal, curr_signal):
     """
     Вход при выходе из экстремальной зоны CCI (mean reversion).
-    
+
     Returns:
         'long', 'short' или None
     """
@@ -59,10 +80,10 @@ def check_entry(prev_signal, curr_signal):
 def check_exit(prev_signal, curr_signal, direction):
     """
     Выход при возврате из экстремальной зоны в нейтральную.
-    
+
     Args:
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -81,7 +102,7 @@ def backtest(df, period, threshold, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с CCI Reversion.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -96,12 +117,16 @@ def backtest(df, period, threshold, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_cci_signal = df['cci_signal'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_signal = df['cci_signal'].iloc[i - 1]
-        curr_signal = df['cci_signal'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_signal = _c_cci_signal[i - 1]
+        curr_signal = _c_cci_signal[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

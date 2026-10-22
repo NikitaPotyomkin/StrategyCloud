@@ -157,12 +157,16 @@ def backtest(df, step, max_val, sl_points, tp_points, point, tick_value, tick_si
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_sar_trend = df['sar_trend'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(2, len(df)):
-        prev_trend = df['sar_trend'].iloc[i - 1]
-        curr_trend = df['sar_trend'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_trend = _c_sar_trend[i - 1]
+        curr_trend = _c_sar_trend[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

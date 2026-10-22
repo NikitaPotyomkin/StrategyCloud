@@ -72,12 +72,16 @@ class BaseStrategy:
         from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
         trade_profits = TradeList()
 
+        _c_signal_col = df[signal_col].to_numpy()   # numpy-петля: позиционный доступ
+        _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+        _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+        _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
         for i in range(1, len(df)):
-            prev_signal = df[signal_col].iloc[i - 1]
-            curr_signal = df[signal_col].iloc[i]
-            curr_close = df['close'].iloc[i]
-            current_high = df['high'].iloc[i]
-            current_low = df['low'].iloc[i]
+            prev_signal = _c_signal_col[i - 1]
+            curr_signal = _c_signal_col[i]
+            curr_close = _c_close[i]
+            current_high = _c_high[i]
+            current_low = _c_low[i]
 
             # ── Проверка выхода ──
             if position:

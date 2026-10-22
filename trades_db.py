@@ -370,14 +370,36 @@ def _snapshot_registry(con, registry):
     con.commit()
 
 
+def _ensure_mt5(verbose=True):
+    """Соединение с терминалом для запуска из консоли (`python trades_db.py ...`).
+
+    Из main.py соединение уже поднято, тогда terminal_info() не None — функция
+    ничего не делает и НИКОГДА не закрывает чужую сессию. А при CLI-запуске
+    initialize() никто не звал: history_deals_get/positions_get без соединения
+    возвращают пусто, и догон молча рапортовал «получено 0 сдел(ок)».
+    """
+    if mt5 is None:
+        return False
+    try:
+        if mt5.terminal_info() is not None:
+            return True  # сессия уже есть (боевой процесс) — не трогаем
+    except Exception:
+        pass
+    if mt5.initialize():
+        return True
+    if verbose:
+        print(f"  [trades_db] MT5 initialize не удался: {mt5.last_error()}", flush=True)
+    return False
+
+
 def ingest(days=7, path=None, verbose=True):
     """Добрать сделки из MT5-истории в БД. Возвращает число обработанных deals (0 при сбое).
 
     Окно: от min(now-days, last_time − 1 день) с суточным перехлёстом — ничего не теряем.
     """
-    if mt5 is None:
+    if not _ensure_mt5(verbose):
         if verbose:
-            print("  [trades_db] MetaTrader5 недоступен — ingest пропущен", flush=True)
+            print("  [trades_db] соединение с MT5 недоступно — ingest пропущен", flush=True)
         return 0
     try:
         con = connect(path)
@@ -430,6 +452,16 @@ def ingest(days=7, path=None, verbose=True):
         if verbose:
             print(f"  [trades_db] ingest: получено {len(payload)} сдел(ок) из MT5, "
                   f"в БД всего {total} (окно от {from_dt:%Y-%m-%d %H:%M})", flush=True)
+            if not deals:
+                # Пустой ответ MT5 = нет соединения (CLI-запуск) или терминал без
+                # загруженной истории. Без этой строки догон молча возвращал 0.
+                _ti = mt5.terminal_info()
+                print(f"  [trades_db] MT5 вернул 0 сделок: терминал={'есть' if _ti else 'НЕТ'}, "
+                      f"last_error={mt5.last_error()}, "
+                      f"окно {from_dt:%Y-%m-%d %H:%M} … {to_dt:%Y-%m-%d %H:%M}", flush=True)
+            elif len(payload) < len(deals):
+                print(f"  [trades_db] отброшено {len(deals) - len(payload)} deal(ов) "
+                      f"из {len(deals)} (ошибка разбора строки)", flush=True)
         return len(payload)
     except Exception as exc:
         if verbose:
@@ -565,9 +597,9 @@ def sample_positions(interval=None, path=None, verbose=True):
     interval — интервал планирования (его соблюдает вызывающая сторона, напр. main);
     сама функция только делает один сэмпл. Fail-safe: ошибка → 0, пайплайн не падает.
     """
-    if mt5 is None:
+    if not _ensure_mt5(verbose):
         if verbose:
-            print("  [trades_db] MetaTrader5 недоступен — sample пропущен", flush=True)
+            print("  [trades_db] соединение с MT5 недоступно — sample пропущен", flush=True)
         return 0
     try:
         acc = mt5.account_info()

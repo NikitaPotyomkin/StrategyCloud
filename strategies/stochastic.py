@@ -52,12 +52,16 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size, 
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_k = df['k'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i - 1]
-        last_k = df['k'].iloc[i]
-        high = df['high'].iloc[i]
-        low = df['low'].iloc[i]
-        close = df['close'].iloc[i]
+        prev_k = _c_k[i - 1]
+        last_k = _c_k[i]
+        high = _c_high[i]
+        low = _c_low[i]
+        close = _c_close[i]
 
         # ── Проверка выхода ──
         if position:
@@ -116,4 +120,3 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size, 
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 
     return profit, n_trades, trade_profits
-

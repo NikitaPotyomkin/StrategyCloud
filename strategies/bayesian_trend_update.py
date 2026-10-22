@@ -14,53 +14,55 @@ import pandas as pd
 def calc_bayesian_trend(df, window, prior=0.5, p_entry=0.65, p_exit=0.5):
     """
     Добавляет колонки 'p_trend' и 'mean_ret' для определения направления.
-    
+
     Args:
         df: DataFrame с OHLCV
         window: размер окна для расчёта
         prior: априорная вероятность тренда
         p_entry: порог вероятности для входа
         p_exit: порог вероятности для выхода
-    
+
     Returns:
         DataFrame с колонками 'p_trend', 'mean_ret', 'trend_up', 'trend_down'
     """
     df = df.copy()
     returns = df['close'].pct_change().fillna(0)
     df['mean_ret'] = returns.rolling(window, min_periods=1).mean()
-    
-    p_trend_values = []
-    p_trend = prior
-    
-    for i in range(len(df)):
+
+    # ── Байесовское обновление (векторно по доле роста) ──
+    # up_ratio[i] = доля положительных возвратов в окне returns[i-window:i] — считается
+    # префиксными суммами (O(1) на бар) вместо среза returns.iloc[i-window:i].
+    # Само обновление p_trend — последовательное (рекуррентное), но это уже чистая
+    # арифметика без pandas, поэтому цикл дешёвый.
+    r = returns.to_numpy(dtype=float)
+    n = len(r)
+    positive = (r > 0).astype(np.float64)
+    cs = np.concatenate(([0.0], np.cumsum(positive)))    # cs[i] — positives в r[:i]
+
+    p_trend_values = np.empty(n, dtype=float)
+    p_trend = float(prior)
+    w = float(window)
+
+    for i in range(n):
         if i < window:
-            p_trend_values.append(p_trend)
+            p_trend_values[i] = p_trend
         else:
-            window_returns = returns.iloc[i - window:i]
-            # Вероятность роста в окне
-            up_ratio = (window_returns > 0).sum() / len(window_returns)
-            
-            # Байесовское обновление для вероятности тренда
-            # P(trend|up) = P(up|trend) * P(trend) / P(up)
-            # P(up|trend) ~ up_ratio (если тренд, чаще рост)
-            # P(up|no_trend) ~ 0.5 (случайный блуждание)
+            up_ratio = (cs[i] - cs[i - window]) / w
             likelihood_up_given_trend = up_ratio
             likelihood_up_given_no_trend = 0.5
-            
-            # P(up) = P(up|trend)*P(trend) + P(up|no_trend)*P(no_trend)
-            p_up = (likelihood_up_given_trend * p_trend + 
+            p_up = (likelihood_up_given_trend * p_trend +
                     likelihood_up_given_no_trend * (1 - p_trend))
-            
             if p_up > 0:
-                # P(trend|up)
                 p_trend = (likelihood_up_given_trend * p_trend) / p_up
-            
             # Ограничиваем диапазон
-            p_trend = np.clip(p_trend, 0.01, 0.99)
-            p_trend_values.append(p_trend)
-    
+            if p_trend < 0.01:
+                p_trend = 0.01
+            elif p_trend > 0.99:
+                p_trend = 0.99
+            p_trend_values[i] = p_trend
+
     df['p_trend'] = p_trend_values
-    
+
     # Направление по mean_ret (средний возврат за окно)
     df['trend_up'] = (df['p_trend'] > p_entry) & (df['mean_ret'] > 0)
     df['trend_down'] = (df['p_trend'] > p_entry) & (df['mean_ret'] < 0)
@@ -70,7 +72,7 @@ def calc_bayesian_trend(df, window, prior=0.5, p_entry=0.65, p_exit=0.5):
 def check_entry(prev_up, prev_down, curr_up, curr_down):
     """
     Вход при росте вероятности тренда с направлением.
-    
+
     Returns:
         'long' — появился сильный восходящий тренд, 'short' — нисходящий, None — иначе
     """
@@ -84,10 +86,10 @@ def check_entry(prev_up, prev_down, curr_up, curr_down):
 def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
     Выход при падении вероятности тренда.
-    
+
     Args:
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -106,7 +108,7 @@ def backtest(df, window, prior, p_entry, p_exit, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с Bayesian trend update.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -121,14 +123,19 @@ def backtest(df, window, prior, p_entry, p_exit, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_trend_up = df['trend_up'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_trend_down = df['trend_down'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_up = df['trend_up'].iloc[i - 1]
-        prev_down = df['trend_down'].iloc[i - 1]
-        curr_up = df['trend_up'].iloc[i]
-        curr_down = df['trend_down'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_up = _c_trend_up[i - 1]
+        prev_down = _c_trend_down[i - 1]
+        curr_up = _c_trend_up[i]
+        curr_down = _c_trend_down[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

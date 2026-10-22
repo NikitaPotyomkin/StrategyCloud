@@ -2,37 +2,55 @@
 import numpy as np
 import pandas as pd
 
+try:
+    from numpy.lib.stride_tricks import sliding_window_view
+except ImportError:  # numpy < 1.20
+    def sliding_window_view(a, w):
+        shape = (a.size - w + 1, w)
+        strides = (a.strides[0], a.strides[0])
+        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+
 
 def calc_autocorrelation(df, acf_lag, vol_period=20):
     """
     Добавляет колонку 'acf' с автокорреляцией лага 1.
-    
+
     Args:
         df: DataFrame с OHLCV
         acf_lag: лаг для расчёта автокорреляции
         vol_period: период для расчёта объёма
-    
+
     Returns:
         DataFrame с колонкой 'acf'
     """
     df = df.copy()
     returns = df['close'].pct_change()
-    
-    # Расчёт автокорреляции лага 1
-    acf_values = []
-    for i in range(len(df)):
-        if i < acf_lag + 1:
-            acf_values.append(0)
-        else:
-            x = returns.iloc[i - acf_lag:i + 1]
-            mean_x = x.mean()
-            num = ((x - mean_x) * (x.shift(acf_lag) - mean_x)).sum()
-            den = ((x - mean_x) ** 2).sum()
-            if den == 0:
-                acf_values.append(0)
-            else:
-                acf_values.append(num / den)
-    
+
+    # ── Автокорреляция (векторно, без цикла по барам) ──
+    # Старый код брал окно x = returns[i-k : i+1] (k+1 значений, индексы i-k..i),
+    # затем num = ((x-μ) * (x.shift(k)-μ)).sum(). shift(k) оставляет в окне только
+    # один валидный сдвинутый элемент (позиция k = x[0]), поэтому num сводится к
+    # (x[k]-μ)·(x[0]-μ). den = Σ(x-μ)^2; при den == 0 → 0. Для i < k+1 → 0.
+    r = returns.to_numpy(dtype=float)
+    n = len(r)
+    k = int(acf_lag)
+    acf_values = np.zeros(n, dtype=float)
+
+    if k >= 0 and n > k + 1:
+        windows = sliding_window_view(r, k + 1)     # строки s: r[s : s+k+1]
+        chunk = max(1, 2_000_000 // (k + 1))
+        s_last = n - k                               # s = 1 .. n-1-k  → i = s+k = k+1 .. n-1
+        for start in range(1, s_last, chunk):
+            stop = min(start + chunk, s_last)
+            block = windows[start:stop]
+            m = block.mean(axis=1)
+            d = block - m[:, None]
+            den = (d * d).sum(axis=1)
+            num = d[:, k] * d[:, 0]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                acf = num / den
+            acf_values[start + k:stop + k] = np.where(den == 0, 0.0, acf)
+
     df['acf'] = acf_values
     return df
 
@@ -40,7 +58,7 @@ def calc_autocorrelation(df, acf_lag, vol_period=20):
 def check_entry(prev_acf, curr_acf, threshold):
     """
     Вход при росте автокорреляции выше порога.
-    
+
     Returns:
         'long' или 'short' или None
     """
@@ -56,10 +74,10 @@ def check_entry(prev_acf, curr_acf, threshold):
 def check_exit(prev_acf, curr_acf, threshold, direction):
     """
     Выход при падении ACF ниже порога.
-    
+
     Args:
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -78,7 +96,7 @@ def backtest(df, acf_lag, threshold, sl_points, tp_points, point,
              tick_value, tick_size, vol_period=20, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с Autocorrelation momentum.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -93,12 +111,16 @@ def backtest(df, acf_lag, threshold, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_acf = df['acf'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_acf = df['acf'].iloc[i - 1]
-        curr_acf = df['acf'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_acf = _c_acf[i - 1]
+        curr_acf = _c_acf[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

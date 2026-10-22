@@ -6,6 +6,15 @@ Runs test проверяет СТАТИСТИЧЕСКУЮ ЗНАЧИМОСТЬ �
 Вход LONG: Z > 1.96 (тренд) + mean_ret > 0 (восходящий)
 Вход SHORT: Z < -1.96 (тренд) + mean_ret < 0 (нисходящий)
 Выход: Z < 0 (тренд потерялся)
+
+ВЕКТОРИЗАЦИЯ (22.10.2026)
+    Раньше на КАЖДОМ баре: срез close.iloc[i-window:i] → shift → сравнение →
+    astype(int) → dropna, затем ВНУТРЕННИЙ питоновский цикл по окну для подсчёта
+    серий. Это O(window) на бар, то есть O(n·window) на колонку — 294 мс на
+    вызов из 9 пар, второе место в корзине.
+    Теперь число серий считается по префиксным суммам признаков «вырос/упал»
+    и «знак сменился», за O(1) на бар. Формула, пороги и колонки не изменились:
+    паритет — tools/calc_vector_parity.py.
 """
 import numpy as np
 import pandas as pd
@@ -14,61 +23,54 @@ import pandas as pd
 def calc_runs_test(df, window, z_threshold=1.96):
     """
     Добавляет колонки 'z_stat' и 'mean_ret' для определения направления.
-    
+
     Args:
         df: DataFrame с OHLCV
         window: размер окна для расчёта
         z_threshold: порог Z для входа
-    
+
     Returns:
         DataFrame с колонками 'z_stat', 'mean_ret', 'trend_up', 'trend_down'
     """
     df = df.copy()
     returns = df['close'].pct_change().fillna(0)
     df['mean_ret'] = returns.rolling(window, min_periods=1).mean()
-    
-    z_values = []
-    
-    for i in range(len(df)):
-        if i < window:
-            z_values.append(0)
-        else:
-            x = df['close'].iloc[i - window:i]
-            # Бинаризация: 1 если рост, 0 если падение
-            signs = (x > x.shift(1)).astype(int).dropna()
-            n = len(signs)
-            
-            if n < 10:
-                z_values.append(0)
-                continue
-            
-            # Количество серий
-            runs = 1
-            for j in range(1, n):
-                if signs.iloc[j] != signs.iloc[j - 1]:
-                    runs += 1
-            
-            # n1 и n2
-            n1 = signs.sum()
-            n2 = n - n1
-            
-            if n1 == 0 or n2 == 0:
-                z_values.append(0)
-                continue
-            
-            # Ожидаемое количество серий и дисперсия
-            expected = (2 * n1 * n2) / (n1 + n2) + 1
-            variance = (2 * n1 * n2 * (2 * n1 * n2 - n1 - n2)) / \
-                       ((n1 + n2) ** 2 * (n1 + n2 - 1))
-            
-            if variance == 0:
-                z_values.append(0)
-            else:
-                z = (runs - expected) / np.sqrt(variance)
-                z_values.append(z)
-    
+
+    c = df['close'].to_numpy(dtype=float)
+    n_bars = len(c)
+
+    # up[k] = 1, если бар k выше предыдущего. up[0] = 0 — это тот же «нулевой»
+    # элемент, что давало сравнение с NaN от x.shift(1) в первом баре окна
+    # (NaN-сравнение → False → 0), поэтому dropna() в старом коде ничего не резал.
+    up = np.zeros(n_bars)
+    up[1:] = (c[1:] > c[:-1]).astype(np.float64)
+    chg = np.zeros(n_bars)                 # chg[k] = 1, если знак сменился между k-1 и k
+    chg[1:] = (up[1:] != up[:-1]).astype(np.float64)
+    cs_up = np.concatenate(([0.0], np.cumsum(up)))      # префиксные суммы
+    cs_chg = np.concatenate(([0.0], np.cumsum(chg)))
+
+    z_values = np.zeros(n_bars, dtype=float)
+    idx = np.arange(n_bars)
+    ok = idx >= window
+    if ok.any():
+        i = idx[ok]
+        s1 = i - window + 1                # первый «настоящий» up внутри окна
+        s2 = i - window + 2                # с него считаем смены знака
+        n = float(window)
+        n1 = cs_up[i] - cs_up[s1]          # число ростов в окне
+        n2 = n - n1
+        # серии = 1 (стартовая) + переход от ведущего нуля + смены знака внутри окна
+        runs = 1.0 + up[s1] + (cs_chg[i] - cs_chg[s2])
+        with np.errstate(divide='ignore', invalid='ignore'):
+            expected = 2.0 * n1 * n2 / (n1 + n2) + 1.0
+            variance = (2.0 * n1 * n2 * (2.0 * n1 * n2 - n1 - n2) /
+                        ((n1 + n2) ** 2 * (n1 + n2 - 1.0)))
+            z = (runs - expected) / np.sqrt(variance)
+        good = (n >= 10) & (n1 > 0) & (n2 > 0) & (variance > 0) & np.isfinite(z)
+        z_values[ok] = np.where(good, z, 0.0)
+
     df['z_stat'] = z_values
-    
+
     # Направление по mean_ret (средний возврат за окно)
     df['trend_up'] = (df['z_stat'] > z_threshold) & (df['mean_ret'] > 0)
     df['trend_down'] = (df['z_stat'] < -z_threshold) & (df['mean_ret'] < 0)
@@ -78,7 +80,7 @@ def calc_runs_test(df, window, z_threshold=1.96):
 def check_entry(prev_up, prev_down, curr_up, curr_down):
     """
     Вход при статистически значимом тренде с направлением.
-    
+
     Returns:
         'long' — восходящий тренд, 'short' — нисходящий, None — иначе
     """
@@ -92,10 +94,10 @@ def check_entry(prev_up, prev_down, curr_up, curr_down):
 def check_exit(prev_up, prev_down, curr_up, curr_down, direction):
     """
     Выход при потере тренда.
-    
+
     Args:
         direction: 'long' или 'short'
-    
+
     Returns:
         True если нужно выйти
     """
@@ -114,7 +116,7 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
              tick_value, tick_size, sim_lot=0.01, spread_points=0):
     """
     Симуляция сделок на истории с Runs Test trend.
-    
+
     Returns:
         (profit, n_trades, trade_profits)
     """
@@ -129,14 +131,19 @@ def backtest(df, window, z_threshold, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_trend_up = df['trend_up'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_trend_down = df['trend_down'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_up = df['trend_up'].iloc[i - 1]
-        prev_down = df['trend_down'].iloc[i - 1]
-        curr_up = df['trend_up'].iloc[i]
-        curr_down = df['trend_down'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_up = _c_trend_up[i - 1]
+        prev_down = _c_trend_down[i - 1]
+        curr_up = _c_trend_up[i]
+        curr_down = _c_trend_down[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

@@ -2,6 +2,14 @@
 import numpy as np
 import pandas as pd
 
+try:
+    from numpy.lib.stride_tricks import sliding_window_view
+except ImportError:  # numpy < 1.20
+    def sliding_window_view(a, w):
+        shape = (a.size - w + 1, w)
+        strides = (a.strides[0], a.strides[0])
+        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+
 # Пороги входа/выхода по умолчанию.
 # Live (strategy_engine.check_active_signals) передаёт их из param_key аргументами
 # check_entry/check_exit; бэктест — из грида SKEW_THRESHOLD_LIST.
@@ -12,36 +20,45 @@ SKEW_EXIT = 0.3
 def calc_skewness(df, window, skew_entry=SKEW_ENTRY):
     """
     Добавляет колонку 'skewness' с коэффициентом асимметрии.
-    
+
     Args:
         df: DataFrame с OHLCV
         window: размер окна для расчёта
         skew_entry: порог входа (принимается для совместимости с контрактом
             движка; на сам расчёт асимметрии не влияет)
-    
+
     Returns:
         DataFrame с колонкой 'skewness'
     """
     df = df.copy()
     returns = df['close'].pct_change().fillna(0)
-    
-    skew_values = []
-    for i in range(len(df)):
-        if i < window:
-            skew_values.append(0)
-        else:
-            window_returns = returns.iloc[i - window:i]
-            n = len(window_returns)
-            mean = window_returns.mean()
-            std = window_returns.std()
-            
-            if std == 0 or n < 3:
-                skew_values.append(0)
-            else:
-                # Skewness = E[(X-μ)³] / σ³
-                skew = ((window_returns - mean) ** 3).sum() / (n * std ** 3)
-                skew_values.append(skew)
-    
+
+    # ── Skewness (векторно, без цикла по барам) ──
+    # skew[i] = Σ(x-μ)^3 / (window·σ^3), окно returns[i-window:i] (БЕЗ текущего бара),
+    # σ — выборочное (ddof=1) → μ/σ берём rolling(...).shift(1). Для i < window и при
+    # σ == 0 или window < 3 → 0. Третий центральный момент — по скользящему окну чанками.
+    r = returns.to_numpy(dtype=float)
+    n = len(r)
+    skew_values = np.zeros(n, dtype=float)
+
+    if window >= 3 and n > window:
+        mean_arr = returns.rolling(window).mean().shift(1).to_numpy()
+        std_arr = returns.rolling(window).std().shift(1).to_numpy()   # ddof=1
+        windows = sliding_window_view(r, window)             # (n-window+1, window)
+        chunk = max(1, 2_000_000 // window)
+        total = n - window
+        for start in range(0, total, chunk):
+            stop = min(start + chunk, total)
+            block = windows[start:stop]
+            dst = slice(start + window, stop + window)
+            mu = mean_arr[dst, None]
+            sd = std_arr[dst]
+            m3 = ((block - mu) ** 3).sum(axis=1)
+            good = sd != 0
+            with np.errstate(divide='ignore', invalid='ignore'):
+                skew = m3 / (window * sd ** 3)
+            skew_values[dst] = np.where(good, skew, 0.0)
+
     df['skewness'] = skew_values
     return df
 
@@ -109,12 +126,16 @@ def backtest(df, window, skew_entry, skew_exit, sl_points, tp_points, point,
     from strategies._bt_core import TradeList, trade_row  # v2: журнал сделок
     trade_profits = TradeList()
 
+    _c_skewness = df['skewness'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_close = df['close'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_high = df['high'].to_numpy()   # numpy-петля: позиционный доступ
+    _c_low = df['low'].to_numpy()   # numpy-петля: позиционный доступ
     for i in range(1, len(df)):
-        prev_skew = df['skewness'].iloc[i - 1]
-        curr_skew = df['skewness'].iloc[i]
-        curr_close = df['close'].iloc[i]
-        current_high = df['high'].iloc[i]
-        current_low = df['low'].iloc[i]
+        prev_skew = _c_skewness[i - 1]
+        curr_skew = _c_skewness[i]
+        curr_close = _c_close[i]
+        current_high = _c_high[i]
+        current_low = _c_low[i]
 
         # ── Проверка выхода ──
         if position:

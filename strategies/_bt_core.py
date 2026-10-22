@@ -7,7 +7,22 @@
 движком (ордера, magic, реестр, ранжирование) и тянет MetaTrader5/risk_manager.
 Этот модуль лёгкий (только numpy/pandas), чтобы strategies/*.py оставались
 терминало-независимыми.
+
+ДВЕ РЕАЛИЗАЦИИ ЦИКЛА (замер 22.10.2026)
+    Петля была 107.5 мин из 203 на корзину — не из-за `for`, а из-за чтения
+    df['col'].iloc[i]: это Python-цепочка DataFrame.__getitem__ →
+    Series._iLocIndexer.__getitem__ → _ixs → создание объекта на КАЖДОЕ
+    значение (~7-10 мкс против ~50 нс у numpy). 5 чтений на бар × 719 бар ×
+    60 543 комбо ≈ 43.6 млн итераций.
+    Поэтому колонки конвертируются в numpy-массивы ОДИН раз до цикла, а
+    математика и порядок операций сохранены байт-в-байт (паритет 1e-6).
+
+    Переключатель: config.BacktestConfig.numpy_loop (или переменная окружения
+    STRATEGYCLOUD_NUMPY_LOOP=0). False возвращает прежний iloc-цикл — откат
+    одной строкой в config.py без правки кода. Гейт: tools/loop_parity.py.
 """
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -80,6 +95,40 @@ def state_exit(prev_s, curr_s, direction):
     return curr_s != -1
 
 
+# ═══ Переключатель реализации цикла ═══
+# None = решение ещё не принято (ленивое чтение config/env на первом вызове).
+NUMPY_LOOP = None
+
+
+def _resolve_numpy_loop(cfg=None):
+    """True/False: аргумент → переменная окружения → config → True."""
+    if cfg is not None:
+        return bool(getattr(cfg, 'numpy_loop', True))
+    env = os.environ.get('STRATEGYCLOUD_NUMPY_LOOP')
+    if env is not None:
+        return env.strip() not in ('0', 'false', 'False', 'no', 'off', '')
+    try:
+        from config import build_default_configs
+        return bool(getattr(build_default_configs().backtest_config, 'numpy_loop', True))
+    except Exception:
+        return True
+
+
+def set_numpy_loop(flag):
+    """Переключить реализацию без правки config (нужно паритету и замерам)."""
+    global NUMPY_LOOP
+    NUMPY_LOOP = bool(flag)
+    return NUMPY_LOOP
+
+
+def numpy_loop_enabled():
+    """Текущее значение флага (ленивая инициализация из config/env)."""
+    global NUMPY_LOOP
+    if NUMPY_LOOP is None:
+        NUMPY_LOOP = _resolve_numpy_loop()
+    return bool(NUMPY_LOOP)
+
+
 def run_backtest(df, calc_fn, check_entry, check_exit, param_key,
                  sl_points, tp_points, point, tick_value, tick_size,
                  sim_lot=0.01, spread_points=0):
@@ -93,7 +142,98 @@ def run_backtest(df, calc_fn, check_entry, check_exit, param_key,
     sl_dist = sl_points * point
     tp_dist = tp_points * point
     spread = spread_points * point
+    if numpy_loop_enabled():
+        return _simulate_arrays(df, check_entry, check_exit, sl_dist, tp_dist,
+                                spread, tick_value, tick_size, sim_lot)
+    return _simulate_iloc(df, check_entry, check_exit, sl_dist, tp_dist,
+                          spread, tick_value, tick_size, sim_lot)
 
+
+def _simulate_arrays(df, check_entry, check_exit, sl_dist, tp_dist, spread,
+                     tick_value, tick_size, sim_lot):
+    """Быстрая петля: колонки читаются из numpy-массивов (~50 нс вместо ~7-10 мкс).
+
+    Логика, порядок проверок, арифметика и запись журнала — те же, что в
+    _simulate_iloc. Это условие паритета по профитам сделок (1e-6).
+    """
+    k_arr = df['k'].to_numpy()
+    high_arr = df['high'].to_numpy(dtype=float)
+    low_arr = df['low'].to_numpy(dtype=float)
+    close_arr = df['close'].to_numpy(dtype=float)
+    index = df.index
+    n = len(df)
+
+    # Локальные ссылки: поиск в globals на каждой сделке дороже самого расчёта.
+    _profit = trade_profit
+    _row = trade_row
+    _entry_fn = check_entry
+    _exit_fn = check_exit
+
+    profit = 0.0
+    n_trades = 0
+    position = None
+    trade_profits = TradeList()
+
+    for i in range(1, n):
+        prev_k = k_arr[i - 1]
+        curr_k = k_arr[i]
+        high = high_arr[i]
+        low = low_arr[i]
+        close = close_arr[i]
+
+        if position is not None:
+            d = position['direction']
+            entry = position['entry']
+            exit_price = None
+            if d == 'long':
+                if low <= position['sl']:
+                    exit_price = position['sl']
+                elif high >= position['tp']:
+                    exit_price = position['tp']
+                elif _exit_fn(prev_k, curr_k, 'long'):
+                    exit_price = close
+            else:
+                if high >= position['sl']:
+                    exit_price = position['sl']
+                elif low <= position['tp']:
+                    exit_price = position['tp']
+                elif _exit_fn(prev_k, curr_k, 'short'):
+                    exit_price = close
+
+            if exit_price is not None:
+                p = _profit(entry, exit_price, tick_value, tick_size, sim_lot, d)
+                p -= (spread / tick_size) * tick_value * sim_lot
+                profit += p
+                n_trades += 1
+                trade_profits.append(p)
+                _rec = _row(index, _entry_i, i, d, p)
+                if _rec is not None:
+                    trade_profits.times.append(_rec)
+                position = None
+
+        if position is None:
+            entry_dir = _entry_fn(prev_k, curr_k)
+            if entry_dir == 'long':
+                entry = close + spread
+                _entry_i = i
+                position = {'direction': 'long', 'entry': entry,
+                            'sl': entry - sl_dist, 'tp': entry + tp_dist}
+            elif entry_dir == 'short':
+                entry = close - spread
+                _entry_i = i
+                position = {'direction': 'short', 'entry': entry,
+                            'sl': entry + sl_dist, 'tp': entry - tp_dist}
+
+    return profit, n_trades, trade_profits
+
+
+def _simulate_iloc(df, check_entry, check_exit, sl_dist, tp_dist, spread,
+                   tick_value, tick_size, sim_lot):
+    """Прежняя петля (эталон паритета и откат при numpy_loop=False).
+
+    Читает df['col'].iloc[i] — медленно, но это исходное поведение движка
+    с 2023 года, по нему валидировались все исторические прогоны.
+    """
     profit = 0.0
     n_trades = 0
     position = None
