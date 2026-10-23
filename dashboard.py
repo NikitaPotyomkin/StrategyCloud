@@ -27,6 +27,14 @@ from daily_report import get_dashboard_data
 from config import SteeringParams as _SteeringParams
 ALLOC_DAYS = _SteeringParams().lookback_days
 
+# Дата старта активной торговли фонда (Fund Age в Overview).
+# Импорт защищён: на стенде может лежать старый config.py без этой константы,
+# и тогда дэшборд лучше показать с фолбэком, чем упасть целиком.
+try:
+    from config import FUND_START_DATE
+except ImportError:  # pragma: no cover
+    FUND_START_DATE = '2026-09-29'
+
 # ── Палитра (институциональная) ──
 COL_BG       = '#0E1117'
 COL_PANEL    = '#161B22'
@@ -206,6 +214,89 @@ def plotly_dark_layout(fig, height=400):
 _CARD_FONT = "'SF Mono', 'Cascadia Code', 'Consolas', monospace"
 
 
+# ── Рынок открыт/закрыт: по данным брокера, а не по календарю ──
+_MKT_SYMBOLS = ('EURUSDrfd', 'EURUSD', 'GBPUSDrfd', 'USDJPYrfd')
+_MKT_STALE_MIN = 10      # сессия по расписанию есть, а тика нет дольше — рынок фактически стоит
+_SRV_OFFSET_H = 3        # серверное время = UTC+3 (как в Overview и Daily Plan)
+
+# ── Русские подписи дат: одни и те же в Daily Plan и FinStatement ──
+# Дни недели индексируются как date.weekday(): пн=0 … вс=6 ('чт', а не 'Thu').
+_RU_MONTHS = ('января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+              'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря')
+_RU_WEEKDAYS = ('пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс')
+# Именительный падеж — для заголовков-месяцев («Октябрь 2026»), а не «октября».
+_RU_MONTHS_NOM = ('Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+                  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь')
+
+
+def _mql_dow(d):
+    """ENUM_DAY_OF_WEEK в MQL5: Sunday=0 … Saturday=6 (у date.weekday(): Monday=0)."""
+    return (d.weekday() + 1) % 7
+
+
+def market_is_open():
+    """Открыт ли рынок ПРЯМО СЕЙЧАС. Возвращает (is_open, source).
+
+    Источники по убыванию достоверности:
+      1) расписание сессий символа ОТ БРОКЕРА (symbol_info_session_quote/trade) —
+         знает про выходные, праздники и клиринговый перерыв, календарь тут не нужен;
+      2) свежесть последнего тика — ловит «сессия по расписанию есть, а торговли нет»
+         (клиринг, обрыв связи, неторговый день в терминале);
+      3) календарный фолбэк (сб/вс = закрыто) — только если терминал недоступен.
+
+    source возвращается наружу и печатается рядом с бейджем: видно, ОТКУДА ответ.
+    Никогда не бросает исключение — дэшборд не должен падать из-за индикатора.
+    """
+    try:
+        # Серверные часы в той же шкале, что и tick.time (серверный epoch).
+        now_srv = pd.Timestamp.now('UTC').tz_localize(None) + pd.Timedelta(hours=_SRV_OFFSET_H)
+        srv_epoch = (now_srv - pd.Timestamp(1970, 1, 1)).total_seconds()
+        if MT5_AVAILABLE:
+            for sym in _MKT_SYMBOLS:
+                try:
+                    if mt5.symbol_info(sym) is None:
+                        continue
+                    tick = mt5.symbol_info_tick(sym)
+                    if tick is None:
+                        continue
+                    age_min = (srv_epoch - tick.time) / 60.0
+
+                    sessions = []
+                    for _fn in ('symbol_info_session_quote', 'symbol_info_session_trade'):
+                        try:
+                            _got = getattr(mt5, _fn)(sym, _mql_dow(now_srv.date()))
+                        except Exception:
+                            _got = None
+                        for _s in _got or ():
+                            try:
+                                sessions.append((_s.start.hour * 60 + _s.start.minute,
+                                                 int(_s.length or 0)))
+                            except Exception:
+                                continue
+
+                    cur_min = now_srv.hour * 60 + now_srv.minute
+                    # сессия может уходить за полночь: 23:00 + 120 мин = 01:00
+                    in_sess = any((s0 <= cur_min < s0 + ln)
+                                  or (s0 + ln > 1440 and cur_min < s0 + ln - 1440)
+                                  for s0, ln in sessions)
+                    if sessions:
+                        if not in_sess:
+                            return False, f"{sym}: вне сессии брокера"
+                        if age_min > _MKT_STALE_MIN:
+                            return False, f"{sym}: сессия есть, тика нет {age_min:.0f} мин"
+                        return True, f"{sym}: сессия брокера, тик {age_min:.0f} мин назад"
+                    if age_min <= _MKT_STALE_MIN:
+                        return True, f"{sym}: тик {age_min:.0f} мин назад"
+                    return False, f"{sym}: последний тик {age_min / 60:.1f} ч назад"
+                except Exception:
+                    continue
+        if now_srv.weekday() >= 5:
+            return False, ""
+        return True, ""
+    except Exception:
+        return True, "источник неизвестен"
+
+
 def metric_card(label, value, color=None, sub=None):
     """Карточка метрики с единой геометрией (замена st.metric в Overview).
 
@@ -282,15 +373,15 @@ with col_btn:
 with st.sidebar:
     st.markdown("### Configuration")
     days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, ALLOC_DAYS)
-    st.caption(f"Только для просмотра. Strategy Tree / Wheel всегда считают по фикс. периоду аллокации: {ALLOC_DAYS} дн. (config).")
+
     st.caption("Auto-refresh: 30s")
-    # Метка сборки: какой именно файл и какой версии исполняет Streamlit прямо сейчас.
-    # Нужна, чтобы отличить «правка ещё не подхватилась» от «запущена другая копия кода».
-    try:
-        _build_mtime = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime('%Y-%m-%d %H:%M:%S')
-    except OSError:
-        _build_mtime = '?'
-    st.caption(f"build: {os.path.abspath(__file__)} @ {_build_mtime}")
+
+
+
+
+
+
+
 
 # ── Загрузка данных ──
 data = load_dashboard_data(days_back)
@@ -300,16 +391,17 @@ if data_alloc is None:
     data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
 # ── Табы ──
-tab_overview, tab_daily, tab_risk, tab_strategies, tab_3d, tab_tree, tab_steering, tab_pipeline, tab_backtest = st.tabs([
+tab_overview, tab_tree, tab_finstatement, tab_daily, tab_risk, tab_strategies, tab_steering, tab_backtest = st.tabs([
     "Overview",
+    "Strategy Tree",
+    "FinStatement",
     "Daily Plan",
     "Risk",
     "Strategies",
-    "3D Landscape",
-    "Strategy Tree",
-    "Steering Wheel",
-    "Pipeline",
+    "Wheel",
     "Backtest",
+
+
 ])
 
 
@@ -320,6 +412,21 @@ with tab_overview:
     if not data:
         st.warning("No data. Ensure MT5 terminal is running.")
         st.stop()
+
+    # ── Бейдж: открыт ли рынок прямо сейчас (источник — брокер, не календарь) ──
+    # Внешний div задаёт отступ снизу: иначе бейдж «садится» на подпись Balance.
+    _mkt_open, _mkt_src = market_is_open()
+    _mkt_color = COL_AMBER if _mkt_open else COL_GREEN_LT
+    st.markdown(
+        f"<div style='margin:0.15rem 0 1.15rem 0;'>"
+        f"<span style='display:inline-block;padding:0.3rem 0.75rem;border:1px solid {_mkt_color};"
+        f"border-radius:6px;color:{_mkt_color};font-size:0.78rem;font-weight:600;"
+        f"text-transform:uppercase;letter-spacing:0.06em;'>"
+        f"{'Market is open' if _mkt_open else 'Market is closed'}</span>"
+        f"<span style='color:{COL_MUTED};font-size:0.75rem;margin-left:0.6rem;'>{_mkt_src}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     col1, col2, col3 = st.columns(3)
     updated = datetime.fromisoformat(data['updated']).strftime('%H:%M:%S')
@@ -360,6 +467,38 @@ with tab_overview:
                         sub=None)
         else:
             metric_card("Forecast P&L (30D)", "—")
+
+    # ── Вторая строка метрик: доля к выводу + срок жизни фонда ──
+    # Геометрия как в верхнем ряду (3 колонки): Fund Age — левый край,
+    # Withdrawable — средняя (ровно под P&L Today), третья пустая. Иначе ряды
+    # «шашечкой» и подписи не совпадают по вертикали.
+    _col_age, _col_wd, _col_blank = st.columns(3)
+    with _col_wd:
+        # «Доход за период» — сумма profit_net по окну слайдера (Dashboard lookback),
+        # ровно та же величина, что и total_profit в daily_report.get_dashboard_data.
+        _period_profit = float(data.get('total_profit') or 0.0)
+        # Отрицательный период → к выводу 0: выводить нечего, доля с убытка не берётся.
+        _withdrawable = max(0.0, _period_profit * 0.10)
+        metric_card(
+            "Withdrawable",
+            f"{int(_withdrawable):,} RUB",
+            color=COL_GREEN_LT if _withdrawable > 0 else COL_MUTED,
+            sub=f"10% of {days_back}D",
+                 # подпись сокращена до "10% of ND" (база P&L убрана по запросу)
+        )
+    with _col_age:
+        try:
+            _fund_start = datetime.strptime(str(FUND_START_DATE), '%Y-%m-%d').date()
+            _srv_today = (pd.Timestamp.now('UTC') + pd.Timedelta(hours=3)).date()
+            _fund_days = max(0, (_srv_today - _fund_start).days)
+            _fund_months = int(round(_fund_days / 30.44))  # округлённо, ср. месяц = 30.44 дн.
+            metric_card(
+                "Fund Age",
+                f"{_fund_days} days ({_fund_months}m)",
+                sub=f"since {_fund_start.strftime('%d.%m.%Y')}",
+            )
+        except Exception:
+            metric_card("Fund Age", "—")
 
     st.caption(f"Last update: {updated} | Trades ({days_back}D): {data['total_trades']}")
 
@@ -476,6 +615,132 @@ with tab_overview:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  FINSTATEMENT — подневный P&L с первой даты фонда
+# ═══════════════════════════════════════════════════════════════
+with tab_finstatement:
+    st.markdown("### FinStatement — daily P&L by month")
+    try:
+        # Окно берём ШИРЕ слайдера: от FUND_START_DATE до сегодня (в днях).
+        _fs_start = datetime.strptime(str(FUND_START_DATE), '%Y-%m-%d').date()
+        _fs_today = (pd.Timestamp.now('UTC') + pd.Timedelta(hours=_SRV_OFFSET_H)).date()
+        _fs_n = max(1, (_fs_today - _fs_start).days + 1)
+        _fs_data = load_dashboard_data(_fs_n) or {}
+        _fs_df = _fs_data.get('trades_df')
+        if _fs_df is None or _fs_df.empty:
+            st.info("No closed trades since the fund start.")
+        elif False:  # подневный вид устарел: вкладка считает по месяцам (код удалит tools/dashboard_tabs.py)
+            _fs = _fs_df.copy()
+            _fs['date'] = (pd.to_datetime(_fs['time'], unit='s', utc=True)
+                           + pd.Timedelta(hours=_SRV_OFFSET_H)).dt.date
+            # Вечер пятницы (+3ч) уезжает на сб/вс — относим такие сделки к пятнице,
+            # иначе удалённые выходные-строки «съедали» P&L и итог не сходился с таблицей.
+            _fs['date'] = [_d - timedelta(days=(_d.weekday() - 4) % 7) if _d.weekday() >= 5 else _d
+                           for _d in _fs['date']]
+            _by = _fs.groupby('date').agg(pnl=('profit_net', 'sum')).reset_index()
+            # Дни без сделок показываем нулём, а не пропускаем: иначе в календаре «дырки».
+            _cal = pd.DataFrame({'date': [d.date() for d in pd.date_range(_fs_start, periods=_fs_n)]})
+            # Выходные не показываем — в таблице только торговые дни.
+            _cal = _cal[_cal['date'].map(lambda _d: _d.weekday() < 5)].reset_index(drop=True)
+            _by = _cal.merge(_by, on='date', how='left').fillna({'pnl': 0.0})
+            _cols = [c for c in ('symbol', 'param_key', 'volume', 'profit_net') if c in _fs.columns]
+            _wd = _RU_WEEKDAYS  # дни недели как в Daily Plan: 'чт', а не 'Thu'
+            st.caption(f"Fund start {_fs_start.strftime('%d.%m.%Y')} · {_fs_n} days · "
+                       f"total P&L {int(_by['pnl'].sum()):,} RUB (net of swap and commission)")
+            _cum = 0.0
+            for _i, _r in enumerate(_by.itertuples(), start=1):
+                _cum += float(_r.pnl)
+                _day = _fs[_fs['date'] == _r.date]
+                with st.expander(f"{_i:>3}. {_r.date.strftime('%d.%m')} ({_wd[_r.date.weekday()]}) — "
+                                 f"P&L {int(_r.pnl):,} RUB · trades {len(_day)} · cum {int(_cum):,} RUB"):
+                    if _day.empty:
+                        st.caption("No closed trades this day.")
+                    else:
+                        st.dataframe(_day[_cols].rename(columns={'profit_net': 'PnL'}),
+                                     use_container_width=True)
+        else:
+            _fs = _fs_df.copy()
+            _fs['date'] = (pd.to_datetime(_fs['time'], unit='s', utc=True)
+                           + pd.Timedelta(hours=_SRV_OFFSET_H)).dt.date
+            # Вечер пятницы (+3ч) уезжает на сб/вс — относим такие сделки к пятнице,
+            # иначе удалённые выходные-строки «съедали» P&L и итог не сходился с таблицей.
+            _fs['date'] = [_d - timedelta(days=(_d.weekday() - 4) % 7) if _d.weekday() >= 5 else _d
+                           for _d in _fs['date']]
+            _by = _fs.groupby('date').agg(pnl=('profit_net', 'sum'),
+                                          trades=('profit_net', 'size')).reset_index()
+            # Дни без сделок показываем нулём, а не пропускаем: иначе в календаре «дырки».
+            _cal = pd.DataFrame({'date': [d.date() for d in pd.date_range(_fs_start, periods=_fs_n)]})
+            # Выходные не показываем — в таблице только торговые дни.
+            _cal = _cal[_cal['date'].map(lambda _d: _d.weekday() < 5)].reset_index(drop=True)
+            _by = _cal.merge(_by, on='date', how='left')
+            _by['pnl'] = _by['pnl'].fillna(0.0).round(0).astype(int)
+            _by['trades'] = _by['trades'].fillna(0).astype(int)
+            # Порядок строго по дате — cum считается хронологически, как и раньше.
+            _by = _by.sort_values('date').reset_index(drop=True)
+            _by['cum'] = _by['pnl'].cumsum()
+            _by['wd'] = [_RU_WEEKDAYS[d.weekday()] for d in _by['date']]
+            _by['ym'] = [(d.year, d.month) for d in _by['date']]
+            _cols = [c for c in ('symbol', 'param_key', 'volume', 'profit_net') if c in _fs.columns]
+            st.caption(f"Fund start {_fs_start.strftime('%d.%m.%Y')} · {_fs_n} days · "
+                       f"total P&L {int(_by['pnl'].sum()):,} RUB (net of swap and commission)")
+
+            # ── Месяц раскрывается, дни внутри — атомарные строки таблицы ──
+            for _mi, ((_y, _m), _g) in enumerate(_by.groupby('ym', sort=True), start=1):
+                _g = _g.reset_index(drop=True)
+                _mpnl = int(_g['pnl'].sum())
+                _mtr = int(_g['trades'].sum())
+                _mtitle = f"{_RU_MONTHS_NOM[_m - 1]} {_y}"
+
+                with st.expander(_mtitle, expanded=((_y, _m) == _by['ym'].iloc[-1])):
+                    _days = pd.DataFrame({
+                        '#': range(1, len(_g) + 1),
+                        'day': [d.strftime('%d') for d in _g['date']],
+                        'weekday': list(_g['wd']),
+                        'PnL': [f"{int(v):,}" for v in _g['pnl']],
+                        'trades': _g['trades'],
+                        'cum': [f"{int(v):,}" for v in _g['cum']],
+                    }).set_index('#').rename(columns={
+                        'day': 'Date', 'weekday': 'WD', 'PnL': 'PnL, RUB',
+                        'trades': 'Trades', 'cum': 'Cum, RUB'})
+                    # Таблица дней — свой HTML, а не st.dataframe: у грида мелкий шрифт
+                    # и «шапка/данные по разным краям». Здесь ширина по содержимому,
+                    # цифры и заголовки выровнены одинаково (по правому краю).
+                    st.markdown(
+                        "<style>"
+                        ".fs-tbl{border-collapse:collapse;font-size:1.15rem;}"
+                        ".fs-tbl th,.fs-tbl td{padding:0.28rem 1.1rem;white-space:nowrap;"
+                        "border-bottom:1px solid #21262d;}"
+                        ".fs-tbl th{color:#8B949E;font-size:0.7rem;font-weight:600;"
+                        "text-transform:uppercase;letter-spacing:0.06em;}"
+                        ".fs-tbl td{font-family:'SF Mono','Consolas',monospace;}"
+                        ".fs-tbl th,.fs-tbl td{padding:0.28rem 1.1rem!important;"
+                        "font-size:1.15rem!important;border:0!important;"
+                        "border-bottom:1px solid #21262d!important;}"
+                        ".fs-tbl th{font-size:0.95rem!important;color:#8B949E!important;"
+                        "background:transparent!important;}"
+                        "</style>"
+                        + _days.to_html(index=False, border=0, classes='fs-tbl', escape=False)
+                        .replace('<th>', "<th style='text-align:right;'>")
+                        .replace('<td>', "<td style='text-align:right;'>"),
+                        unsafe_allow_html=True,
+                    )
+
+
+
+
+
+
+            # ── Пустые заготовки на будущие месяцы: Ноябрь, Декабрь, Январь ──
+            _ly, _lm = _by['ym'].iloc[-1]
+            for _k in (1, 2, 3):
+                _tot = _lm + _k
+                _fy, _fm = _ly + (_tot - 1) // 12, (_tot - 1) % 12 + 1
+                with st.expander(f"{_RU_MONTHS_NOM[_fm - 1]} {_fy}"):
+                    st.caption("Месяц ещё не начался — сделок нет.")
+    except Exception as _e:
+        st.caption(f"⚠ FinStatement недоступен: {_e!r}")
+
+
+# ═══════════════════════════════════════════════════════════════
 #  RISK
 # ═══════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════
@@ -486,9 +751,47 @@ with tab_daily:
         st.warning("No data. Ensure MT5 terminal is running.")
         st.stop()
 
-    st.markdown("### Daily Plan — итоговый расклад на день")
-    st.caption(f"ПЛАН на день (journals/active_state.json, ночной пересчёт) × Strategy Tree (реальные сделки, окно {ALLOC_DAYS} дн.) × Wheel-квоты. "
-               f"Колонка lot — объём, которым стратегия выйдет в торговлю.")
+
+
+    # ── День, на который разыгрывается план ──
+    # Серверное время = UTC+3 (как в Overview). В выходные торговли нет, поэтому
+    # суббота/воскресенье показываются как план на понедельник.
+
+
+
+    # Дату берём ИЗ ПЛАНА (active_state.json → updated), а не из «сейчас»:
+    # иначе лейбл обещает сегодняшний план, даже если пересчёта сегодня не было.
+    _plan_day = None
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'journals', 'active_state.json'), 'r', encoding='utf-8') as _pf:
+            _plan_day = pd.to_datetime(json.load(_pf).get('updated')).date()
+            if pd.isna(_plan_day):     # в файле нет updated — считаем, что даты нет
+                _plan_day = None
+    except Exception:
+        _plan_day = None
+    _plan_today = (pd.Timestamp.now('UTC') + pd.Timedelta(hours=3)).date()
+
+
+    if _plan_day is None:
+        _plan_day = _plan_today
+    # Расклад в active_state.json — на СЛЕДУЮЩИЙ торговый день, не на текущий.
+    _plan_day += timedelta(days=1)
+    while _plan_day.weekday() >= 5:
+        _plan_day += timedelta(days=1)
+    st.markdown(
+        f"<div style='font-size:1.7rem;font-weight:700;color:{COL_TEXT};letter-spacing:0.02em;"
+        f"margin:-0.2rem 0 0.1rem 0;'>Daily Plan — {_plan_day.day} "
+        f"{_RU_MONTHS[_plan_day.month - 1]} ({_RU_WEEKDAYS[_plan_day.weekday()]})</div>",
+
+
+
+
+
+
+
+        unsafe_allow_html=True,
+    )
 
     # ── ИСТОЧНИК ПЛАНА: active_state.json (ночной план), НЕ открытые позиции ──
     _act, _plan_meta = [], {}
@@ -673,13 +976,6 @@ with tab_daily:
         c3.metric("Risk budget", f"{_quota:,.0f} RUB")
         _used = df_plan['risk ₽'].dropna().sum()
         c4.metric("Used risk", f"{_used:,.0f} RUB" if _used > 0 else "—")
-        st.caption(f"План обновлён: {_plan_meta.get('updated') or '—'} · баланс "
-                   f"{(float(_plan_meta.get('balance') or 0)):,.0f} RUB · стратегий: "
-                   f"{_plan_meta.get('total') or len(df_plan)}")
-        _warn = int((df_plan['flag'] != '').sum())
-        if _warn:
-            st.warning(f"⚠ {_warn} стратегий: категория убыточна в Tree, а объём > min_lot. "
-                       f"Это и есть «большие лоты у красных» — кандидаты на гейт объёма.")
 
         # ── План ↔ Strategy Tree: тот же уровень гранулярности (категория symbol+family) ──
         # Tree считает PnL по реальным закрытым сделкам окна аллокации; план — по стратегиям.
@@ -1187,7 +1483,7 @@ with tab_strategies:
 # ═══════════════════════════════════════════════════════════════
 #  3D LANDSCAPE
 # ═══════════════════════════════════════════════════════════════
-with tab_3d:
+if False:  # 3D LANDSCAPE: вкладка убрана; код физически удалит python tools/dashboard_tabs.py
     st.markdown("### Strategy Landscape — 3D")
 
     if not data:
@@ -1294,7 +1590,6 @@ with tab_3d:
 # ═══════════════════════════════════════════════════════════════
 with tab_tree:
     st.markdown("### Strategy Tree")
-    st.caption(f"Окно дерева: {days_back} дн. (ползунок Dashboard lookback). Реальное окно аллокации штурвала — {ALLOC_DAYS} дн. (config.SteeringParams.lookback_days).")
     if days_back != ALLOC_DAYS:
         st.info(f"⚠ Дерево построено по окну слайдера: {days_back} дн. Окно реальной перекладки объёма (Wheel / ночной пересчёт) — {ALLOC_DAYS} дн. (config) и от ползунка не зависит.")
 
@@ -1632,10 +1927,8 @@ with tab_steering:
         st.warning("No data.")
         st.stop()
 
-    st.markdown("###Wheel — Quota by Family")
-    st.caption(f"Allocation period: {ALLOC_DAYS} дн. (config) — то же окно, что и Strategy Tree. Квоты = ранг по прибыли дерева (лидер → максимум).")
-    st.caption("Категория = «символ + семейство» (например EUR - parabolic). "
-               "Квоты считаются по реальным закрытым сделкам (entry='out').")
+    st.caption(f"Allocation period: {ALLOC_DAYS} days")
+
 
     from wheel import (calculate_steering_wheel_quotas, build_metrics_from_journal, compute_categories,
                        category_label)
@@ -1766,9 +2059,6 @@ with tab_steering:
             _sync['U rank'] = _sync['₽/лот'].rank(ascending=False, method='min').astype(int)
             _sync['Q rank'] = _sync['new_quota'].rank(ascending=False, method='min').astype(int)
             # Sync-блок перенесён вниз; прежнее дублирование отключено (рисовало "None")
-            st.caption(f"U rank = ранг удельной прибыли (₽/лот, метрика штурвала) ↔ ранг доли штурвала (Q rank). "
-                       f"Окно аллокации: {ALLOC_DAYS} дн. Лидер по ₽/лот должен получать максимальную долю "
-                       f"(кроме пол/потолок из config и фильтра min_trades={steering_cfg.min_trades}). Tree PnL — абсолютный.")
             _sdisp = _sync.sort_values('U rank').copy()
             _sdisp['Tree PnL'] = _sdisp['pnl'].round(0).astype(int)
             _sdisp['₽/лот'] = _sdisp['₽/лот'].round(0).astype(int)
@@ -1781,7 +2071,6 @@ with tab_steering:
 
             df_sw = df_sw.sort_values('delta', ascending=False).reset_index(drop=True)
             n_delta = int((df_sw['delta'].abs() > 1e-4).sum())
-            st.caption(f"Категорий (символ+семейство): {len(df_sw)} | с Δ ≠ 0: {n_delta} | параметры из config.SteeringParams (α={steering_cfg.alpha}, мин.сделок={steering_cfg.min_trades}, пол={steering_cfg.min_q}, потолок={steering_cfg.max_q}, скоринг={steering_cfg.score_mode})")
 
             # Для бара Δ берём ТОЛЬКО категории с ненулевым перераспределением
             df_sw_nz = df_sw[df_sw['delta'].abs() > 1e-4].copy()
@@ -1903,7 +2192,7 @@ with tab_steering:
 # ═══════════════════════════════════════════════════════════════
 #  PIPELINE
 # ═══════════════════════════════════════════════════════════════
-with tab_pipeline:
+if False:  # PIPELINE: вкладка убрана; код физически удалит python tools/dashboard_tabs.py
     st.markdown("### Pipeline — Upcoming Features")
 
     items = [
