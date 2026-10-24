@@ -460,7 +460,15 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
                f'окно выходных / догон (последний ПОЛНЫЙ {days_since_full} дн. назад, порог {gap_days} дн.)'
         print(f"  🔁 ПОЛНЫЙ пересчёт: ДА ({_trg})")
     else:
-        print(f"  🔁 ПОЛНЫЙ пересчёт: НЕТ (уже был {days_since_full} дн. назад — окно выходных закрыто)")
+        _last_txt = '—'
+        try:
+            with open(marker_path, 'r', encoding='utf-8') as _f:
+                _ts = json.load(_f).get('last_full_recalc', '')
+            if _ts:
+                _last_txt = datetime.fromisoformat(_ts).strftime('%d.%m.%y %H:%M')
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        print(f"  🔁 ПОЛНЫЙ пересчёт: НЕТ (последний был {_last_txt}; порог {gap_days} дн. — окно выходных закрыто)")
     if not globals().get('FULL_RECALC_DEBUG', False):
         return
     ckpt_dir = _checkpoint_dir()
@@ -1072,7 +1080,7 @@ if __name__ == '__main__':
           "   В будни: мониторинг сигналов. Окно выходных: один полный пересчёт (с догоном в будни, если уик-энд пропущен).\n")
 
     # ═══ ГЛАВНЫЙ ЦИКЛ ═══
-    last_full_backtest_date = datetime.now().date()
+    last_full_backtest_date = None  # не «сегодня»: ночной ре-ранк (чекпойнты+штурвал) должен отработать и в день рестарта
     last_mode_check = datetime.now().date()
     last_state_write = datetime.now()
     # Штурвал: время последнего пересчёта квот/перекладки лотов (не зависит от бэктеста).

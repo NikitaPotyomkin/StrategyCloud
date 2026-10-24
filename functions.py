@@ -2717,7 +2717,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 reuse_stale.append(symbol)
                 print(f"  ℹ {symbol}: кэш рассчитан на баре {cached_bar_time}, "
                       f"сейчас {current_bar_time} — по новым барам не пересчитываем "
-                      f"(полный проход — ночью, фоновым job)", flush=True)
+                      f"(полный проход — раз в неделю, в окне выходных)", flush=True)
             else:
                 # Конфиг изменился + данные изменились — частичный пересчёт
                 partial_recalc[symbol] = (cached, recalc_set)
