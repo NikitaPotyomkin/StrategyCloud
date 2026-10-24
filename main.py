@@ -452,7 +452,7 @@ def _file_info(path):
 
 
 def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days,
-                      days_since_full, weekend_full_due or manual_full):
+                      days_since_full, weekend_full_due, manual_full):
     """Краткий вывод: включаем ли ПОЛНЫЙ пересчёт и по какой причине (триггер в скобках).
     Подробная цепочка (файлы/mtime/чекпойнты) печатается только при FULL_RECALC_DEBUG=True."""
     if weekend_full_due:
@@ -968,7 +968,7 @@ if __name__ == '__main__':
                                       ts=datetime.combine(_seed, datetime.min.time()))
 
     _log_recalc_chain(now, night_reset_path, full_recalc_marker_path, is_first_run,
-                      bt_cfg.full_recalc_min_gap_days, days_since_full, weekend_full_due or manual_full)
+                      bt_cfg.full_recalc_min_gap_days, days_since_full, weekend_full_due, manual_full)
 
     if manual_full:
         print("  ⚙️  full_recalc_mode=True — РУЧНОЙ ПОЛНЫЙ ПЕРЕСЧЁТ всех стратегий")
