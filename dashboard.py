@@ -36,8 +36,8 @@ except ImportError:  # pragma: no cover
     FUND_START_DATE = '2026-09-29'
 
 # ── Палитра (институциональная) ──
-COL_BG       = '#0E1117'
-COL_PANEL    = '#161B22'
+COL_BG       = '#1D293D'   # rgb(29, 41, 61) — фон приложения
+COL_PANEL    = '#1D293D'   # rgb(29, 41, 61) — заливки графиков/панелей
 COL_TEXT     = '#C9D1D9'
 COL_MUTED    = '#8B949E'
 COL_GREEN    = '#2EA043'
@@ -51,12 +51,52 @@ COL_NAVY     = '#1F2A3A'
 
 st.set_page_config(page_title="Strategy Cloud — Terminal", layout="wide")
 
+# ── Единый шрифт дашборда: Space Grotesk (Google Fonts) ──
+# Ставим его и в переменную Streamlit, и в сами элементы: часть виджетов
+# (metric, dataframe, tabs, кнопки) задаёт font-family жёстко, одного body мало.
+# Цифры — табличные (tabular-nums), иначе колонки в таблицах «пляшут».
+# Откат: удалить этот блок (шрифт вернётся к прежнему SF Mono/Consolas).
+# code/pre намеренно НЕ трогаем — блоки кода остаются моноширинными.
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+:root, html, body, .stApp, [class*="css"], .stMarkdown, .stMetric, .stDataFrame,
+.stCaption, .stText, h1, h2, h3, h4, h5, h6, p, span:not([data-testid="stIconMaterial"]), div, label, button, input,
+select, textarea, table, th, td,
+.stTabs [data-baseweb="tab"], .stButton button, .stExpander summary {
+   font-family: 'Space Grotesk', 'Inter', -apple-system, 'Segoe UI', sans-serif !important;
+}
+.stApp { font-variant-numeric: tabular-nums; }
+
+/* Иконки Streamlit — это лигатурный шрифт 'Material Symbols Rounded':
+   <span data-testid="stIconMaterial">keyboard_arrow_down</span> (fontFeatureSettings=liga).
+   Глобальный font-family:!important выше подменял и его, поэтому вместо стрелки печатался
+   текст лигатуры (напр. `_arrow`) поверх заголовков expander и табов. Возвращаем шрифт иконкам. */
+[data-testid="stIconMaterial"] {
+   font-family: 'Material Symbols Rounded' !important;
+   text-transform: none !important;
+   letter-spacing: normal !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ── Кастомный CSS ──
 st.markdown("""
 <style>
     /* Тёмный фон */
-    .stApp { background-color: #0E1117; }
+    .stApp { background-color: #1D293D; }
+    /* Верхний бар навигации (Deploy, меню бургер) */
+    header,
+    header > div,
+    header > div > div,
+    .css-17eq8hm,
+    .css-17eq8hm > div,
+    .stApp-header,
+    .stApp-header > div {
+        background-color: #1D293D !important;
+    }
 
     /* Текст */
     .stMarkdown, .stText { color: #C9D1D9; }
@@ -80,12 +120,12 @@ st.markdown("""
     /* Табы */
     .stTabs [data-baseweb="tab-list"] {
         gap: 0px;
-        background-color: #161B22;
+        background-color: #1D293D;
         border-radius: 0;
     }
     .stTabs [data-baseweb="tab"] {
         padding: 12px 24px;
-        background-color: #161B22;
+        background-color: #1D293D;
         color: #8B949E;
         font-size: 0.85rem;
         font-weight: 500;
@@ -96,18 +136,48 @@ st.markdown("""
     }
     .stTabs [aria-selected="true"] {
         color: #C9D1D9 !important;
-        background-color: #161B22;
+        background-color: #1D293D;
         border-bottom: 2px solid #388bfd;
     }
 
-    /* Таблицы */
-    .stDataFrame [data-testid="stDataFrame"] {
-        background-color: #161B22;
+    /* Таблицы: принудительный фон для всех вложенных элементов */
+    .stDataFrame,
+    .stDataFrame > div,
+    .stDataFrame > div > div,
+    .stDataFrame > div > div > div,
+    .stDataFrame [data-testid="stTable"],
+    .stDataFrame [data-testid="stTable"] > div,
+    [data-testid="stTable"],
+    [data-testid="stTable"] > div,
+    [data-testid="stTable"] > div > div,
+    [data-testid="stTable"] > div > div > div,
+    [data-testid="stDataFrame"],
+    [data-testid="stDataFrame"] > div,
+    [data-testid="stDataFrame"] > div > div,
+    .streamlit-container,
+    .streamlit-container > div,
+    section[data-testid="stVerticalBlock"],
+    section[data-testid="stVerticalBlock"] > div,
+    div[data-testid="stDataFrame"]:has(> div),
+    div[data-testid="stDataFrame"] > div > div {
+        background-color: #1D293D !important;
+    }
+    /* Streamlit Dataframe internal cells */
+    .css-145kwl1,
+    .css-145kwl1 > div,
+    .css-145kwl1 > div > div,
+    .css-145kwl1 > div > div > div,
+    .css-17ev2iev,
+    .css-17ev2iev > div,
+    .css-1l0221q,
+    .css-1l0221q > div,
+    .css-1l0221q > div > div {
+        background-color: #1D293D !important;
     }
 
     /* Сайдбар */
     .stSidebar > div:first-child {
-        background-color: #161B22;
+        background-color: #1D293D;
         padding-top: 2rem;
     }
 
@@ -140,6 +210,12 @@ st.markdown("""
     .stButton > button:hover {
         background-color: #30363D;
         border-color: #388bfd;
+    }
+
+    /* План по категориям (Strategy Tree): шрифт ×2. Грид st.dataframe рисуется на canvas,
+       font-size его не берёт — увеличиваем через zoom на контейнере (у него key='plan_cat_big'). */
+    .st-key-plan_cat_big [data-testid="stDataFrame"] {
+        zoom: 2;
     }
 
     /* Caption */
@@ -193,7 +269,7 @@ def plotly_dark_layout(fig, height=400):
         template='plotly_dark',
         paper_bgcolor=COL_PANEL,
         plot_bgcolor=COL_PANEL,
-        font=dict(color=COL_TEXT, family='SF Mono, Cascadia Code, Consolas, monospace', size=18),
+        font=dict(color=COL_TEXT, family='Space Grotesk, Inter, Segoe UI, sans-serif', size=18),
         margin=dict(l=60, r=60, t=30, b=50),
         coloraxis_colorbar=dict(
             tickfont=dict(size=16, color=COL_MUTED),
@@ -211,7 +287,7 @@ def plotly_dark_layout(fig, height=400):
 
 
 # ── Карточки метрик и выходные ──
-_CARD_FONT = "'SF Mono', 'Cascadia Code', 'Consolas', monospace"
+_CARD_FONT = "'Space Grotesk', 'Inter', 'Segoe UI', sans-serif"
 
 
 # ── Рынок открыт/закрыт: по данным брокера, а не по календарю ──
@@ -362,7 +438,7 @@ def drop_weekends(df, col='timestamp'):
 # ── Заголовок ──
 col_title, col_btn = st.columns([6, 1])
 with col_title:
-    st.markdown("<h1>STRATEGY CLOUD <span style='color:#8B949E;font-size:0.8rem;font-weight:400'>/ Terminal</span></h1>", unsafe_allow_html=True)
+    st.markdown("<h1>STRATEGY CLOUD <span style='color:#8B949E;font-size:0.8rem;font-weight:400'>/ Dashboard</span></h1>", unsafe_allow_html=True)
 with col_btn:
     st.write("")
     if st.button("REFRESH"):
@@ -679,6 +755,17 @@ with tab_finstatement:
             _by['cum'] = _by['pnl'].cumsum()
             _by['wd'] = [_RU_WEEKDAYS[d.weekday()] for d in _by['date']]
             _by['ym'] = [(d.year, d.month) for d in _by['date']]
+
+            # ── Сетка «3 месяца в ряд» ──
+            # Раньше каждый месяц занимал всю ширину вкладки, хотя колонок в таблице — 4.
+            # Теперь месяц = expander в СВОЕЙ колонке: 3 месяца на строку, дальше ряд
+            # начинается сам. Генератор один на обе петли ниже, поэтому месяцы-заготовки
+            # (Ноябрь/Декабрь/Январь) продолжают текущую строку, а не начинают новую.
+            def _fs_cols_gen():
+                while True:
+                    for _c in st.columns(3, gap="medium"):
+                        yield _c
+            _fs_grid = _fs_cols_gen()
             _cols = [c for c in ('symbol', 'param_key', 'volume', 'profit_net') if c in _fs.columns]
             st.caption(f"Fund start {_fs_start.strftime('%d.%m.%Y')} · {_fs_n} days · "
                        f"total P&L {int(_by['pnl'].sum()):,} RUB (net of swap and commission)")
@@ -690,7 +777,13 @@ with tab_finstatement:
                 _mtr = int(_g['trades'].sum())
                 _mtitle = f"{_RU_MONTHS_NOM[_m - 1]} {_y}"
 
-                with st.expander(_mtitle, expanded=((_y, _m) == _by['ym'].iloc[-1])):
+                # Итог по месяцу — прямо в заголовке раскрывашки: внутри только дни,
+                # и без строки-итога «сколько за месяц» не видно (cum не суммируем —
+                # он накопительный). _mpnl/_mtr до этого считались и не использовались.
+                _mlabel = (f"{_mtitle} — {_mpnl:+,} ₽ · {_mtr} сд."
+                           + ("" if _mtr else " (сделок нет)"))
+                _col = next(_fs_grid)
+                with _col.expander(_mlabel, expanded=((_y, _m) == _by['ym'].iloc[-1])):
                     _days = pd.DataFrame({
                         '#': range(1, len(_g) + 1),
                         'day': [d.strftime('%d') for d in _g['date']],
@@ -701,26 +794,75 @@ with tab_finstatement:
                     }).set_index('#').rename(columns={
                         'day': 'Date', 'weekday': 'WD', 'PnL': 'PnL, RUB',
                         'trades': 'Trades', 'cum': 'Cum, RUB'})
+                    # ── Подытог по неделям (ISO-неделя, по дате сделки) ──
+                    # cum НЕ суммируем — он накопительный (это же и в дневных строках).
+                    # Неделя ISO: месяц на границе может содержать неполные недели — так и надо.
+                    _wk = _g.copy()
+                    _wk['iso'] = [d.isocalendar()[1] for d in _wk['date']]
+                    _wsum = _wk.groupby('iso').agg(
+                        pnl=('pnl', 'sum'), trades=('trades', 'sum'),
+                        d0=('date', 'min'), d1=('date', 'max'),
+                    ).reset_index()
+                    _wk_rows = ''.join(
+                        f"<tr><td>W{int(_r['iso'])}</td>"
+                        f"<td>{_r['d0'].strftime('%d.%m')}–{_r['d1'].strftime('%d.%m')}</td>"
+                        f"<td>{int(_r['pnl']):,}</td>"
+                        f"<td>{int(_r['trades'])}</td></tr>"
+                        for _, _r in _wsum.iterrows())
+                    st.markdown(
+                        "<style>"
+                        ".fs-wk{border-collapse:collapse;font-size:0.92rem;margin:0.1rem 0 0.7rem 0;}"
+                        ".fs-wk th,.fs-wk td{padding:0.12rem 0.5rem;border:0;text-align:right;"
+                        "border-bottom:1px solid #21262d;"
+                        "font-family:'SF Mono','Consolas',monospace;}"
+                        ".fs-wk th{color:#8B949E;font-size:0.7rem;font-weight:600;"
+                        "text-transform:uppercase;letter-spacing:0.06em;}"
+                        "</style>"
+                        "<div style='font-size:0.95rem;color:#8B949E;"
+                        "margin:0.3rem 0 0.1rem 0;'>Подытог по неделям</div>"
+                        "<table class='fs-wk'><thead><tr><th>Week</th><th>Dates</th>"
+                        "<th>PnL, RUB</th><th>Trades</th></tr></thead><tbody>"
+                        + _wk_rows + "</tbody></table>",
+                        unsafe_allow_html=True,
+                    )
+                    # ── Итог по месяцу — нижней строкой той же таблицы ──
+                    # Вставляем <tfoot> внутрь .fs-tbl: цифры встают ровно под столбцами
+                    # PnL/Trades, а не «плавают» отдельной таблицей. cum НЕ суммируем — он
+                    # накопительный, поэтому в итоговой строке его нет. colspan=2 — метка
+                    # под колонками Date+WD (индекс '#' в to_html отброшен).
+                    _mfoot = (
+                        "<tfoot><tr class='fs-tot'>"
+                        "<td colspan='2' style='text-align:left;color:#8B949E;font-weight:600;'>"
+                        "Итого за месяц</td>"
+                        f"<td style='text-align:right;font-weight:700;color:#C9D1D9;'>{_mpnl:,}</td>"
+                        f"<td style='text-align:right;font-weight:700;color:#C9D1D9;'>{_mtr}</td>"
+                        "<td style='text-align:right;'></td>"
+                        "</tr></tfoot>"
+                    )
                     # Таблица дней — свой HTML, а не st.dataframe: у грида мелкий шрифт
                     # и «шапка/данные по разным краям». Здесь ширина по содержимому,
                     # цифры и заголовки выровнены одинаково (по правому краю).
                     st.markdown(
                         "<style>"
-                        ".fs-tbl{border-collapse:collapse;font-size:1.15rem;}"
-                        ".fs-tbl th,.fs-tbl td{padding:0.28rem 1.1rem;white-space:nowrap;"
+                        ".fs-tbl{border-collapse:collapse;font-size:0.95rem;}"
+                        ".fs-tbl th,.fs-tbl td{padding:0.14rem 0.55rem;white-space:nowrap;"
                         "border-bottom:1px solid #21262d;}"
                         ".fs-tbl th{color:#8B949E;font-size:0.7rem;font-weight:600;"
                         "text-transform:uppercase;letter-spacing:0.06em;}"
                         ".fs-tbl td{font-family:'SF Mono','Consolas',monospace;}"
-                        ".fs-tbl th,.fs-tbl td{padding:0.28rem 1.1rem!important;"
-                        "font-size:1.15rem!important;border:0!important;"
+                        ".fs-tbl th,.fs-tbl td{padding:0.14rem 0.55rem!important;"
+                        "font-size:0.95rem!important;border:0!important;"
                         "border-bottom:1px solid #21262d!important;}"
-                        ".fs-tbl th{font-size:0.95rem!important;color:#8B949E!important;"
+                        ".fs-tbl th{font-size:0.72rem!important;color:#8B949E!important;"
                         "background:transparent!important;}"
+                        ".fs-tbl tr.fs-tot td{border-top:1px solid #30363D!important;"
+                        "border-bottom:0!important;}"
+
                         "</style>"
-                        + _days.to_html(index=False, border=0, classes='fs-tbl', escape=False)
+                        + "<div style='overflow-x:auto;'>" + _days.to_html(index=False, border=0, classes='fs-tbl', escape=False)
                         .replace('<th>', "<th style='text-align:right;'>")
-                        .replace('<td>', "<td style='text-align:right;'>"),
+                        .replace('<td>', "<td style='text-align:right;'>")
+                        .replace('</table>', _mfoot + '</table>') + "</div>",
                         unsafe_allow_html=True,
                     )
 
@@ -734,7 +876,8 @@ with tab_finstatement:
             for _k in (1, 2, 3):
                 _tot = _lm + _k
                 _fy, _fm = _ly + (_tot - 1) // 12, (_tot - 1) % 12 + 1
-                with st.expander(f"{_RU_MONTHS_NOM[_fm - 1]} {_fy}"):
+                _col = next(_fs_grid)
+                with _col.expander(f"{_RU_MONTHS_NOM[_fm - 1]} {_fy}"):
                     st.caption("Месяц ещё не начался — сделок нет.")
     except Exception as _e:
         st.caption(f"⚠ FinStatement недоступен: {_e!r}")
@@ -858,7 +1001,8 @@ with tab_daily:
                      'loss_decay': getattr(_scfg, 'loss_decay', 0.25),
                      'kill_pnl_pct': getattr(_scfg, 'kill_pnl_pct', 0.02),
                      'kill_min_trades': getattr(_scfg, 'kill_min_trades', 3),
-                     'quota_rub': 0.0})  # превью: рублёвой квоты нет → kill по % не срабатывает
+                     'quota_rub': 0.0},  # превью: рублёвой квоты нет → kill по % не срабатывает
+                    known_ids=list(_cur_q.keys()))
         except Exception as _e:
             st.caption(f"⚠ Wheel-квоты недоступны: {_e!r}")
 
@@ -1005,7 +1149,7 @@ with tab_daily:
                 fig_cat.update_yaxes(title_text='Σ объём, лот')
                 st.markdown("#### Объём по категориям (символ + семейство)")
                 st.plotly_chart(fig_cat, use_container_width=True)
-        st.markdown("#### План по категориям (символ + семейство) — тот же уровень, что Strategy Tree")
+        st.markdown("#### План по категориям (символ + семейство)")
         _cat_rows = []
         for _sid, _grp in df_plan.groupby('sid'):
             _ccat = _cat_by_id.get(_sid, {})
@@ -1049,7 +1193,7 @@ with tab_daily:
             st.caption(f"Категорий с данными Tree: {_covered} из {len(_dfc)} · Σ объём плана: "
                        f"{_tot_lot:.2f} лот · категория = symbol+family — тот же уровень, что в "
                        f"Strategy Tree (окно {ALLOC_DAYS} дн.).")
-            st.dataframe(_dfc.drop(columns=['_pnl', '_lot']).sort_values('Σ lot', ascending=False),
+            st.dataframe(_dfc.drop(columns=['_pnl', '_lot']).sort_values('Σ lot', ascending=False), key='plan_cat_big',
                          use_container_width=True, hide_index=True)
 
 
@@ -1190,14 +1334,32 @@ with tab_risk:
 
         st.metric("Risk Budget", f"{quota:,.0f} RUB")
 
-        col_r1, col_r2, col_r3 = st.columns(3)
+        # Среднее время удержания закрытой позиции за окно дашборда: open_time →
+        # timestamp (обе метки — серверное время MT5). Позиции, открытые до начала
+        # окна, отброшены: у них IN-сделки в выборке нет (open_time = NaT).
+        hold_h = None
+        hold_n = 0
+        _tdf = data.get('trades_df')
+        if _tdf is not None and 'open_time' in _tdf.columns and len(_tdf):
+            _hold = (_tdf['timestamp'] - _tdf['open_time']).dt.total_seconds() / 3600.0
+            _hold = _hold[_hold.notna() & (_hold >= 0)]
+            if len(_hold):
+                hold_h = float(_hold.mean())
+                hold_n = int(len(_hold))
+
+        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
         with col_r1:
-            st.metric("Open Positions", f"{n_positions}")
+            # Счётчик позиций и суммарный объём одной метрикой: «51/0.50».
+            st.metric("Open Positions / lot", f"{n_positions}/{total_volume:.2f}")
         with col_r2:
             st.metric("Unrealized P&L", f"{unrealized_pnl:+,.1f} RUB",
                       delta_color="inverse")
         with col_r3:
             st.metric("Max Risk (SL)", f"{max_loss:,.1f} RUB")
+        with col_r4:
+            # Удержание: часы, в скобках — дни; среднее по закрытым позициям окна.
+            st.metric("Avg Hold, h (d)",
+                      f"{hold_h:.1f} ({hold_h / 24:.1f})" if hold_h is not None else "—")
 
         # ── Gauge ──
         fig_gauge = go.Figure()
@@ -1248,6 +1410,9 @@ with tab_risk:
                            use_container_width=True, key="risk_by_symbol")
 
         caption = f"Open: {n_positions} | Volume: {total_volume:.2f} lots | Budget: {quota:,.0f} RUB"
+        if hold_h is not None:
+            # Размер выборки важен: среднее по 2 позициям ничего не значит.
+            caption += f" | Avg hold: {hold_h:.1f} h over {hold_n} closed"
         if no_sl_count > 0:
             caption += f" | {no_sl_count} positions without SL"
         st.caption(caption)
@@ -1261,8 +1426,8 @@ with tab_risk:
             active = [s for s in data['active_strategies'] if s.get('has_position')]
             n = len(active)
             total_lot = sum(s.get('lot', 0) for s in active)
-            st.metric("Open Positions (from strategies)", f"{n}")
-            st.metric("Total Volume", f"{total_lot:.2f} lots")
+            st.metric("Open Positions / lot (from strategies)", f"{n}/{total_lot:.2f}")
+            # Объём объединён со счётчиком позиций выше («Open Positions / lot»).
             st.caption(f"MT5 unavailable for detailed risk | Budget: {quota:,.0f} RUB")
         else:
             st.info("No open positions.")
@@ -1312,6 +1477,157 @@ with tab_risk:
         st.plotly_chart(plotly_dark_layout(fig_heat, 320), use_container_width=True,
                        key="risk_exposure_heatmap")
         st.caption("Scale: 0 — dark, 1-2 — green, 3 (limit) — amber, >3 — red")
+
+    # ── Realized P&L by currency ──
+    # Источник — data['trades_df']: одна строка = одна ЗАКРЫТАЯ позиция окна дашборда,
+    # profit_net — реализованный результат в валюте счёта (₽), уже с комиссией и свопом.
+    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        st.markdown("### Currency Breakdown — realized P&L & volume")
+        _ccy = data['trades_df'].copy()
+        _ccy['ccy'] = _ccy['symbol'].str.replace('rfd', '')
+        _ccy = _ccy.groupby('ccy').agg(
+            pnl=('profit_net', 'sum'),
+            trades=('profit_net', 'count'),
+        ).reset_index()
+        # Крупные куски — первыми, независимо от знака.
+        _ccy = _ccy.sort_values('pnl', key=lambda s: s.abs(),
+                                ascending=False).reset_index(drop=True)
+        # База процентов — сумма МОДУЛЕЙ: плюс и минус по разным валютам не должны
+        # гасить друг друга (иначе доля теряет смысл, а при нулевом итоге — мусор).
+        _abs_total = float(_ccy['pnl'].abs().sum())
+        # Два пирога рядом: реализованный P&L (₽) и оборот (лоты) по валютам.
+        _col_pnl, _col_lots = st.columns(2)
+        _col_pnl.markdown("#### Realized P&L, ₽")
+        _labels, _values, _colors, _hover = [], [], [], []
+        for _, _r in _ccy.iterrows():
+            _pnl = float(_r['pnl'])
+            _share = (abs(_pnl) / _abs_total * 100.0) if _abs_total > 0 else 0.0
+            _labels.append(f"{_r['ccy']}: {_pnl:+,.0f} ₽ ({_share:.0f}%)")
+            _values.append(abs(_pnl))
+            _colors.append(COL_GREEN if _pnl >= 0 else COL_RED)
+            _hover.append(f"<b>{_r['ccy']}</b><br>Realized: {_pnl:+,.0f} ₽<br>"
+                          f"Share of Σ|P&L|: {_share:.1f}%<br>"
+                          f"Closed positions: {int(_r['trades'])}")
+        if _values and sum(_values) > 0:
+            _fig_ccy = go.Figure(go.Pie(
+                labels=_labels, values=_values, hole=0.45,
+                marker=dict(colors=_colors, line=dict(color=COL_PANEL, width=2)),
+                text=_labels, textinfo='text', textposition='outside',
+                textfont=dict(size=14, color=COL_TEXT),
+                customdata=_hover, hovertemplate='%{customdata}<extra></extra>',
+                sort=False, showlegend=False,
+            ))
+            _col_pnl.plotly_chart(plotly_dark_layout(_fig_ccy, 480), use_container_width=True,
+                                  key="risk_pnl_by_currency")
+            _col_pnl.caption(f"Realized P&L of closed positions in window | % base = Σ|P&L| = "
+                               f"{_abs_total:,.0f} ₽ (+ and − do not cancel) | slice = |P&L|")
+        else:
+            _col_pnl.info("No closed positions with non-zero P&L in the window.")
+
+        # ── Пирог по обороту (лоты) — рядом с P&L ──
+        # Тот же набор: ЗАКРЫТЫЕ позиции окна. volume — объём входа позиции (лоты),
+        # т.е. сумма по валюте = «отработанный» оборот, а не текущая экспозиция.
+        _col_lots.markdown("#### Volume, lots")
+        _lots = data['trades_df'].copy()
+        _lots['ccy'] = _lots['symbol'].str.replace('rfd', '')
+        _lots = _lots.groupby('ccy').agg(
+            lots=('volume', 'sum'),
+            trades=('profit_net', 'count'),
+        ).reset_index()
+        _lots = _lots[_lots['lots'] > 0].sort_values(
+            'lots', ascending=False).reset_index(drop=True)
+        _lots_total = float(_lots['lots'].sum())
+        _l_labels, _l_values, _l_hover = [], [], []
+        for _, _r in _lots.iterrows():
+            _v = float(_r['lots'])
+            _sh = (_v / _lots_total * 100.0) if _lots_total > 0 else 0.0
+            _l_labels.append(f"{_r['ccy']}: {_v:.2f} lots ({_sh:.0f}%)")
+            _l_values.append(_v)
+            _l_hover.append(f"<b>{_r['ccy']}</b><br>Volume: {_v:.2f} lots<br>"
+                            f"Share: {_sh:.1f}%<br>Closed positions: {int(_r['trades'])}")
+        if _l_values and _lots_total > 0:
+            _fig_lots = go.Figure(go.Pie(
+                labels=_l_labels, values=_l_values, hole=0.45,
+                marker=dict(colors=[COL_BLUE] * len(_l_values),
+                            line=dict(color=COL_PANEL, width=2)),
+                text=_l_labels, textinfo='text', textposition='outside',
+                textfont=dict(size=14, color=COL_TEXT),
+                customdata=_l_hover, hovertemplate='%{customdata}<extra></extra>',
+                sort=False, showlegend=False,
+            ))
+            _col_lots.plotly_chart(plotly_dark_layout(_fig_lots, 480),
+                                   use_container_width=True,
+                                   key="risk_volume_by_currency")
+            _col_lots.caption(f"Volume of closed positions in window | "
+                              f"total {_lots_total:.2f} lots")
+        else:
+            _col_lots.info("No closed volume in the window.")
+
+        # ── То же по дням недели (день считается по времени ВЫХОДА сделки,
+        # серверное время MT5 — как и везде в этом окне) ──
+        st.markdown("### Weekday Breakdown — realized P&L & volume")
+        _wd_names = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+        _wd = data['trades_df'].copy()
+        _wd['wd'] = _wd['timestamp'].dt.weekday
+        _wd = _wd.groupby('wd').agg(
+            pnl=('profit_net', 'sum'),
+            lots=('volume', 'sum'),
+            trades=('profit_net', 'count'),
+        ).reset_index().sort_values('wd').reset_index(drop=True)
+        _wd_abs = float(_wd['pnl'].abs().sum())
+        _wd_lots_total = float(_wd['lots'].sum())
+        _col_wd_pnl, _col_wd_lots = st.columns(2)
+        _col_wd_pnl.markdown("#### Realized P&L by weekday, ₽")
+        _col_wd_lots.markdown("#### Volume by weekday, lots")
+        _w_labels, _w_values, _w_colors, _w_hover = [], [], [], []
+        _wl_labels, _wl_values, _wl_hover = [], [], []
+        for _, _r in _wd.iterrows():
+            _nm = _wd_names[int(_r['wd'])]
+            _pnl = float(_r['pnl'])
+            _lots = float(_r['lots'])
+            _sh = (abs(_pnl) / _wd_abs * 100.0) if _wd_abs > 0 else 0.0
+            _shl = (_lots / _wd_lots_total * 100.0) if _wd_lots_total > 0 else 0.0
+            _w_labels.append(f"{_nm}: {_pnl:+,.0f} ₽ ({_sh:.0f}%)")
+            _w_values.append(abs(_pnl))
+            _w_colors.append(COL_GREEN if _pnl >= 0 else COL_RED)
+            _w_hover.append(f"<b>{_nm}</b><br>Realized: {_pnl:+,.0f} ₽<br>"
+                            f"Share of Σ|P&L|: {_sh:.1f}%<br>Closed: {int(_r['trades'])}")
+            _wl_labels.append(f"{_nm}: {_lots:.2f} lots ({_shl:.0f}%)")
+            _wl_values.append(_lots)
+            _wl_hover.append(f"<b>{_nm}</b><br>Volume: {_lots:.2f} lots<br>"
+                             f"Share: {_shl:.1f}%<br>Closed: {int(_r['trades'])}")
+        if _w_values and _wd_abs > 0:
+            _fig_wd = go.Figure(go.Pie(
+                labels=_w_labels, values=_w_values, hole=0.45,
+                marker=dict(colors=_w_colors, line=dict(color=COL_PANEL, width=2)),
+                text=_w_labels, textinfo='text', textposition='outside',
+                textfont=dict(size=14, color=COL_TEXT),
+                customdata=_w_hover, hovertemplate='%{customdata}<extra></extra>',
+                sort=False, showlegend=False,
+            ))
+            _col_wd_pnl.plotly_chart(plotly_dark_layout(_fig_wd, 480),
+                                     use_container_width=True,
+                                     key="risk_pnl_by_weekday")
+            _col_wd_pnl.caption(f"Closed positions by exit day | % base = Σ|P&L| = "
+                                f"{_wd_abs:,.0f} ₽ (+ and − do not cancel)")
+        else:
+            _col_wd_pnl.info("No closed positions in the window.")
+        if _wl_values and _wd_lots_total > 0:
+            _fig_wdl = go.Figure(go.Pie(
+                labels=_wl_labels, values=_wl_values, hole=0.45,
+                marker=dict(colors=[COL_BLUE] * len(_wl_values),
+                            line=dict(color=COL_PANEL, width=2)),
+                text=_wl_labels, textinfo='text', textposition='outside',
+                textfont=dict(size=14, color=COL_TEXT),
+                customdata=_wl_hover, hovertemplate='%{customdata}<extra></extra>',
+                sort=False, showlegend=False,
+            ))
+            _col_wd_lots.plotly_chart(plotly_dark_layout(_fig_wdl, 480),
+                                      use_container_width=True,
+                                      key="risk_volume_by_weekday")
+            _col_wd_lots.caption(f"Volume of closed positions | total {_wd_lots_total:.2f} lots")
+        else:
+            _col_wd_lots.info("No closed volume in the window.")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1428,8 +1744,9 @@ with tab_strategies:
                        key="strat_family_pnl_bar")
 
     # ── Active strategies table ──
-    st.markdown("### Active Strategies")
-    if data['active_strategies']:
+    # Active Strategies / Allocation by symbol / Trade Log — выключены 25.10 (не используются).
+        # Код ниже выключен через `if False and ...` — при желании строки удалить физически.
+    if False and data['active_strategies']:  # ── Active Strategies — убрана 25.10
         df_active = pd.DataFrame(data['active_strategies'])
         df_active = df_active.sort_values('lot', ascending=False).reset_index(drop=True)
         df_active['status'] = df_active['has_position'].apply(
@@ -1437,6 +1754,7 @@ with tab_strategies:
         )
         display_cols = ['status', 'symbol', 'type', 'param_key', 'lot', 'magic']
         cols_to_show = [c for c in display_cols if c in df_active.columns]
+        
         st.dataframe(
             df_active[cols_to_show], use_container_width=True,
             column_config={
@@ -1454,11 +1772,11 @@ with tab_strategies:
         ).reset_index()
         st.dataframe(by_symbol, use_container_width=True, hide_index=True)
     else:
-        st.info("No active strategies.")
+        pass  # info «No active strategies» не показываем — таблицы убраны
 
     # ── Trade log ──
-    st.markdown("### Trade Log — Last 50")
-    if not data['trades_df'].empty:
+    pass  # заголовок «Trade Log — Last 50» убран вместе с таблицей
+    if False and not data['trades_df'].empty:  # Trade Log — убрана 25.10 (не используется)
         show_cols = ['timestamp', 'symbol', 'strategy_type', 'param_key',
                      'type', 'entry', 'volume', 'price',
                      'profit', 'commission', 'swap', 'profit_net', 'magic']
@@ -1477,7 +1795,7 @@ with tab_strategies:
             },
         )
     else:
-        st.info("No trades in history for selected period.")
+        pass  # info «No trades in history…» не показываем — таблица убрана
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -2011,7 +2329,8 @@ with tab_steering:
                     'kill_pnl_pct': getattr(steering_cfg, 'kill_pnl_pct', 0.02),
                     'kill_min_trades': getattr(steering_cfg, 'kill_min_trades', 3),
                     'quota_rub': 0.0,  # рублёвой квоты в превью нет → kill только по параметрам
-                }
+                },
+                known_ids=list(current_quotas.keys()),
             )
 
             # Сборка DataFrame по ВСЕМ категориям (активные + сделковые) — «символ + семейство»
@@ -2251,7 +2570,7 @@ with tab_backtest:
         # ── Отсекаем «пустые» ночи (ничего не считалось: всё взято из кэша) ──
         # Раньше они давали в таблице нули и портили средние. Теперь это отдельный
         # счётчик: в статистику прогонов и на график они не попадают.
-        _bt_cache_mask = (df_bt['combos'].fillna(0) == 0) & (df_bt['kind'] == 'light')
+        _bt_cache_mask = df_bt['combos'].fillna(0) == 0
         _bt_cache_n = int(_bt_cache_mask.sum())
         df_bt = df_bt[~_bt_cache_mask]
         if df_bt.shape[0] == 0:

@@ -1,0 +1,21 @@
+# Тема дашборда StrategyCloud.
+#
+# Зачем этот файл: фон ЯЧЕЕК st.dataframe рисуется на <canvas> движком glide-data-grid
+# (theme.bgCell = secondaryBackgroundColor темы Streamlit). CSS его не достаёт —
+# переменные --gdg-* влияют только на DOM-оверлеи (редакторы/поиск), не на canvas.
+# Поэтому цвет ячеек задаётся здесь, а не в dashboard.py.
+#
+# Палитра: всё полотно и ячейки — rgb(29,41,61) = #1D293D (= COL_BG = COL_PANEL в dashboard.py).
+# Откат: удалить этот файл (вернётся системная тема Streamlit: фон #0E1117,
+# панели/ячейки #262730).
+
+[theme]
+base = "dark"
+primaryColor = "#388bfd"
+backgroundColor = "#1D293D"
+secondaryBackgroundColor = "#1D293D"  # ячейки таблиц, сайдбар, блоки кода
+textColor = "#C9D1D9"
+
+# Гриды st.dataframe (glide-data-grid): чтобы ячейки/шапка не оставались #262730
+dataframeHeaderBackgroundColor = "#1D293D"
+dataframeBorderColor = "#293A52"

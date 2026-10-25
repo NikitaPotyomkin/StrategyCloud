@@ -65,7 +65,16 @@ def copy_directory(src, dst, keep_files=None):
     skipped = 0
     errors = []
 
-    for item in sorted(os.listdir(src)):
+    try:
+        _items = sorted(os.listdir(src))
+    except OSError as exc:
+        # SMB-шара: Path.exists() может быть True, а листинг падать (WinError 3 —
+        # «Системе не удается найти указанный путь»). Раньше это прерывало весь
+        # sync: journals/ уже был скопирован, но checkpoints/ валил скрипт, и
+        # вкладка Backtest так и не получала backtest_history.jsonl.
+        print(f"  ✗ {src}: каталог не читается ({exc!r}) — пропуск")
+        return copied, skipped, errors + [(str(src), f'listdir: {exc!r}')]
+    for item in _items:
         src_path = os.path.join(src, item)
         dst_path = os.path.join(dst, item)
 

@@ -135,7 +135,8 @@ def format_allocation_report(categories, current_quotas, new_quotas,
     return lines
 
 
-def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cfg):
+def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cfg,
+                                    known_ids=None):
     """
     Расчёт квот с усилением лидеров (Power Law).
     score_mode:
@@ -145,6 +146,7 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
     min_trades: категория с меньшим числом сделок за окно не оценивается
     (удельная метрика на 1–2 сделках = шум) и получает min_q.
     Категории без сделок за окно тоже получают min_q — объём уходит в зелёные.
+    known_ids — категории активного плана (даже без сделок в окне): им гарантируется ключ в результате, иначе штурвал не может управлять их лотом.
     Финальная нормализация гарантирует сумму = 1.0.
     """
     gamma = steering_cfg.get('gamma', 1.5)
@@ -232,7 +234,14 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
         print("  [WHEEL] ВНИМАНИЕ: прибыльных категорий в окне нет — квоты не меняются "
               f"(убыточных: {len(_loss_sids)}; kill switch не применяется — "
               f"перераспределять долю некуда)", flush=True)
-        return current_quotas
+        _out = dict(current_quotas)
+        for _sid in (known_ids or ()):
+            if _sid and _sid not in _out:
+                _out[_sid] = min_q
+        _tot = sum(_out.values())
+        if _tot > 0:  # нормировка: новые ключи не должны раздувать сумму выше 1.0
+            _out = {k: v / _tot for k, v in _out.items()}
+        return _out
 
     target_weights = {sid: sc / total_score for sid, sc in scores}
 
@@ -278,6 +287,15 @@ def calculate_steering_wheel_quotas(strategies_data, current_quotas, steering_cf
     for sid in current_quotas:
         if sid not in scored_ids:
             new_quotas[sid] = min_q  # нет сделок за окно → нет прибыли → минимум (объём уходит в зелёные)
+
+    # ── 3b. Категории активного плана вне окна и вне файла квот ──
+    # Новая комбинация (после полного пересчёта) может ещё не иметь живых сделок:
+    # в окно она не попадает, в файле её нет — и квота для неё не создаётся никогда
+    # («лот не тронут»: баг pin_bar на USDCAD). known_ids — категории текущего
+    # торгового набора; им даём min_q, чтобы штурвал мог управлять их лотом.
+    for _sid in (known_ids or ()):
+        if _sid and _sid not in new_quotas:
+            new_quotas[_sid] = min_q
 
     # ── 4. Финальная нормализация к 1.0 ──
     total = sum(new_quotas.values())

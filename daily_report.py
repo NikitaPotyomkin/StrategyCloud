@@ -540,6 +540,12 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             # Открытые позиции (без DEAL_ENTRY_OUT) исключаются — их можно взять
             # отдельно из MT history (positions_get).
             trades_df['position_id'] = trades_df['position_id'].astype(str)
+            # Время ВХОДА позиции — только по IN-сделке (время выхода = timestamp, max).
+            # Нужно для среднего времени удержания в Risk. Если позиция открыта ДО
+            # начала окна, IN-сделки в выборке нет → NaT, и такая позиция в среднее
+            # не попадёт (без этого её удержание занижалось бы до части окна).
+            trades_df['open_time'] = trades_df['timestamp'].where(
+                trades_df['entry'] == mt5.DEAL_ENTRY_IN)
             closed_ids = trades_df.loc[trades_df['entry'] == mt5.DEAL_ENTRY_OUT, 'position_id']
             trades_df = trades_df[trades_df['position_id'].isin(closed_ids)].copy()
             agg = trades_df.sort_values('timestamp').groupby('position_id').agg(
@@ -556,6 +562,7 @@ def get_dashboard_data(days_back=30, manage_connection=True):
                 profit_net=('profit_net', 'sum'),
                 magic=('magic', 'first'),
                 timestamp=('timestamp', 'max'),
+                open_time=('open_time', 'min'),
                 time=('time', 'max'),
             ).reset_index()
             trades_df = agg.sort_values('timestamp').reset_index(drop=True)

@@ -14,12 +14,22 @@ warnings.filterwarnings('ignore')
 # Fail-safe: любая проблема с логом не должна ронять пайплайн.
 try:
     import run_log
-    run_log.setup()
+    try:
+        run_log.setup()
+    except Exception:
+        # Не глушим молча: без файлового лога весь прогон не оставит следов в journals/.
+        import sys as _sys
+        print(f"[WARN] Лог journals/run.log не открылся ({_sys.exc_info()[1]!r}) — "
+              f"прогон продолжится без файлового лога", flush=True)
 except Exception:
     pass
 
+
+
+
 from functions import (terminal_on, run_full_backtest, backtest_worker_count,
-                        _checkpoint_dir, family_status_rows, strategy_combos_per_symbol)
+                        _checkpoint_dir, family_status_rows, strategy_combos_per_symbol,
+                        _safe_marker_write)
 from daily_report import generate_daily_report, generate_missing_reports, get_dashboard_data
 from trail_manager import TrailManager
 from wheel import (
@@ -213,16 +223,21 @@ def _write_night_reset(night_reset_path, start_time, symbols_count, results_coun
     """Записывает night_reset.json — и при первом прогоне, и каждую ночь."""
     if ts is None:
         ts = datetime.now()
-    fake_timestamp = ts.replace(hour=3, minute=0, second=0, microsecond=0)
-    with open(night_reset_path, 'w', encoding='utf-8') as f:
+    # timestamp — РЕАЛЬНОЕ время записи маркера. Раньше сюда принудительно писали
+    # 03:00 (fake_timestamp), и по маркеру нельзя было понять, когда прогон был на
+    # самом деле: оставалось только гадать по времени перезапуска процесса.
+    night_window = ts.replace(hour=3, minute=0, second=0, microsecond=0)
+    with _safe_marker_write(night_reset_path, 'night_reset.json (main)') as f:
         json.dump({
             'started_at': start_time.isoformat(),
-            'timestamp': fake_timestamp.isoformat(),
+            'timestamp': ts.isoformat(),
+            'night_window': night_window.isoformat(),
             'status': 'completed',
             'symbols': symbols_count,
             'total_results': results_count,
         }, f, ensure_ascii=False, indent=2)
-    print(f"\n  ✅ Маркер прогона записан ({fake_timestamp.strftime('%H:%M')}) — старт: {start_time}")
+    print(f"\n  ✅ Маркер прогона записан ({ts.strftime('%Y-%m-%d %H:%M')}, "
+          f"ночное окно {night_window.strftime('%H:%M')}) — старт: {start_time}")
 
 
 # ═══ Утилита: маркер последнего ПОЛНОГО пересчёта (правило «не чаще, чем раз в N дней») ═══
@@ -235,6 +250,9 @@ def _read_last_full_recalc(marker_path):
             return datetime.fromisoformat(ts).date()
     except (OSError, ValueError, json.JSONDecodeError):
         pass
+
+
+
     # Фолбэк (маркера ещё нет, напр. сразу после обновления): самая свежая дата из
     # night_reset.json и mtime чекпойнтов — чтобы НЕ запускать лишний ПОЛНЫЙ пересчёт.
     _dates = []
@@ -245,6 +263,9 @@ def _read_last_full_recalc(marker_path):
             _dates.append(datetime.fromisoformat(_ts2).date())
     except (OSError, ValueError, json.JSONDecodeError):
         pass
+
+
+
     try:
         _ck = _checkpoint_dir()
         _skip2 = ('night_reset.json', 'last_run.json', 'last_full_recalc.json')
@@ -253,6 +274,9 @@ def _read_last_full_recalc(marker_path):
                 _dates.append(datetime.fromtimestamp(os.path.getmtime(os.path.join(_ck, _name))).date())
     except OSError:
         pass
+
+
+
     return max(_dates) if _dates else None
 
 
@@ -315,7 +339,7 @@ def _write_full_recalc_marker(marker_path, ts=None):
     """Фиксирует дату последнего ПОЛНОГО пересчёта. Лайт-прогоны этот файл не перезаписывают."""
     if ts is None:
         ts = datetime.now()
-    with open(marker_path, 'w', encoding='utf-8') as f:
+    with _safe_marker_write(marker_path, 'last_full_recalc.json') as f:
         json.dump({'last_full_recalc': ts.isoformat()}, f, ensure_ascii=False, indent=2)
 
 
@@ -468,6 +492,9 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
                 _last_txt = datetime.fromisoformat(_ts).strftime('%d.%m.%y %H:%M')
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+
+
+
         print(f"  🔁 ПОЛНЫЙ пересчёт: НЕТ (последний был {_last_txt}; порог {gap_days} дн. — окно выходных закрыто)")
     if not globals().get('FULL_RECALC_DEBUG', False):
         return
@@ -478,6 +505,9 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
         sym_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.json') and f not in skip]
     except OSError:
         pass
+
+
+
     last_sym_mtime = '-'
     if sym_files:
         try:
@@ -485,6 +515,9 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
             last_sym_mtime = datetime.fromtimestamp(newest).strftime('%Y-%m-%d %H:%M:%S')
         except (OSError, ValueError):
             pass
+
+
+
 
     nr_e, nr_m, nr_c = _file_info(night_reset_path)
     mk_e, mk_m, mk_c = _file_info(marker_path)
@@ -583,7 +616,12 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
                     'kill_pnl_pct': getattr(steering_cfg, 'kill_pnl_pct', 0.02),
                     'kill_pnl_rub': getattr(steering_cfg, 'kill_pnl_rub', 0.0),
                     'kill_min_trades': getattr(steering_cfg, 'kill_min_trades', 3),
-                }
+                },
+                # Категории активного плана — даже без сделок в окне должны получить
+                # ключ в файле квот, иначе штурвал не может тронуть их лот.
+                known_ids=sorted({_cid for _cid in (record_category_id(_s)
+                                                    for _s in (active_strategies or {}).values())
+                                  if _cid}),
             )
             with open(quotas_path, 'w', encoding='utf-8') as _qf:
                 json.dump(new_quotas, _qf, ensure_ascii=False, indent=2)
@@ -1004,10 +1042,16 @@ if __name__ == '__main__':
             save_journal(journal_df, JOURNAL_FILE)
         except Exception:
             pass
+
+
+
         try:
             mt5.shutdown()
         except Exception:
             pass
+
+
+
         raise SystemExit(1) from exc
 
     acc = mt5.account_info()
@@ -1759,4 +1803,7 @@ if __name__ == '__main__':
             mt5.shutdown()
         except Exception:
             pass
+
+
+
         print("Журнал и состояние сохранены. Терминал отключён.")

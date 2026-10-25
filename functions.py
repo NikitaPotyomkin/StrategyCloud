@@ -13,6 +13,43 @@ from risk_manager import json_default
 
 
 # ═══ ЧЕКПОЙНТЫ БЭКТЕСТА ═══
+class _safe_marker_write:
+    """Контекст-менеджер вместо `with open(...) as f:` для JSON-маркеров.
+
+    Зачем: записи ночных маркеров (night_reset.json, last_run.json) обёрнуты в
+    `except (OSError, TypeError): pass`. При отказе диска или сетевой шары запись
+    исчезала молча, и решение о следующем ПОЛНОМ пересчёте принималось по
+    устаревшему маркеру без единой строки в логе. Здесь ошибка печатается, тело
+    блока (json.dump) не меняется, а прогон не падает.
+    """
+
+    def __init__(self, path, label):
+        self.path = path
+        self.label = label
+        self._file = None
+
+    def __enter__(self):
+        try:
+            self._file = open(self.path, 'w', encoding='utf-8')
+        except OSError as exc:
+            # Открыть не удалось — пишем в никуда, но говорим об этом вслух.
+            print(f"  [WARN] {self.label} не записан ({self.path}): {exc!r}", flush=True)
+            import io
+            return io.StringIO()
+        return self._file
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if self._file is not None:
+                self._file.close()
+        except OSError:
+            pass
+        if exc_type is not None:
+            print(f"  [WARN] {self.label} не записан ({self.path}): {exc!r}", flush=True)
+            return True   # гасим: маркер не должен ронять прогон
+        return False
+
+
 def _history_path():
     """Путь к журналу прогонов бэктеста (JSONL, для вкладки Backtest в дэшборде)."""
     base = os.path.dirname(os.path.abspath(__file__))
@@ -253,7 +290,7 @@ def strategy_combos_per_symbol(sp):
 #      Он и есть основа инкремента по новым барам: агрегаты окно не сдвигают (см.
 #      trade_log.py). Файлы v1 читаются как раньше, но по ним инкремент невозможен —
 #      символ один раз пересчитывается полностью, дальше пишется v2.
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
 
 # Режим последнего прогона бэктеста (full / incremental / partial / light).
 # run_full_backtest выставляет его в конце; main.py читает и пишет в таблицу
@@ -284,6 +321,11 @@ def load_checkpoint(symbol):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        # Версия модели бэктеста. Меняется при правке самой логики расчёта
+        # (например, добавлен своп за удержание) — старые результаты тогда
+        # несовместимы, и символ честно уходит в полный пересчёт.
+        if data.get('version') != CHECKPOINT_VERSION:
+            return [], None, None
         return data.get('results', []), data.get('last_bar_time'), data.get('families')
     except (json.JSONDecodeError, KeyError):
         return None, None
@@ -301,8 +343,12 @@ def save_checkpoint(symbol, results, last_bar_time=None, families=None):
         'version': CHECKPOINT_VERSION,
         'results': results
     }
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':'), default=json_default)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, separators=(',', ':'), default=json_default)
+    except (OSError, TypeError) as exc:
+        print(f"  [WARN] Чекпойнт {symbol} не записан ({path}): {exc!r} — "
+              f"символ может уйти в пересчёт заново", flush=True)
 
 
 def remove_checkpoint(symbol):
@@ -762,17 +808,77 @@ class _FamilyFilter:
         return f"_FamilyFilter({sorted(self.names)})"
 
 
+# ═══ Своп за удержание (в бэктесте) ═══
+# До этого бэктест считал только спред. Живой отчёт штурвала показал, что
+# отрицательный своп — крупная статья расходов и что она системно бьёт по одной
+# стороне: USDJPY swap_short = −15.00 пунктов/день против swap_long = −2.50,
+# EURUSD swap_short = 0.00. Отбор этого не видел и потому любил JPY-шорты и
+# «долгие» часовые стратегии (pin_bar). Считаем по брокерским ставкам.
+def _swap_money_per_lot(point, tick_value, tick_size, direction, days,
+                        swap_long, swap_short):
+    """Своп за удержание позиции: валюта счёта на 1 лот.
+
+    Ставки приходят в ПУНКТАХ за день на лот (swap_mode=1), поэтому
+    деньги = пункты × point × (tick_value / tick_size) × дни — та же арифметика,
+    что в риск-модели лота (_sl_money_per_lot). Тройной своп по средам
+    (swap_rollover3day) не моделируем: оценка выходит на ~10–20% мягче реальной.
+    """
+    pts = swap_long if direction == 'long' else swap_short
+    if not pts or days <= 0 or not point or not tick_size:
+        return 0.0
+    return pts * point * (tick_value / tick_size) * days
+
+
+def _apply_swap(out, ctx):
+    """Вычитает своп за удержание из каждой сделки результата бэктеста.
+
+    ctx = (point, tick_value, tick_size, sim_lot, swap_long, swap_short) или None.
+    Удержание берём из журнала сделок (.times): [t_in, t_out, dir, profit] — времена
+    входа/выхода есть только там. Нет журнала (обычный list) или длины не совпали →
+    результат не трогаем: подставлять среднее удержание вместо реального хуже, чем
+    не считать своп вовсе (такая комбинация и так уходит в полный расчёт).
+    Своп пишется и в сам журнал (rec[3]) — иначе инкрементальный пересчёт собрал бы
+    метрики обратно без свопа.
+    """
+    if not ctx or not out or len(out) < 3:
+        return out
+    profits = out[2]
+    times = getattr(profits, 'times', None)
+    if not times or len(times) != len(profits):
+        return out
+    point, tick_value, tick_size, sim_lot, swap_long, swap_short = ctx
+    total = 0.0
+    for i, rec in enumerate(times):
+        days = (rec[1] - rec[0]) / 86400.0
+        swap = _swap_money_per_lot(point, tick_value, tick_size,
+                                   'long' if rec[2] > 0 else 'short', days,
+                                   swap_long, swap_short) * sim_lot
+        net = profits[i] - swap
+        profits[i] = net
+        rec[3] = round(net, 2)
+        total += net
+    return total, out[1], profits
+
+
 def _reconstruct_symbol_info(symbol, info_dict):
     """Восстановить объект с полями, которые нужны для бэктеста."""
     class _SymbolInfo:
-        __slots__ = ['point', 'trade_tick_value', 'trade_tick_size', 'spread']
-        def __init__(self, point, trade_tick_value, trade_tick_size, spread):
+        __slots__ = ['point', 'trade_tick_value', 'trade_tick_size', 'spread',
+                     'swap_long', 'swap_short', 'swap_mode']
+        def __init__(self, point, trade_tick_value, trade_tick_size, spread,
+                     swap_long=0.0, swap_short=0.0, swap_mode=1):
             self.point = point
             self.trade_tick_value = trade_tick_value
             self.trade_tick_size = trade_tick_size
             self.spread = spread
+            self.swap_long = swap_long
+            self.swap_short = swap_short
+            self.swap_mode = swap_mode
     return _SymbolInfo(info_dict['point'], info_dict['trade_tick_value'],
-                       info_dict['trade_tick_size'], info_dict['spread'])
+                       info_dict['trade_tick_size'], info_dict['spread'],
+                       info_dict.get('swap_long', 0.0),
+                       info_dict.get('swap_short', 0.0),
+                       info_dict.get('swap_mode', 1))
 
 
 def _run_symbol_safe(args):
@@ -982,10 +1088,27 @@ def _backtest_symbol(args):
     # Нужны для инкремента по новым барам: из агрегатов окно не сдвинуть.
     _trade_logs = []
 
+    # ── Своп за удержание: контекст на весь символ ──
+    # sim_lot=0.01 — как во всех обёртках _backtest_* (лот симуляции). Если брокер
+    # отдаёт своп не в пунктах (swap_mode != 1), не угадываем: считаем как раньше
+    # и говорим об этом в лог.
+    _swap_ctx = None
+    _sw_long = getattr(info, 'swap_long', 0.0) or 0.0
+    _sw_short = getattr(info, 'swap_short', 0.0) or 0.0
+    if getattr(info, 'swap_mode', 1) == 1 and (_sw_long or _sw_short):
+        _swap_ctx = (info.point, info.trade_tick_value, info.trade_tick_size,
+                     0.01, _sw_long, _sw_short)
+    else:
+        print(f"  -> [WARN] {symbol}: своп в бэктест не добавлен "
+              f"(swap_mode={getattr(info, 'swap_mode', None)}, "
+              f"long={_sw_long}, short={_sw_short})", flush=True)
+
     def _safe_backtest(strategy_name, bt_fn, *args, **kwargs):
         nonlocal combos_done
         try:
             out = bt_fn(*args, **kwargs)
+            # Своп за удержание: вычитаем из каждой сделки и из журнала .times.
+            out = _apply_swap(out, _swap_ctx)
             # v2: профиты могут прийти как TradeList — тогда времена сделок лежат
             # в .times. Обычный list → журнала нет, комбинация остаётся «полный расчёт».
             try:
@@ -2208,6 +2331,39 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     K_PERIODS = strategy_params.k_periods
     SL_POINTS_LIST = strategy_params.sl_points_list
     TP_POINTS_LIST = strategy_params.tp_points_list
+
+    # ── SL/TP пер-символьно (config.SL_POINTS_GRID) ──
+    # Одна полоса в % цены даёт РАЗНЫЕ пункты у пар (point 0.00001 у 5-значных против
+    # 0.001 у JPY), поэтому списки выше — только фолбэк для символа вне словаря.
+    # Перебор комбинаций в воркере получает списки аргументами, так что резолва здесь
+    # достаточно для всех product(..., SL_POINTS_LIST, TP_POINTS_LIST) внутри него.
+    try:
+        from config import sl_tp_points_for as _sl_tp_for
+    except ImportError:      # старый config без пер-символьной сетки
+        _sl_tp_for = None
+
+    def _points_for(sym):
+        """(SL, TP) в пунктах для символа: из config.SL_POINTS_GRID либо фолбэк."""
+        if _sl_tp_for is not None:
+            return _sl_tp_for(sym)
+        return SL_POINTS_LIST, TP_POINTS_LIST
+
+    def _fp_for_symbol(fp_map, sl_pts, tp_pts):
+        """Отпечатки семейств с SL/TP ИМЕННО этого символа.
+
+        В каждом отпечатке SL/TP — последние два элемента (см. family_fp ниже), поэтому
+        подменяется только хвост. Без этого чекпойнт, посчитанный с прежней сеткой
+        (300/750/1200), считался бы валидным при инкрементальном пересчёте.
+        """
+        _old_sl, _old_tp = tuple(SL_POINTS_LIST), tuple(TP_POINTS_LIST)
+        _new_sl, _new_tp = tuple(sl_pts), tuple(tp_pts)
+        out = {}
+        for _k, _v in fp_map.items():
+            if len(_v) >= 2 and _v[-2] == _old_sl and _v[-1] == _old_tp:
+                out[_k] = tuple(_v[:-2]) + (_new_sl, _new_tp)
+            else:               # форма отпечатка другая — не трогаем (безопасный путь)
+                out[_k] = _v
+        return out
     PARABOLIC_STEPS = strategy_params.parabolic_steps
     PARABOLIC_MAXS = strategy_params.parabolic_maxs
     MA_PERIODS = strategy_params.ma_periods
@@ -2543,7 +2699,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # Пишем сразу, чтобы даже при падении night_reset.json фиксирует факт запуска
     if is_night_run:
         try:
-            with open(night_reset_path, 'w', encoding='utf-8') as f:
+            with _safe_marker_write(night_reset_path, 'night_reset.json') as f:
                 json.dump({
                     'timestamp': now.isoformat(),
                     'status': 'started',
@@ -2794,10 +2950,17 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             'trade_tick_value': getattr(info, 'trade_tick_value', None) or getattr(info, 'tick_value', None) or 0,
             'trade_tick_size': getattr(info, 'trade_tick_size', None) or getattr(info, 'tick_size', None) or 0,
             'spread': getattr(info, 'spread', None) or 0,
+            # Своп за удержание: брокер отдаёт ставки в пунктах за день (swap_mode=1).
+            'swap_long': getattr(info, 'swap_long', 0.0) or 0.0,
+            'swap_short': getattr(info, 'swap_short', 0.0) or 0.0,
+            'swap_mode': getattr(info, 'swap_mode', 1),
         }
         df_window = sd['df_h1'].tail(BACKTEST_DAYS * 24)
+        # SL/TP и отпечатки — от ЭТОГО символа (сетка пер-символьная).
+        _sl_pts, _tp_pts = _points_for(symbol)
+        _fp_sym = _fp_for_symbol(family_fp, _sl_pts, _tp_pts)
         symbol_args.append((
-            idx, symbol, df_window, info_dict, K_PERIODS, SL_POINTS_LIST, TP_POINTS_LIST,
+            idx, symbol, df_window, info_dict, K_PERIODS, _sl_pts, _tp_pts,
             PARABOLIC_STEPS, PARABOLIC_MAXS, MA_PERIODS, RF_LOOKBACKS, RF_NBARS, RF_THRESHOLDS,
             LOGREG_LOOKBACKS, LOGREG_NBARS, LOGREG_THRESHOLDS,
             MACD_CROSS_FAST_LIST, MACD_CROSS_SLOW_LIST, MACD_CROSS_SIGNAL_LIST,
@@ -2831,7 +2994,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
 
             BACKTEST_DAYS, test_strategy, test_mode, total_symbols,
-            family_fp, partial_recalc.get(symbol, (None, None))[1],
+            _fp_sym, partial_recalc.get(symbol, (None, None))[1],
             ({_k: _v for _k, _v in incremental_recalc[symbol].items() if _k != 'cached'}
              if symbol in incremental_recalc else None)
         ))
@@ -3161,7 +3324,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             inc_applied=bool(_inc_stat),
         )
 
-        with open(last_run_path, 'w', encoding='utf-8') as f:
+        with _safe_marker_write(last_run_path, 'last_run.json') as f:
             json.dump({
                 'combos': total_combos,
                 'symbols': total_symbols,
@@ -3176,10 +3339,14 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # ═══ ОБНОВЛЕНИЕ night_reset.json (статус completed) ═══
     if is_night_run:
         try:
-            with open(night_reset_path, 'w', encoding='utf-8') as f:
+            with _safe_marker_write(night_reset_path, 'night_reset.json') as f:
                 json.dump({
                     'timestamp': now.isoformat(),
                     'status': 'completed',
+                    # К какому ночному окну (03:00) относится прогон — timestamp выше
+                    # теперь реальный, поэтому окно вынесено отдельным полем.
+                    'night_window': now.replace(hour=3, minute=0, second=0,
+                                                microsecond=0).isoformat(),
                     'symbols': total_symbols,
                     'total_results': len(all_results),
                     'elapsed_sec': round(total_elapsed, 1),

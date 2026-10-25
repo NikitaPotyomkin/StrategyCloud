@@ -166,10 +166,43 @@ def load_journal(JOURNAL_FILE, COLUMNS):
 
 
 def save_journal(df, JOURNAL_FILE):
-    df.to_csv(JOURNAL_FILE, index=False)
+    # Файл — ИСТОЧНИК ИСТИНЫ: перед записью подмешиваем то, что уже лежит на диске
+    # (union по ticket). Иначе периодический save_journal(journal_df) в main.py
+    # затирал сделки, записанные через record_trade: его возвращаемое значение
+    # никто не сохраняет (strategy_engine._record_close), поэтому в памяти
+    # оставалась старая пустая таблица и журнал всегда выглядел как «сделок не было».
+    try:
+        if os.path.exists(JOURNAL_FILE):
+            _disk = pd.read_csv(JOURNAL_FILE, parse_dates=['entry_time', 'exit_time'])
+            if len(_disk) and list(_disk.columns) == list(df.columns):
+                _merged = pd.concat([_disk, df], ignore_index=True)
+                if 'ticket' in _merged.columns and _merged['ticket'].notna().all():
+                    _merged = _merged.drop_duplicates(subset=['ticket'], keep='last')
+                df = _merged
+    except (OSError, ValueError, pd.errors.ParserError) as _je:
+        print(f"  [WARN] Журнал сделок: диск не прочитан ({_je!r}) — пишем как есть",
+              flush=True)
+    try:
+        df.to_csv(JOURNAL_FILE, index=False)
+    except OSError as _je:
+        print(f"  [WARN] Журнал сделок не записан ({JOURNAL_FILE}): {_je!r}", flush=True)
 
 
 def record_trade(trade_dict, journal_df, JOURNAL_FILE):
-    journal_df = pd.concat([journal_df, pd.DataFrame([trade_dict])], ignore_index=True)
+    # journal_df/JOURNAL_FILE могут не прийти (rerank и SL/TP в strategy_engine их не
+    # передают): колонки и содержимое берём из файла — он источник истины (save_journal).
+    # Возврат вызывающий код не сохраняет, поэтому сохранение делается здесь же.
+    if journal_df is None:
+        journal_df = pd.DataFrame()
+    if not JOURNAL_FILE:
+        return journal_df
+    if len(journal_df.columns) == 0:
+        try:
+            journal_df = load_journal(JOURNAL_FILE, list(trade_dict.keys()))
+        except (OSError, ValueError):
+            journal_df = pd.DataFrame(columns=list(trade_dict.keys()))
+    _row = pd.DataFrame([trade_dict]).reindex(columns=list(journal_df.columns))
+    save_journal(pd.concat([journal_df, _row], ignore_index=True), JOURNAL_FILE)
+    return journal_df
     save_journal(journal_df, JOURNAL_FILE)
     return journal_df

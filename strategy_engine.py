@@ -831,6 +831,18 @@ def get_deal_exit_price(ticket, since=None):
             if d.position_id == ticket and d.entry == mt5.DEAL_ENTRY_OUT:
                 return d.price
     return None
+def _csv_journal_path():
+    """Путь к CSV-журналу сделок текущего месяца (тот же файл, что JOURNAL_FILE в main.py).
+
+    Нужен путям закрытия, которые не получают журнал аргументами (rerank и SL/TP
+    в sync_active_strategies/_handle_position_gone): без него сделка оставалась
+    только в логе и в CSV-журнал не попадала вовсе.
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, 'journals',
+                        f"journal_{datetime.datetime.now().strftime('%Y%m')}.csv")
+
+
 def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
                   journal_df=None, JOURNAL_FILE=None):
     """Общая логика записи закрытия сделки в журнал. Возвращает profit."""
@@ -844,9 +856,13 @@ def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
         'exit_price': exit_price, 'lot': s['position']['lot'],
         'profit': profit, 'exit_reason': reason, 'ticket': s['position']['ticket']
     }
-    # Пытаемся записать в журнал; если journal_df/JOURNAL_FILE не переданы — пропускаем
-    if journal_df is not None and JOURNAL_FILE is not None:
-        record_trade_fn(trade, journal_df, JOURNAL_FILE)
+    # CSV-журнал сделок: пишем ВСЕГДА (путь к файлу добирается выше), а не только
+    # когда вызывающий передал journal_df/JOURNAL_FILE.
+    # Пути rerank и SL/TP журнал не передают вовсе — путь к файлу определяем сами,
+    # иначе сделка оставалась только в логе (journal_df=None → колонки из файла).
+    if not JOURNAL_FILE:
+        JOURNAL_FILE = _csv_journal_path()
+    record_trade_fn(trade, journal_df, JOURNAL_FILE)
     print(f"  -> [{key}] Закрыт ({reason}): profit={profit:.2f}")
     # ── Сразу в SQLite (после каждого закрытия) ──
     # Сделки позиции → trades.db немедленно. Fail-safe: ошибка БД не ломает торговлю.
@@ -856,7 +872,8 @@ def _record_close(key, s, now, exit_price, reason, symbol_data, record_trade_fn,
         import trades_db
         trades_db.record_position(s['position']['ticket'])
     except Exception:
-        pass
+        print(f"  [WARN] trades_db: сделка {s['position']['ticket']} не записана — "
+              f"доберётся ingest'ом (данные в истории MT5 не теряются)", flush=True)
     s['position'] = None
     return profit
 def _handle_position_gone(key, s, now, symbol_data, get_deal_exit_price_fn,
