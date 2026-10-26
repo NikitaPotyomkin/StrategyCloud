@@ -1174,6 +1174,16 @@ if __name__ == '__main__':
                 try:
                     import trades_db
                     trades_db.sample_positions(interval=EQUITY_SAMPLE_INTERVAL_SEC)
+                    # ── Пик-трим: фиксация по ИСТОРИЧЕСКОМУ пику ₽/лот ──────────
+                    # Идёт сразу после сэмплера (пики уже свежие). По умолчанию
+                    # ТЕНЕВОЙ режим: только лог `[TRIM] would …` + запись решения
+                    # в peak_trim; реальные закрытия включаются в config.PeakTrimParams
+                    # (enabled=True). Fail-safe: ошибка не роняет ни сэмплер, ни цикл.
+                    try:
+                        import peak_trim
+                        peak_trim.scan_and_trim()
+                    except Exception as _trim_err:
+                        print(f"  [WARN] peak_trim: {_trim_err!r}", flush=True)
                 except Exception as _smp_err:
                     print(f"  [WARN] trades_db.sample: {_smp_err!r}", flush=True)
 

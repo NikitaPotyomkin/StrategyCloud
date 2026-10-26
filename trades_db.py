@@ -694,7 +694,12 @@ def sample_positions(interval=None, path=None, verbose=True):
         pos_rows = []
         for p in positions:
             try:
-                ticket = int(getattr(p, 'position_id', 0) or 0)
+                # MT5 python: у ОТКРЫТОЙ позиции тикет лежит в p.ticket, поля
+                # position_id у TradePosition НЕТ (оно есть только у сделок в
+                # history_deals_get). Без fallback getattr(...position_id) давал 0
+                # и pos_rows всегда оставался пустым — position_peak не писался.
+                ticket = (int(getattr(p, 'ticket', 0) or 0)
+                          or int(getattr(p, 'position_id', 0) or 0))
                 if not ticket:
                     continue
                 pl = float(getattr(p, 'profit', 0.0) or 0.0) + float(getattr(p, 'swap', 0.0) or 0.0)
