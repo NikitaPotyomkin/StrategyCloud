@@ -368,7 +368,11 @@ def list_checkpoints():
         return []
     checkpoints = []
     for fname in os.listdir(d):
-        if fname.endswith('.json'):
+        # Маркеры прогона — не символы: раньше night_reset/last_run/last_full_recalc
+        # попадали в список чекпойнтов и ломали проверку «чекпойнтов нет».
+        if fname.endswith('.json') and fname not in ('night_reset.json', 'last_run.json',
+                                                     'last_full_recalc.json',
+                                                     'backtest_history.jsonl'):
             symbol = fname[:-5]  # убрать .json
             checkpoints.append(symbol)
     return sorted(checkpoints)
