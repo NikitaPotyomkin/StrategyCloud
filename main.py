@@ -1341,6 +1341,16 @@ if __name__ == '__main__':
                 print(f"Баланс: {balance:.0f} руб | Квота: {balance * risk_cfg.max_risk_pct:.0f} руб | "
                       f"Активировано {len(active)} из {len(deduped_results)} (всего {len(all_results)})")
 
+                # ── Страховка: пустой прогон не должен стирать план ──
+                # Если пересчёт не дал ни одной стратегии (несовместимые/пустые чекпойнты,
+                # нет данных символов), пустой active_state.json писать нельзя: Daily Plan
+                # оставался без строк, а ranking.txt обнулялся в «0 комбинаций».
+                # Пропускаем итерацию — прежний план живёт до следующего прогона.
+                if not active and os.path.exists(os.path.join(JOURNAL_DIR, 'active_state.json')):
+                    print("  [ERROR] Ночной пересчёт дал 0 стратегий — план и ranking НЕ "
+                          "перезаписаны (проверь чекпойнты и данные символов)", flush=True)
+                    last_full_backtest_date = now.date()
+                    continue
                 write_ranking(active, all_results, JOURNAL_DIR, bt_cfg.backtest_days, len(active), None)
                 sync_active_strategies(active, now, symbol_data, active_strategies,
                                        close_order, get_deal_exit_price, record_trade,

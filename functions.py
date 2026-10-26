@@ -314,10 +314,10 @@ def _checkpoint_file(symbol):
 
 
 def load_checkpoint(symbol):
-    """Загрузить результаты для символа из чекпойнта. Возвращает (results, last_bar_time) или (None, None)."""
+    """Загрузить результаты для символа из чекпойнта. Возвращает (results, last_bar_time, families) или (None, None, None)."""
     path = _checkpoint_file(symbol)
     if not os.path.exists(path):
-        return None, None
+        return None, None, None
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -325,10 +325,10 @@ def load_checkpoint(symbol):
         # (например, добавлен своп за удержание) — старые результаты тогда
         # несовместимы, и символ честно уходит в полный пересчёт.
         if data.get('version') != CHECKPOINT_VERSION:
-            return [], None, None
+            return None, None, None
         return data.get('results', []), data.get('last_bar_time'), data.get('families')
     except (json.JSONDecodeError, KeyError):
-        return None, None
+        return None, None, None
 
 
 def save_checkpoint(symbol, results, last_bar_time=None, families=None):
@@ -2811,7 +2811,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
         
             
             
-        if cached is None:
+        if not cached:   # None (нет файла/битый/другая версия) ИЛИ [] — символ в полный пересчёт
+
             continue
 
 
