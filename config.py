@@ -447,7 +447,7 @@ class BacktestConfig:
     poll_interval: int = 5
     top_n: Optional[int] = 9999        # None = без ограничения
     force_recalc: bool = False
-    full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни лайт, выходные полный)
+    full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни реранк по чекпойнтам, выходные полный)
     auto_weekend_recalc: bool = True  # True = автоматический ПОЛНЫЙ пересчёт в выходные (Сб/Вс); False = только ручной запуск
     full_recalc_daily: bool = False  # True = обновлять ВСЮ корзину каждую ночь (окно выходных не учитывается).
     # ВРЕМЕННО False (22.10): полный пересчёт — синхронный вызов в боевом цикле и держит его
@@ -460,10 +460,10 @@ class BacktestConfig:
     full_recalc_only_flat: bool = False  # True = откладывать ПОЛНЫЙ пересчёт, пока есть открытые позиции
     full_recalc_min_gap_days: int = 1  # мин. интервал (дней) между АВТО-ПОЛНЫМИ пересчётами: если полный был в последние N дней — повторно не запускаем
     night_backtest_hour: int = 3
-    incremental_bars: bool = False  # True = ночью пересчитывать по НОВЫМ барам (инкремент):
+    # incremental_bars УДАЛЕНО: в проекте только ПОЛНЫЕ пересчёты, инкремента нет.
                                     # семейства exact/exp — по срезу с warm-up, cum/model —
                                     # полным окном. Включать только после parity (strategies/_warmup.py).
-    incremental_warmup_bars: int = 0  # 0 = авто (по классу памяти семейства); иначе фикс. warm-up в барах
+    # incremental_warmup_bars УДАЛЕНО вместе с инкрементом.
     calc_cache: bool = True  # True = свёртка SL/TP: подготовка (calc_*) считается 1 раз на комбинацию
                              # параметров, а не на каждую из 9 пар SL/TP (см. strategies/_calc_cache.py).
                              # False = откат к прежнему поведению (расчёт на каждую пару).

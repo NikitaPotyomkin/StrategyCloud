@@ -59,21 +59,21 @@ def _history_path():
 
 
 def append_backtest_history(elapsed_sec, symbols, combos, results,
-                            kind='light', is_night_run=False, ts=None, **extra):
+                            kind='none', is_night_run=False, ts=None, **extra):
     """Дописывает одну строку в журнал прогонов бэктеста (JSONL).
 
     Нужно, чтобы сравнивать пересчёты не по принтам: вкладка Backtest в
-    дэшборде рисует длительность прогонов (полный/лайт) по дням и число
+    дэшборде рисует длительность прогонов (полный/частичный) по дням и число
     комбинаций. Ошибка записи не должна ронять бэктест.
     """
     rec = {
         'ts': (ts or datetime.datetime.now()).isoformat(timespec='seconds'),
-        # kind сохраняем как есть (full / partial / incremental / light): дэшборд
+        # kind сохраняем как есть (full / partial / incremental): дэшборд
         # рисует их отдельными сериями и считает скорость по каждому режиму.
-        'kind': kind if kind in ('full', 'partial', 'incremental') else 'light',
+        'kind': kind if kind in ('full', 'partial', 'incremental') else 'none',
         'elapsed_sec': round(float(elapsed_sec), 1),
         'combos': int(combos),
-        'combos_done': int(combos),  # факт = план (для лайт/partial тоже)
+        'combos_done': int(combos),  # факт = план (для partial тоже)
         'combos_plan': int(combos),
         'symbols': int(symbols),
         'symbols_total': int(symbols),  # все символы
@@ -84,7 +84,10 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
     }
     try:
         with open(_history_path(), 'a', encoding='utf-8') as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+            # Реранк по чекпойнтам в журнал НЕ пишем: это чтение
+            # кэша, а не пересчёт — вкладке Backtest он не нужен вовсе.
+            if rec['kind'] != 'none':
+                f.write(json.dumps(rec, ensure_ascii=False) + '\n')
     except OSError as exc:
         print(f"  [WARN] Журнал прогонов не записан: {exc!r}")
     # Режим прогона — наружу: main.py пишет его в таблицу family_status
@@ -96,7 +99,7 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
 
 # ═══ СТАТУС СЕМЕЙСТВ: кто участвует в ночных рэнкингах ═══
 def family_status_rows(symbols, all_results, active, active_strategies,
-                       plan_by_family=None, min_score=0.0, run_kind='light',
+                       plan_by_family=None, min_score=0.0, run_kind='none',
                        key_fn=None):
     """Строки таблицы family_status: одно (symbol, family) → участие и готовность.
 
@@ -292,7 +295,7 @@ def strategy_combos_per_symbol(sp):
 #      символ один раз пересчитывается полностью, дальше пишется v2.
 CHECKPOINT_VERSION = 3
 
-# Режим последнего прогона бэктеста (full / incremental / partial / light).
+# Режим последнего прогона бэктеста (full / incremental / partial / none).
 # run_full_backtest выставляет его в конце; main.py читает и пишет в таблицу
 # family_status (trades_db), чтобы по каждому семейству было видно, в каком
 # режиме оно обсчитывалось. Импортировать значение по имени нельзя — оно
@@ -2688,9 +2691,9 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # 
     # ЛОГИКА (режим задаёт вызывающий код):
     # force_recalc=True + is_night_run=True → ПОЛНЫЙ пересчёт (выходные / ручной запуск).
-    # force_recalc=False → лайт: чекпойнты/кэш (инкремент в будни).
+    # force_recalc=False → реранк: чекпойнты/кэш (инкремент в будни).
     if not force_recalc:
-        # force_recalc=False — полный пересчёт отключён, только лайт
+        # force_recalc=False — полный пересчёт отключён, только реранк по чекпойнтам
         force_full_recalc = False
     elif is_night_run:
         # force_recalc=True + ночной прогон → полный пересчёт
@@ -2732,7 +2735,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # раньше — из кэша / полным окном). Включается флагом config.incremental_bars и
     # только после parity-проверки (strategies/_warmup.py).
     def _plan_incremental(symbol, cached, cached_bar_time, current_bar_time, df, _family_fp, cfg):
-        if not getattr(cfg, 'incremental_bars', False):
+        # ИНКРЕМЕНТ УДАЛЁН ИЗ ПРОЕКТА: считаем только ПОЛНЫЕ пересчёты.
+        if True:
             return None
         try:
             import trade_log as _tl
@@ -2859,7 +2863,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                 skipped_symbols[symbol] = len(cached)
             else:
                 # Данные те же, но конфиг изменился — частичный пересчёт
-                partial_recalc[symbol] = (cached, recalc_set)
+                # ПАРТИАЛЬНЫЙ ПЕРЕСЧЁТ УДАЛЁН: символ уходит в ПОЛНЫЙ пересчёт.
+                continue
         else:
             # Данные изменились после ночного пересчёта
             if not recalc_set:
@@ -2881,7 +2886,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
                       f"(полный проход — раз в неделю, в окне выходных)", flush=True)
             else:
                 # Конфиг изменился + данные изменились — частичный пересчёт
-                partial_recalc[symbol] = (cached, recalc_set)
+                # ПАРТИАЛЬНЫЙ ПЕРЕСЧЁТ УДАЛЁН: символ уходит в ПОЛНЫЙ пересчёт.
+                continue
 
     # ── Вывод статуса чекпойнтов (компактный) ──
     actions_summary = []
@@ -3183,7 +3189,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # Нужна, чтобы в дэшборде был виден масштаб ночи: сколько семейств считалось
     # срезом, сколько полным окном, на каком срезе и сколько комбинаций обновлено.
     _inc_stat = None
-    if incremental_recalc:
+    if False:  # инкремент удалён из проекта: ветка недостижима
         _inc_vals = list(incremental_recalc.values())
         _inc_stat = {
             'inc_symbols': len(_inc_vals),
@@ -3200,7 +3206,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     # Воркер посчитал: семейства inc — на срезе, full — полным окном. Журналы inc
     # склеиваем с журналами кэша (trade_log.merge_incremental), метрики пересчитываем
     # ИЗ ПРОФИТОВ (агрегаты окно не сдвигают), чекпойнт сохраняем ПОЛНЫЙ.
-    if incremental_recalc:
+    if False:  # инкремент удалён из проекта: ветка недостижима
         from strategy_engine import calc_metrics as _calc_m, composite_score as _comp_s
         import trade_log as _tl
         for symbol, meta in incremental_recalc.items():
@@ -3266,7 +3272,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             pass
 
     for symbol in new_by_symbol:
-        if symbol not in partial_recalc and symbol not in incremental_recalc:
+        if symbol not in partial_recalc:
             all_results.extend(new_by_symbol[symbol])
 
     total_elapsed = time.time() - global_start
@@ -3303,7 +3309,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
 
     # ── Сохранение чекпойнтов для свежесчитанных символов ──
     for symbol in new_by_symbol:
-        if symbol not in partial_recalc and symbol not in incremental_recalc:
+        if symbol not in partial_recalc:
             try:
                 save_checkpoint(symbol, new_by_symbol[symbol],
                                 last_bar_time=symbol_data[symbol]['df_h1'].index[-1].isoformat(),
@@ -3320,8 +3326,9 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             symbols_total=basket_symbols,
             combos_plan=combos_plan,
             kind=('full' if force_full_recalc
-                  else ('incremental' if incremental_recalc
-                        else ('partial' if partial_recalc else 'light'))),
+                  else 'none'),
+                  # partial/инкремент удалены из проекта: пишем только 'full', а
+                  # прогон по кэшу (реранк) в журнал не попадает вовсе.
             skipped=len(skipped_symbols),
             ok=True,
             is_night_run=is_night_run,

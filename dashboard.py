@@ -251,21 +251,21 @@ def make_gradient_colors(values, positive_hex='#2EA043', negative_hex='#DA3633')
         return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
     pos_base = hex_to_rgb(positive_hex)
-    pos_light = (30, 40, 30)
+    pos_soft = (30, 40, 30)
     neg_base = hex_to_rgb(negative_hex)
-    neg_light = (40, 28, 28)
+    neg_soft = (40, 28, 28)
 
     colors = []
     for v in values:
         ratio = abs(v) / max_abs
         if v >= 0:
-            r = int(pos_light[0] + (pos_base[0] - pos_light[0]) * ratio)
-            g = int(pos_light[1] + (pos_base[1] - pos_light[1]) * ratio)
-            b = int(pos_light[2] + (pos_base[2] - pos_light[2]) * ratio)
+            r = int(pos_soft[0] + (pos_base[0] - pos_soft[0]) * ratio)
+            g = int(pos_soft[1] + (pos_base[1] - pos_soft[1]) * ratio)
+            b = int(pos_soft[2] + (pos_base[2] - pos_soft[2]) * ratio)
         else:
-            r = int(neg_light[0] + (neg_base[0] - neg_light[0]) * ratio)
-            g = int(neg_light[1] + (neg_base[1] - neg_light[1]) * ratio)
-            b = int(neg_light[2] + (neg_base[2] - neg_light[2]) * ratio)
+            r = int(neg_soft[0] + (neg_base[0] - neg_soft[0]) * ratio)
+            g = int(neg_soft[1] + (neg_base[1] - neg_soft[1]) * ratio)
+            b = int(neg_soft[2] + (neg_base[2] - neg_soft[2]) * ratio)
         colors.append(f'rgb({r}, {g}, {b})')
     return colors
 
@@ -3182,7 +3182,7 @@ if False:  # PIPELINE: вкладка убрана; код физически у
 #  BACKTEST
 # ═══════════════════════════════════════════════════════════════
 with tab_backtest:
-    st.markdown("### Backtest — длительность, скейл и инкремент")
+    st.markdown("### Бэктест - график пересчета")
 
     # Читаем журнал напрямую (без st.cache_data), чтобы данные не «залипали».
     _bt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3201,9 +3201,24 @@ with tab_backtest:
     except (OSError, IOError):
         _bt_rows = []
 
+    if _bt_rows:
+        # Состав журнала — видно ВСЕГДА, а не только когда всё отфильтровалось:
+        # так сразу понятно, какие прогоны в файле есть (по kind).
+        _bt_kinds_all = pd.Series([r.get('kind', 'none') for r in _bt_rows]).value_counts()
+        st.caption("В журнале строк: " + ", ".join(
+            f"{_k}: {int(_v)}" for _k, _v in _bt_kinds_all.items())
+            + f" | файл: {_bt_path}")
+
     if not _bt_rows:
         st.info("Журнал прогонов пуст — появится после первого бэктеста "
                 "(checkpoints/backtest_history.jsonl)")
+        # Диагностика: показываем РЕАЛЬНЫЙ путь, который читает вкладка, и есть
+        # ли там файл. Без этого непонятно, куда копировать журнал прогонов.
+        _bt_exists = os.path.exists(_bt_path)
+        _bt_size = os.path.getsize(_bt_path) if _bt_exists else 0
+        st.caption("Ищу файл: " + _bt_path + " — "
+                   + (f"есть, {_bt_size:,} байт".replace(',', ' ') if _bt_exists
+                      else "НЕ НАЙДЕН"))
     else:
         df_bt = pd.DataFrame(_bt_rows)
         if 'kind' not in df_bt.columns:
@@ -3222,7 +3237,7 @@ with tab_backtest:
         df_bt = df_bt[~_bt_cache_mask]
         if df_bt.shape[0] == 0:
             st.info("Прогоны с реальным счётом появятся после первого полного или "
-                    "инкрементального пересчёта. Пока в журнале только чтение кэша "
+                    "полного пересчёта. Пока в журнале нет ни одного полного прогона "
                     f"({_bt_cache_n} ночей).")
             st.stop()
         if df_bt.empty:  # pragma: no cover — пустой журнал уже отсечён выше
@@ -3245,9 +3260,23 @@ with tab_backtest:
                    f"{_bt_ts_max.strftime('%Y-%m-%d %H:%M')}")
 
         # ── Метрики ──
-        _bt_last = df_bt.sort_values('ts').iloc[-1]
+        # не-полные прогоны отсекаем ДО расчёта метрик — см. фильтр ниже
         _bt_full = df_bt[df_bt['kind'] == 'full']
-        _bt_light = df_bt[df_bt['kind'] == 'light']
+        # Не-полные прогоны с вкладки убраны целиком: они не
+        # считают ни одной комбинации и только засоряли статистику/график.
+        # На вкладке — ТОЛЬКО полные прогоны. Ничего другого в проекте нет:
+        # только full — остальное просто не существует.
+        df_bt = df_bt[df_bt['kind'] == 'full']
+        if df_bt.shape[0] == 0:
+            st.warning("Полных прогонов в журнале нет — "
+                    "показывать нечего.")
+            _bt_kc = pd.Series([r.get('kind', 'none') for r in _bt_rows]).value_counts()
+            st.caption("Строк в журнале: " + ", ".join(
+                f"{_k}: {int(_v)}" for _k, _v in _bt_kc.items()) + " | " + _bt_path)
+            st.stop()
+        # «Последний прогон» пересчитываем ПОСЛЕ отсева не-полных — иначе метрика
+        # показывала бы длительность пустого чтения кэша.
+        _bt_last = df_bt.sort_values('ts').iloc[-1]
         _bt_avg_all = float(df_bt['minutes'].mean()) if len(df_bt) else 0.0
         _bt_last_min = float(_bt_last['minutes']) if pd.notna(_bt_last['minutes']) else 0.0
 
@@ -3265,8 +3294,8 @@ with tab_backtest:
         with _m3:
             st.metric("Средний полный, мин",
                       f"{_bt_full['minutes'].mean():.1f}" if len(_bt_full) else "—")
-            st.caption("Средний лайт, мин: "
-                       + (f"{_bt_light['minutes'].mean():.1f}" if len(_bt_light) else "—"))
+            st.caption(f"Полных прогонов: {len(_bt_full)} | "
+                       f"полных: {int((df_bt['kind'] == 'full').sum())}")
 
         # ── График: длительность по дням ──
         if PLOTLY_AVAILABLE:
@@ -3281,9 +3310,10 @@ with tab_backtest:
             fig_bt = go.Figure()
             for _kind, _name, _color, _symbol in [
                 ('full', 'Полный пересчёт', COL_GREEN_LT, 'circle'),
-                ('partial', 'Частичный пересчёт', '#D29922', 'diamond'),
-                ('incremental', 'Инкремент (новые бары)', COL_BLUE, 'triangle-up'),
-                ('light', 'Лайт (только чтение кэша)', COL_MUTED, 'square'),
+                # (partial/инкремент удалены: в проекте только полные пересчёты)
+                # (инкремент удалён: считаем только полный пересчёт)
+                # не-полные прогоны на графике не показываем:
+                # они не считают ни одной комбинации
             ]:
                 _sub = df_bt[df_bt['kind'] == _kind].sort_values('ts')
                 if _sub.empty:
@@ -3332,8 +3362,8 @@ with tab_backtest:
         _bt_sc['cpp'] = _bt_sc['done'] / _bt_sc['elapsed_sec'].replace(0, np.nan)
         _bt_sc['sec1000'] = 1000.0 / _bt_sc['cpp']
         _sc_rows = []
-        for _k, _name in [('full', 'Полный'), ('incremental', 'Инкремент'),
-                          ('partial', 'Частичный'), ('light', 'Лайт')]:
+        for _k, _name in [('full', 'Полный')]:
+                          # (partial удалён: в проекте только полные пересчёты)
             _s = _bt_sc[_bt_sc['kind'] == _k]
             if _s.empty:
                 continue
@@ -3354,16 +3384,17 @@ with tab_backtest:
             st.dataframe(pd.DataFrame(_sc_rows), use_container_width=True, hide_index=True)
             st.caption("«Комб/с» = фактически считано ÷ длительность. «Сек на 1000 комб» — прямой "
                        "масштаб: во сколько обойдётся пересчёт 1000 комбинаций в этом режиме. "
-                       "Сравнив «Полный» и «Инкремент», видно реальный выигрыш ночи.")
+                       "Здесь видно, сколько реально занимает полный пересчёт по ночам.")
         else:
             st.info("Скорость пока не посчитать — нет прогонов с реальным счётом.")
-        if _bt_cache_n:
-            st.caption(f"Не в статистике: {_bt_cache_n} ноч. без счёта (всё взято из чекпойнтов).")
+        # Кэш-ночи (реранки по чекпойнтам) в статистике не участвуют — отдельного
+        # счётчика «Не в статистике» больше нет (см. фильтр по kind выше).
+        # (строка «Не в статистике: N ноч. без счёта» удалена)
 
-        # ── Инкремент: что именно обновлялось и на каком срезе ──
-        if 'inc' in df_bt.columns and (df_bt['kind'] == 'incremental').any():
+        # ── Детализация по ночам (неактивно: только полные пересчёты) ──
+        if False:  # инкремента в проекте нет — блок оставлен неактивным
             _inc_rows = []
-            for _, _r in df_bt[df_bt['kind'] == 'incremental'].sort_values('ts').iterrows():
+            for _, _r in df_bt[df_bt['kind'] == 'full'].sort_values('ts').iterrows():
                 _inc = _r.get('inc')
                 if not isinstance(_inc, dict) or not _inc:
                     continue
@@ -3387,23 +3418,23 @@ with tab_backtest:
                                if (pd.notna(_el) and float(_el) > 0 and pd.notna(_dn)) else None),
                 })
             if _inc_rows:
-                st.markdown("#### Инкремент — детали по ночам")
+                st.markdown("#### Детали по ночам")
                 st.dataframe(pd.DataFrame(_inc_rows), use_container_width=True, hide_index=True)
                 st.caption("«Срез/окно» — какая доля 30-дневного окна реально пересчитывалась: "
                            "чем меньше, тем дешевле ночь. «Семейств inc/full» — сколько семейств "
                            "считалось срезом, сколько полным окном (cum/model всегда полным).")
             else:
-                st.caption("Инкрементальные прогоны есть, но без деталей (старый формат журнала).")
+                st.caption("Прогоны есть, но без деталей (старый формат журнала).")
 
         # ── Таблица-лог ──
         _bt_log = df_bt.sort_values('ts', ascending=False).copy()
         st.caption("«Считано» — реально посчитанные комбинации (факт). «План» — вся корзина комбинаций (пересчёт + чекпойнты). "
                    "«Символы» — сколько символов пересчитано заново. «В корзине» — символов всего (пересчёт + чекпойнты). «Пропущ.» — символов взято из чекпоинтов. "
                    "«В пуле» — сколько стратегий в пуле результатов после мержа/дедупа. "
-                   "Ночи без счёта (всё из чекпойнтов) в таблицу не попадают — они в счётчике выше.")
+                   "Ночи без счёта вкладка не показывает.")
         _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%Y-%m-%d %H:%M')
-        _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный', 'partial': 'Частичный',
-                                              'incremental': 'Инкремент', 'light': 'Лайт'}).fillna(_bt_log['kind'])
+        _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный'})
+                                              # (инкремент удалён: остаётся только полный пересчёт)
         _bt_log['Длительность (мин)'] = _bt_log['minutes'].round(1)
         # Скорость режима: фактически посчитанные комбинации в секунду.
         _bt_log['Комб/с'] = (_bt_log['done'] / _bt_log['elapsed_sec'].replace(0, np.nan)).round(2)

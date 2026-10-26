@@ -237,7 +237,7 @@ def ensure_schema(con):
         score_ok       INTEGER,  -- 1 = best_score >= min_score
         ready_to_trade INTEGER,  -- 1 = есть активная комбинация и score_ok
         magic          INTEGER,  -- magic активной комбинации (если есть)
-        run_kind       TEXT,     -- full / incremental / partial / light
+        run_kind       TEXT,     -- full / incremental / partial / none
         first_ready_at TEXT,     -- когда семейство впервые стало готовым
         last_ready_at  TEXT,     -- когда последний раз было готовым
         ready_runs     INTEGER,  -- в скольких прогонах было ready_to_trade

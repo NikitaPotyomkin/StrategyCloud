@@ -328,7 +328,7 @@ def _in_full_window(now, end_hour=10, start_hour=3):
     """Допустим ли ПОЛНЫЙ пересчёт сейчас: выходные — всегда, будни — только в ночном окне.
 
     Днём полный проход (150–230 мин) заблокировал бы боевой цикл на самое активное
-    время, поэтому дневные старты остаются лайтовыми, а обновление уходит в ночь.
+    время, поэтому дневные старты идут по чекпойнтам, а обновление уходит в ночь.
     """
     if now.weekday() >= 5:
         return True
@@ -336,7 +336,7 @@ def _in_full_window(now, end_hour=10, start_hour=3):
 
 
 def _write_full_recalc_marker(marker_path, ts=None):
-    """Фиксирует дату последнего ПОЛНОГО пересчёта. Лайт-прогоны этот файл не перезаписывают."""
+    """Фиксирует дату последнего ПОЛНОГО пересчёта. Реранк по чекпойнтам этот файл не перезаписывает."""
     if ts is None:
         ts = datetime.now()
     with _safe_marker_write(marker_path, 'last_full_recalc.json') as f:
@@ -348,7 +348,7 @@ def _write_full_recalc_marker(marker_path, ts=None):
 # опрашивались, сигналы не рождались, трейлинг и аварийные защиты (daily loss,
 # equity stop, margin) не срабатывали. Теперь тяжёлая часть считается в отдельном
 # потоке (backtest_job.BacktestJob), цикл живёт обычной жизнью, а результат
-# применяется по завершении job — повторным входом в ночной блок в лайт-режиме:
+# применяется по завершении job — повторным входом в ночной блок (реранк по чекпойнтам):
 # job пишет чекпойнты сам, поэтому передавать результаты «в руки» не нужно.
 _bg_job = None       # активный BacktestJob (одновременно не более одного)
 _bg_ready = False    # завершённый job ждёт применения (чекпойнты уже свежие)
@@ -437,7 +437,7 @@ def _record_family_status(all_results, active, run_kind=None):
     (symbol, family), ответ одним SELECT по ключу. История «когда вошло/вышло»
     живёт в first_ready_at/last_ready_at + журнал переходов family_status_log.
 
-    run_kind — режим прогона (full/incremental/partial/light); по умолчанию
+    run_kind — режим прогона (full/incremental/partial/none); по умолчанию
     берётся из functions.LAST_RUN_KIND (его выставляет run_full_backtest).
     Fail-safe: любая ошибка гасится, цикл и торговлю не трогает.
     """
@@ -446,9 +446,9 @@ def _record_family_status(all_results, active, run_kind=None):
         if run_kind is None:
             try:
                 import functions as _fn
-                run_kind = getattr(_fn, 'LAST_RUN_KIND', None) or 'light'
+                run_kind = getattr(_fn, 'LAST_RUN_KIND', None) or 'none'
             except Exception:
-                run_kind = 'light'
+                run_kind = 'none'
         rows = family_status_rows(
             bt_cfg.symbols, all_results, active, active_strategies,
             plan_by_family=strategy_combos_per_symbol(strategy_params),
@@ -543,9 +543,9 @@ def _log_recalc_chain(now, night_reset_path, marker_path, is_first_run, gap_days
         if weekend_full_due:
             print("  → ПОЛНЫЙ пересчёт ЗАПУСКАЕМ (окно выходных / догон)")
         else:
-            print("  → ПОЛНЫЙ пересчёт НЕ запускаем — лайт из чекпойнтов")
+            print("  → ПОЛНЫЙ пересчёт НЕ запускаем — реранк по чекпойнтам")
     else:
-        print("  → Будний день: обычный режим (лайт из чекпойнтов)")
+        print("  → Будний день: реранк по чекпойнтам (сетку не пересчитываем)")
     print("═" * 66 + "\n")
 
 
@@ -928,6 +928,9 @@ if __name__ == '__main__':
     FORCE_RECALC = bt_cfg.force_recalc
     night_reset_path = os.path.join(_checkpoint_dir(), 'night_reset.json')
     full_recalc_marker_path = os.path.join(_checkpoint_dir(), 'last_full_recalc.json')
+    # Диагностика: куда именно пишутся чекпойнты. Молчаливый «пропуск» каталога в
+    # синке три дня скрывал, что папки нет вовсе — путь должен быть виден в логе.
+    print(f"  📁 Чекпойнты: {_checkpoint_dir()}", flush=True)
     is_first_run = not os.path.exists(night_reset_path)
     manual_full = bool(bt_cfg.full_recalc_mode)   # ручной полный пересчёт при запуске
     
@@ -938,7 +941,7 @@ if __name__ == '__main__':
     if bt_cfg.auto_weekend_recalc or bt_cfg.full_recalc_daily:  # окно выходных + догон в будни, если уик-энд пропущен
         # Один ПОЛНЫЙ пересчёт на окно выходных (Сб–Вс). Если окно пропущено — догон в будни (см. _full_recalc_due).
         # Дата последнего ПОЛНОГО пересчёта берётся из last_full_recalc.json
-        # (night_reset.json не годится — его перезаписывают в том числе лайт-прогоны в будни).
+        # (night_reset.json не годится — его перезаписывают в том числе будние реранки).
         if not is_first_run:
             try:
                 with open(full_recalc_marker_path, 'r', encoding='utf-8') as _f:
@@ -1013,7 +1016,7 @@ if __name__ == '__main__':
     elif is_first_run:
         print("  🆕 Нет кэша прошлого прогона — считаем ВСЕ стратегии с нуля")
     else:
-        print("  ✅ Есть кэш прошлого прогона — используем чекпоинты (лайт-режим)")
+        print("  ✅ Есть кэш прошлого прогона — используем чекпоинты (работа по чекпойнтам)")
 
     try:
         # Маркер ПОЛНОГО пересчёта пишем ЗАРАНЕЕ — чтобы повторный запуск не считал его снова,
@@ -1025,14 +1028,14 @@ if __name__ == '__main__':
             test_strategy=None,
             test_mode=False,
             force_recalc=FORCE_RECALC or manual_full or weekend_full_due,
-            incremental=True,
+            incremental=False,   # ИНКРЕМЕНТ УДАЛЁН: только полные пересчёты
             is_night_run=is_first_run or manual_full or weekend_full_due
         )
 
         # После первого прогона записываем night_reset.json
         if is_first_run or manual_full or weekend_full_due:
             _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results))
-            # Маркер последнего ПОЛНОГО пересчёта (лайт-прогоны этот файл не трогают)
+            # Маркер последнего ПОЛНОГО пересчёта (реранки этот файл не трогают)
             _write_full_recalc_marker(full_recalc_marker_path)
 
     except Exception as exc:
@@ -1209,13 +1212,13 @@ if __name__ == '__main__':
                     print("  ℹ Расчёты завершены. Ожидание открытия рынка (Пн) — минимальный режим.")
 
             # Ночной пересчёт: раз в сутки с 3:00 (будни — инкремент, выходные — ПОЛНЫЙ)
-            # Будни — лайт (чекпойнты/инкремент); выходные — полный пересчёт
+            # Будни — реранк по чекпойнтам (+инкремент); выходные — полный пересчёт
             # Выходной полный пересчёт управляется auto_weekend_recalc (True по умолчанию)
             is_weekday = now.weekday() < 5  # Пн=0 ... Пт=4
             is_weekend = now.weekday() >= 5  # Сб=5, Вс=6
             
             # Ночной прогон: раз в день после 3:00, повторно в тот же день не запускается
-            # force_recalc=True (полный) ставится только на выходных; в будни — лайт
+            # force_recalc=True (полный) ставится только на выходных; в будни — реранк
             
             # ── Фоновый ПОЛНЫЙ пересчёт: приём результата ──
             # Job считался в отдельном потоке: цикл всё это время жил обычной жизнью
@@ -1283,12 +1286,12 @@ if __name__ == '__main__':
                     if _night_full_due:
                         print(f"  ⏸  ПОЛНЫЙ пересчёт отложен до ночного окна "
                               f"({bt_cfg.night_backtest_hour}:00–{bt_cfg.full_refresh_window_end_hour}:00): "
-                              f"сейчас {now.strftime('%H:%M')} — лайт на чекпойнтах")
+                              f"сейчас {now.strftime('%H:%M')} — работаем по чекпойнтам")
                     _night_full_due = False
                 if _night_full_due and not _bg_apply and _has_open_positions():
                     if bt_cfg.full_recalc_only_flat:
                         print("  ⏸  ПОЛНЫЙ пересчёт отложен: есть открытые позиции "
-                              "(full_recalc_only_flat=True) — в этот цикл лайт")
+                              "(full_recalc_only_flat=True) — в этот цикл работаем по чекпойнтам")
                         _night_full_due = False
                     else:
                         print("  ⚠️  ПОЛНЫЙ пересчёт при открытых позициях: пока идёт расчёт, "
@@ -1299,9 +1302,9 @@ if __name__ == '__main__':
                     _reason = " — результат фонового job" if _bg_apply else " — окно выходных / догон..."
                     print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Ночной ПОЛНЫЙ пересчёт ({now.strftime('%A')}){_reason}")
                 elif is_weekday:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] 🌙 Ночной лайт-пересчёт (инкремент по чекпойнтам)...")
+                    print(f"\n[{now.strftime('%H:%M:%S')}] 🔄 Ночной РЕРАНК: чекпойнты + штурвал (сетку не пересчитываем)")
                 else:
-                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Выходной ({now.strftime('%A')}) — лайт-пересчёт (инкремент по чекпойнтам)...")
+                    print(f"\n[{now.strftime('%H:%M:%S')}] ⏺ Выходной ({now.strftime('%A')}) — реранк по чекпойнтам (сетку не пересчитываем)")
 
                 try:
                     # ── Фоновый (async) ПОЛНЫЙ пересчёт: цикл больше не блокируется ──
@@ -1326,7 +1329,7 @@ if __name__ == '__main__':
                         test_strategy=None,
                         test_mode=False,
                         # Фоновый job уже прогрел чекпойнты → пересчитывать нечего: читаем
-                        # готовое (лайт-режим, ~1 с). Иначе — обычный синхронный путь.
+                        # готовое (реранк по чекпойнтам, ~1 с). Иначе — обычный синхронный путь.
                         force_recalc=(bool(_night_full_due) and not _bg_apply),
                         is_night_run=True
                     )
