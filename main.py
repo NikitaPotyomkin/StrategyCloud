@@ -567,7 +567,7 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
     """
     journal_dir = journal_dir or JOURNAL_DIR
     st = {'changed': 0, 'synced': 0, 'no_quota': 0, 'bad_sl': 0, 'no_budget': 0,
-          'killed': 0,
+          'killed': 0, 'tilt': {},
           'with_position': 0, 'unchanged': 0, 'categories': 0, 'source': 'none'}
     # st: счётчики прогона (killed — сколько стратегий остановил kill switch)
     _tag = f" {tag}" if tag else ''
@@ -695,6 +695,16 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
             if s['position'] is not None:
                 continue
             sid = record_category_id(s)
+            # Снять тильт прошлого цикла: считаем и сравниваем с ЛОТОМ-БАЗИСОМ,
+            # иначе штурвал каждый час «находит» изменение там, где лот просто
+            # несёт надбавку ±20% (тильт применится заново в конце этой функции).
+            _tb, _tm = s.get('tilt_base'), s.get('tilt_mult')
+            if _tb is not None and _tm is not None:
+                _expect = round(max(float(_tb) * float(_tm), risk_cfg.min_lot), 2)
+                if abs(float(s.get('lot') or 0.0) - _expect) <= 1e-9:
+                    s['lot'] = float(_tb)
+                s.pop('tilt_base', None)
+                s.pop('tilt_mult', None)
             q_new = new_quotas.get(sid) if sid else None
             if q_new is None:
                 st['no_quota'] += 1
@@ -739,6 +749,26 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
                 st['changed'] += 1
             else:
                 st['unchanged'] += 1
+
+        # ── Премия/дисконт по тактике входа (±20% к объёму): САМЫЙ КОНЕЦ реранка ──
+        # Объём уже переложен штурвалом — здесь он только масштабируется по лучшей/
+        # худшей связке «пара + день выхода» за окно до 90 дней (tactic_tilt.py).
+        # Идемпотентно: повторный вызов с тем же множителем второй раз ±20% не
+        # начисляет (маркеры tilt_base/tilt_mult), а лот от штурвала — новый базис.
+        try:
+            import tactic_tilt as _tt
+            if getattr(steering_cfg, 'tactic_tilt_enabled', True):
+                st['tilt'] = _tt.apply_tactic_tilt(
+                    list(active_strategies.values()), when=datetime.now(),
+                    pct=getattr(steering_cfg, 'tactic_tilt_pct', 0.20),
+                    window_days=getattr(steering_cfg, 'tactic_tilt_window_days', 90),
+                    min_trades=getattr(steering_cfg, 'tactic_tilt_min_trades', 2),
+                    weekday_only=getattr(steering_cfg, 'tactic_tilt_weekday_only', False),
+                    min_lot=risk_cfg.min_lot, log=print)
+                if st['tilt'].get('n_changed'):
+                    st['changed'] += int(st['tilt']['n_changed'])
+        except Exception as _tt_e:
+            print(f"  [WARN] TILT: {_tt_e!r}", flush=True)
 
         # ── Унификация источника лота ──
         # Штурвал правит active_strategies — это и есть бой. Переносим итог обратно
@@ -1078,6 +1108,23 @@ if __name__ == '__main__':
         except Exception as _tw_e:
             print(f"  [WARN] tree-weighting: {_tw_e!r}", flush=True)
 
+    # ── Премия/дисконт к объёму по лучшей/худшей тактике входа (±20%) ──
+    # Штурвал ниже переложит лоты ещё раз и применит тильт повторно (идемпотентно),
+    # но если штурвал не отработает (нет квот/бюджета), план всё равно должен
+    # нести надбавку — иначе дэшборд покажет «сырой» объём.
+    if getattr(steering_cfg, 'tactic_tilt_enabled', True):
+        try:
+            import tactic_tilt as _tt
+            _tt.apply_tactic_tilt(
+                active, when=datetime.now(),
+                pct=getattr(steering_cfg, 'tactic_tilt_pct', 0.20),
+                window_days=getattr(steering_cfg, 'tactic_tilt_window_days', 90),
+                min_trades=getattr(steering_cfg, 'tactic_tilt_min_trades', 2),
+                weekday_only=getattr(steering_cfg, 'tactic_tilt_weekday_only', False),
+                min_lot=risk_cfg.min_lot, log=print)
+        except Exception as _tt_e:
+            print(f"  [WARN] TILT: {_tt_e!r}", flush=True)
+
     print(f"Активировано {len(active)} стратегий из {len(deduped_results)} комбинаций")
 
     for i, r in enumerate(active):
@@ -1351,6 +1398,22 @@ if __name__ == '__main__':
                             min_trades=steering_cfg.min_trades)
                     except Exception as _tw_e:
                         print(f"  [WARN] tree-weighting: {_tw_e!r}", flush=True)
+
+                # ── Премия/дисконт к объёму по тактике входа (±20%): конец реранка ──
+                # Та же логика, что в run_steering_wheel ниже (там — для лотов штурвала);
+                # здесь — чтобы план нёс надбавку, даже если штурвал не тронет лоты.
+                if getattr(steering_cfg, 'tactic_tilt_enabled', True):
+                    try:
+                        import tactic_tilt as _tt
+                        _tt.apply_tactic_tilt(
+                            active, when=now,
+                            pct=getattr(steering_cfg, 'tactic_tilt_pct', 0.20),
+                            window_days=getattr(steering_cfg, 'tactic_tilt_window_days', 90),
+                            min_trades=getattr(steering_cfg, 'tactic_tilt_min_trades', 2),
+                            weekday_only=getattr(steering_cfg, 'tactic_tilt_weekday_only', False),
+                            min_lot=risk_cfg.min_lot, log=print)
+                    except Exception as _tt_e:
+                        print(f"  [WARN] TILT: {_tt_e!r}", flush=True)
                 print(f"Баланс: {balance:.0f} руб | Квота: {balance * risk_cfg.max_risk_pct:.0f} руб | "
                       f"Активировано {len(active)} из {len(deduped_results)} (всего {len(all_results)})")
 
@@ -1510,7 +1573,27 @@ if __name__ == '__main__':
                                     changed += 1
                             print(f"  [STEERING] Квоты обновлены: {len(new_quotas)} стратегий, "
                                   f"лоты скорректированы: {changed}", flush=True)
-                            # ── Унификация источника лота ──
+                            _DEAD_TILT_DUP = """  # дубль тильт-блока (мёртвая ветка if False) — живёт в run_steering_wheel
+        # Объём уже переложен штурвалом — здесь он только масштабируется по лучшей/
+        # худшей связке «пара + день выхода» за окно до 90 дней (tactic_tilt.py).
+        # Идемпотентно: повторный вызов с тем же множителем второй раз ±20% не
+        # начисляет (маркеры tilt_base/tilt_mult), а лот от штурвала — новый базис.
+        try:
+            import tactic_tilt as _tt
+            if getattr(steering_cfg, 'tactic_tilt_enabled', True):
+                st['tilt'] = _tt.apply_tactic_tilt(
+                    list(active_strategies.values()), when=datetime.now(),
+                    pct=getattr(steering_cfg, 'tactic_tilt_pct', 0.20),
+                    window_days=getattr(steering_cfg, 'tactic_tilt_window_days', 90),
+                    min_trades=getattr(steering_cfg, 'tactic_tilt_min_trades', 2),
+                    weekday_only=getattr(steering_cfg, 'tactic_tilt_weekday_only', False),
+                    min_lot=risk_cfg.min_lot, log=print)
+                if st['tilt'].get('n_changed'):
+                    st['changed'] += int(st['tilt']['n_changed'])
+        except Exception as _tt_e:
+        """
+
+        # ── Унификация источника лота ──
                             # Штурвал правит active_strategies — это и есть бой. Чтобы
                             # дэшборд/active_state.json показывали РЕАЛЬНУЮ перекладку (а не
                             # дотюненный tree-weighting лот), переносим итог штурвала назад

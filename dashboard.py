@@ -624,7 +624,12 @@ with tab_overview:
 
     # ── Volume + Equity Curve ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        col_vol, col_eq = st.columns(2)
+        # Раскладка Overview: 1-й ряд — Equity Curve (слева) + Equity Gross (справа),
+        # 2-й ряд — Daily Volume (слева) + Trade Scatter (справа). Колонки создаём
+        # заранее: контейнер держит своё место в раскладке, порядок заполнения не важен.
+        _row1_eq, col_gross = st.columns(2)
+        col_eq = _row1_eq
+        col_vol, col_scatter = st.columns(2)
 
         with col_vol:
             st.markdown("### Daily Volume")
@@ -696,9 +701,56 @@ with tab_overview:
             st.plotly_chart(plotly_dark_layout(fig_eq, 260).update_xaxes(showticklabels=False, title=''), use_container_width=True,
                            key="overview_equity_curve")
 
+        with col_gross:
+            st.markdown("### Equity Gross")
+            # Gross = торговый P&L + ВСЕ неторговые движения денег по счёту
+            # (пополнения / выводы: DEAL_TYPE_BALANCE и DEAL_TYPE_CREDIT).
+            df_g = filter_weekends(data['trades_df']).sort_values('timestamp').reset_index(drop=True)
+            df_g['seq'] = list(range(len(df_g)))
+            _cash, _gross_src = [], 'MT5 недоступен'
+            if MT5_AVAILABLE:
+                try:
+                    _deals = mt5.history_deals_get(datetime(2020, 1, 1),
+                                                   datetime.now() + timedelta(hours=6))
+                    for _d in (_deals or ()):
+                        if _d.type in (mt5.DEAL_TYPE_BALANCE, mt5.DEAL_TYPE_CREDIT):
+                            _cash.append((int(_d.time), float(_d.profit)))
+                    _dep = sum(a for _, a in _cash if a > 0)
+                    _wd = sum(a for _, a in _cash if a < 0)
+                    _gross_src = (f"пополнения {_dep:+,.0f} ₽, выводы {_wd:+,.0f} ₽, "
+                                  f"операций {len(_cash)}")
+                except Exception as _ge:
+                    _gross_src = f"ошибка MT5: {_ge!r}"
+            _cash.sort()
+            _ci, _cum_cash, _gross = 0, 0.0, []
+            for _t in df_g['time']:
+                while _ci < len(_cash) and _cash[_ci][0] <= int(_t):
+                    _cum_cash += _cash[_ci][1]
+                    _ci += 1
+                _gross.append(_cum_cash)
+            # Кешфлоу относится к моменту СДЕЛКИ: пополнение «встаёт» на ближайшую
+            # сделку окна (у нас нет баров между сделками — ось идёт по сделкам).
+            df_g['gross'] = df_g['profit_net'].cumsum() + pd.Series(_gross, dtype=float)
+            fig_g = go.Figure()
+            fig_g.add_trace(go.Scatter(
+                x=df_g['seq'], y=df_g['gross'], customdata=df_g['timestamp'],
+                mode='lines', line=dict(color=COL_AMBER, width=1.5),
+                fill='tozeroy',
+                hovertemplate='Time: %{customdata}<br>Gross: %{y:,.1f}<extra></extra>',
+                name='',
+            ))
+            fig_g.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+            st.plotly_chart(plotly_dark_layout(fig_g, 260).update_xaxes(showticklabels=False, title=''),
+                            use_container_width=True, key="overview_equity_gross")
+            st.caption(f"Торговый P&L + пополнения/выводы: {_gross_src}")
+
     # ── Trade scatter ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
-        st.markdown("### Trade Scatter")
+        # Правая колонка 2-го ряда: пишем напрямую в col_scatter. Контейнер колонок
+        # создан выше вместе с остальными, поэтому Streamlit держит её место в
+        # раскладке — порядок вызовов рисования на позицию уже не влияет.
+        _sc = globals()['col_scatter'] if 'col_scatter' in globals() else st.container()
+        _sc.markdown("### Trade Scatter")
         df_sorted = filter_weekends(data['trades_df']).sort_values('timestamp').reset_index(drop=True); df_sorted['seq'] = list(range(len(df_sorted)))
         colors = [COL_GREEN_LT if x >= 0 else COL_RED_LT for x in df_sorted['profit_net']]
 
@@ -729,16 +781,20 @@ with tab_overview:
                 name=f"Тренд: {_slope:+.2f} ₽/сделку",
                 hoverinfo='skip',
             ))
-        fig.update_layout(hovermode='x unified')
-        st.plotly_chart(plotly_dark_layout(fig, 380).update_xaxes(showticklabels=False, title=''), use_container_width=True,
-                       key="overview_trade_scatter")
+        # Легенда — горизонтально сверху: в узкой колонке вертикальная легенда
+        # справа накрывает точки.
+        fig.update_layout(hovermode='x unified',
+                          legend=dict(orientation='h', y=1.12, x=0, font=dict(size=12)))
+        # Высота 260 — как у соседей по ряду (Daily Volume / Equity Curve / Equity Gross).
+        _sc.plotly_chart(plotly_dark_layout(fig, 260).update_xaxes(showticklabels=False, title=''), use_container_width=True,
+                        key="overview_trade_scatter")
 
 
 # ═══════════════════════════════════════════════════════════════
 #  FINSTATEMENT — подневный P&L с первой даты фонда
 # ═══════════════════════════════════════════════════════════════
 with tab_finstatement:
-    st.markdown("### FinStatement — daily P&L by month")
+    st.markdown("### Daily P&L by month")
     try:
         # Окно берём ШИРЕ слайдера: от FUND_START_DATE до сегодня (в днях).
         _fs_start = datetime.strptime(str(FUND_START_DATE), '%Y-%m-%d').date()
@@ -1157,6 +1213,33 @@ with tab_daily:
             else:
                 st.caption("ℹ tree_weighting ВКЛ, но терминал недоступен (нет sl_money) — "
                            "объём пересчитается в main.py на боевой машине.")
+
+        # ── Премия/дисконт по тактике входа (отчёт tactic_tilt.json с боевой машины) ──
+        # main.py применяет тильт В САМОМ КОНЦЕ реранка, поэтому в active_state.json
+        # объём уже С надбавкой. Здесь только показываем: какая пара её получила,
+        # на каком окне (≤90 дн.) и сколько стратегий изменилось.
+        df_plan['Тактика'] = '—'
+        try:
+            import tactic_tilt as _ttd
+            _tilt = _ttd.load_tilt() or {}
+            _applied = (_tilt.get('applied') or {})
+            if _applied:
+                _tsym = set(_applied.keys())
+                df_plan['Тактика'] = [
+                    (f"×{_applied[_s]['mult']:.2f} "
+                     f"({'премия' if _applied[_s].get('side') == 'premium' else 'дисконт'})")
+                    if _s in _tsym else '—' for _s in df_plan['symbol']
+                ]
+            _line = ''  # тильт в Daily Plan НЕ печатаем: он виден в лейблах Overview
+            if _line:
+                st.caption(f"Объём с надбавкой (окно {_tilt.get('window_days', 90)} дн., "
+                           f"отчёт {str(_tilt.get('ts', '—')).replace('T', ' ')}): {_line}")
+            elif False:  # причина тоже не нужна: тильт виден в лейблах Overview
+                st.caption(f"Тильт не применён: {_tilt['reason']}")
+            else:
+                pass  # в Daily Plan ничего не печатаем (тильт — в лейблах Overview)
+        except Exception as _te:
+            st.caption(f"⚠ tactic_tilt: {_te!r}")
 
         # ── Шапка-сводка ──
         c1, c2, c3, c4 = st.columns(4)
@@ -1636,6 +1719,9 @@ with tab_risk:
             _ins2['ccy'] = _ins2['symbol'].astype(str).str.replace('rfd', '')
             _ins2['wd'] = _ins2['timestamp'].dt.weekday
             _ins2 = _ins2[_ins2['wd'] < 5]  # суббота/воскресенье — не торговые дни
+            # Окно тактик: вся история, но НЕ больше 90 дней — дальше это скользящее
+            # окно (то же окно использует tactic_tilt.py для премии/дисконта в плане).
+            _ins2 = _ins2[_ins2['timestamp'] >= (pd.Timestamp.now() - pd.Timedelta(days=90))]
             if 'open_time' in _ins2.columns:
                 _h2 = (_ins2['timestamp'] - _ins2['open_time']).dt.total_seconds() / 3600.0
                 _h2 = _h2[_h2.notna() & (_h2 >= 0)]
@@ -1643,16 +1729,52 @@ with tab_risk:
                     _ih2 = float(_h2.mean())
         # Сдвиг назад по рабочим дням: 24 ч холда = 1 день.
         _shift2 = max(0, min(int(round((_ih2 or 0.0) / 24.0)), 4))
+        # Средний холд ПО ВАЛЮТЕ, а не «в среднем по больнице»: у йены сделка может
+        # жить 3 дня, у мажоров — сутки, и тогда день входа у них разный. Общий
+        # средний холд остаётся только фолбэком, когда по валюте данных нет.
+        _hold_ccy2 = {}
+        if not _ins2.empty and 'ccy' in _ins2.columns and 'open_time' in _ins2.columns:
+            _hd2 = _ins2.copy()
+            _hd2['hold_h'] = (_hd2['timestamp'] - _hd2['open_time']).dt.total_seconds() / 3600.0
+            _hd2 = _hd2[_hd2['hold_h'].notna() & (_hd2['hold_h'] >= 0)]
+            if len(_hd2):
+                _hold_ccy2 = {str(_k): float(_v) for _k, _v in
+                              _hd2.groupby('ccy')['hold_h'].mean().items()}
+
+        def _shift_for(_ccy):
+            """Шаг назад в РАБОЧИХ днях по холду этой валюты (0..4).
+
+            Рабочие дни, а не календарные: холд 24 ч с выходом в понедельник даёт
+            вход в пятницу — выходные просто перепрыгиваются.
+            """
+            _h = _hold_ccy2.get(str(_ccy))
+            if _h is None:
+                _h = _ih2 or 0.0
+            return max(0, min(int(round(float(_h) / 24.0)), 4))
+
+        def _hold_txt(_ccy):
+            """Холд для подписи: дни + часы, чтобы видно было, откуда взялся день входа."""
+            _h = _hold_ccy2.get(str(_ccy))
+            if _h is None:
+                return "холд — нет данных (общий {:.1f} дн.)".format((_ih2 or 0.0) / 24.0)
+            return f"холд {_h / 24.0:.1f} дн. ({_h:.0f} ч)"
         # Предлог уже внутри формы: «во вторник», «в среду» — иначе «в вторник».
         _WD2 = ('в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу')
 
-        def _entry_idx2(_wd):
+        def _entry_idx2(_wd, _shift=None):
             _i = int(_wd)
-            for _ in range(_shift2):
+            for _ in range(_shift2 if _shift is None else int(_shift)):
                 _i = 4 if _i == 0 else _i - 1
             return _i
 
-        st.markdown("### Лучшая тактика входа")
+        # Два лейбла рядом: слева ЛУЧШАЯ связка, справа ХУДШАЯ — одна вёрстка,
+        # разные концы одного и того же ранжирования по сумме PnL.
+        # Надбавка/урезание объёма по тактике (tactic_tilt.py): ±pct из config.
+        # Показываем её прямо в лейбле — отдельного блока в дэшборде нет.
+        _tilt_pct = float(getattr(_SteeringParams, 'tactic_tilt_pct', 0.20)) * 100.0
+        _col_best, _col_worst = st.columns(2)
+        _col_best.markdown("### Лучшая тактика входа")
+        _col_worst.markdown("### Худшая тактика входа")
         _cmb2 = pd.DataFrame()
         if not _ins2.empty and 'ccy' in _ins2.columns and 'wd' in _ins2.columns:
             _agg2 = {'pnl': ('profit_net', 'sum'), 'trades': ('profit_net', 'count')}
@@ -1668,18 +1790,39 @@ with tab_risk:
             # связка (мало сделок, высокая удельная) перебивала бы крупную прибыль.
             _cmb2 = _cmb2[_cmb2['trades'] >= 2].sort_values('pnl', ascending=False)
         if _cmb2.empty:
-            st.caption("Пока нечего советовать: в окне меньше двух закрытых сделок на связку "
-                       "«валюта + день недели».")
+            _col_best.caption("Пока нечего советовать: в окне меньше двух закрытых сделок на связку "
+                              "«валюта + день недели».")
         else:
             _bb = _cmb2.iloc[0]
             _ccy_b, _wd_b = str(_bb['ccy']), int(_bb['wd'])
-            st.markdown(f"Входить по **{_ccy_b}** {_WD2[_entry_idx2(_wd_b)]}, "
-                        f"выход {_WD2[_wd_b]}")
+            _col_best.markdown(f"Входить по **{_ccy_b}** {_WD2[_entry_idx2(_wd_b, _shift_for(_ccy_b))]}, "
+                               f"выход {_WD2[_wd_b]} · объём +{_tilt_pct:.0f}%")
             _conf = (f"{int(_bb['pnl']):+,} ₽ за {int(_bb['trades'])} сд. · "
                      f"{int(_bb['per']):+,} ₽/сд.")
             if float(_bb['lots']) > 0:
                 _conf += f" · {float(_bb['lots']):.2f} лот"
-            st.caption(_conf)  # цифры — мелким серым, чтобы не сливались с тактикой
+            _conf += f" · {_hold_txt(_ccy_b)} · окно ≤90 дн."  # холд именно этой валюты
+            _col_best.caption(_conf)  # цифры — мелким серым, чтобы не сливались с тактикой
+
+        # ── ХУДШАЯ ТАКТИКА ВХОДА: тот же расчёт и та же вёрстка, только берём
+        #    последнюю связку ранжирования (минимальная сумма PnL в окне).
+        if _cmb2.empty:
+            _col_worst.caption("Пока нечего советовать: в окне меньше двух закрытых сделок "
+                               "на связку «валюта + день недели».")
+        elif len(_cmb2) < 2:
+            # Одна связка — «худшая» и «лучшая» были бы одной строкой: не врём.
+            _col_worst.caption("Худшая не определена: в окне всего одна связка «валюта + день».")
+        else:
+            _ww = _cmb2.iloc[-1]
+            _ccy_w, _wd_w = str(_ww['ccy']), int(_ww['wd'])
+            _col_worst.markdown(f"Входить по **{_ccy_w}** {_WD2[_entry_idx2(_wd_w, _shift_for(_ccy_w))]}, "
+                                f"выход {_WD2[_wd_w]} · объём −{_tilt_pct:.0f}%")
+            _conf_w = (f"{int(_ww['pnl']):+,} ₽ за {int(_ww['trades'])} сд. · "
+                       f"{int(_ww['per']):+,} ₽/сд.")
+            if float(_ww['lots']) > 0:
+                _conf_w += f" · {float(_ww['lots']):.2f} лот"
+            _conf_w += f" · {_hold_txt(_ccy_w)} · окно ≤90 дн."  # тот же холд, но по своей валюте
+            _col_worst.caption(_conf_w)
         _ins = data['trades_df'].copy()  # старый расчёт ниже жив, но его вывод заглушён
         if not _ins.empty and 'timestamp' in _ins.columns:
             _ins['ccy'] = _ins['symbol'].astype(str).str.replace('rfd', '')
@@ -2858,7 +3001,7 @@ with tab_tree:
 **Hover (наведение):** полное имя узла + точный PnL (`PnL: +12 345 ₽`).
 
 **Прочее:**
-- окно = `ALLOC_DAYS` дн. из `config.SteeringParams.lookback_days` (сейчас 14) — совпадает с окном Wheel;
+- окно = `ALLOC_DAYS` дн. из `config.SteeringParams.lookback_days` (сейчас 30) — совпадает с окном Wheel;
 - узлы отсортированы по PnL по убыванию;
 - число сделок убрано из подписи (объём сверяем со штурвалом), но видно в таблицах Wheel;
 - `Others` появляется, когда у символ+семейство больше 3 комбинаций: топ‑3 по PnL показываются отдельно, остальное — в «Others».
