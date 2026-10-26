@@ -616,6 +616,66 @@ def get_dashboard_data(days_back=30, manage_connection=True):
                     'n_trades': 0,
                 })
 
+        # 4b. Пики floating из trades_db.daily_peak ───────────────────────────
+        # Таблицу наполняет сэмплер main.py (EQUITY_SAMPLE_INTERVAL_SEC = 300 с):
+        # одна строка = (день, аккаунт, категория symbol_family) и хранит ЛУЧШУЮ
+        # и ХУДШУЮ точку дня по нереализованному floating — peak_float/peak_ts/
+        # peak_volume/peak_per_lot и min_float/min_ts. Гранулярность — КАТЕГОРИЯ
+        # (стратегия на символе), а не отдельная позиция: сэмплер суммирует
+        # floating всех открытых позиций категории в момент замера. Поэтому
+        # «пик по одной сделке» — в блоке 4c: таблица position_peak (по position_id).
+        # (для дэшборда — см. pos_peaks_df ниже.)
+        peaks_df = pd.DataFrame()
+        try:
+            import trades_db as _tdb
+            _pk_con = _tdb.connect(readonly=True)
+            _peak_from = (date_to - datetime.timedelta(days=days_back)).strftime('%Y-%m-%d')
+            peaks_df = pd.read_sql_query(
+                "SELECT day, category, peak_float, peak_ts, peak_volume, peak_per_lot, "
+                "min_float, min_ts, realized_net, samples FROM daily_peak "
+                "WHERE day >= ? ORDER BY day",
+                _pk_con, params=(_peak_from,))
+            _pk_con.close()
+            if peaks_df is not None and len(peaks_df):
+                peaks_df['peak_time'] = pd.to_datetime(peaks_df['peak_ts'], unit='s')
+                peaks_df['min_time'] = pd.to_datetime(peaks_df['min_ts'], unit='s')
+                _cat = peaks_df['category'].astype(str)
+                peaks_df['symbol'] = _cat.str.split('_', n=1).str[0]
+                peaks_df['family'] = _cat.str.split('_', n=1).str[1]
+                print(f"  [DASHBOARD] daily_peak: {len(peaks_df)} строк за {days_back} дн. "
+                      f"({peaks_df['day'].nunique()} дней)", flush=True)
+        except Exception as _pk_err:
+            # Нет файла/таблицы (стенд без trades.db) — просто не покажем блок пиков
+            peaks_df = pd.DataFrame()
+            print(f"  [DASHBOARD] daily_peak недоступен: {_pk_err!r}", flush=True)
+
+        # 4c. Пики floating по ОТДЕЛЬНЫМ СДЕЛКАМ (trades_db.position_peak) ──────
+        # 1 строка = (день, аккаунт, position_id): peak_float этой позиции за день
+        # (макс. нереализованный profit+swap) и peak_per_lot = peak_float / volume.
+        # Это и есть «сделка прошла 99 → 101 → 140 → 200, закрылась по 170» — на
+        # графике остаётся 200, и именно по своей позиции, без сумм по семейству.
+        pos_peaks_df = pd.DataFrame()
+        try:
+            import trades_db as _tdb
+            _pp_con = _tdb.connect(readonly=True)
+            _pp_from = (date_to - datetime.timedelta(days=days_back)).strftime('%Y-%m-%d')
+            pos_peaks_df = pd.read_sql_query(
+                "SELECT day, position_id, symbol, family, category, magic, direction, "
+                "volume, open_price, peak_float, peak_ts, peak_price, peak_per_lot, "
+                "min_float, min_ts, realized_net, opened_ts, samples "
+                "FROM position_peak WHERE day >= ? ORDER BY day",
+                _pp_con, params=(_pp_from,))
+            _pp_con.close()
+            if pos_peaks_df is not None and len(pos_peaks_df):
+                pos_peaks_df['peak_time'] = pd.to_datetime(pos_peaks_df['peak_ts'], unit='s')
+                print(f"  [DASHBOARD] position_peak: {len(pos_peaks_df)} строк за "
+                      f"{days_back} дн. ({pos_peaks_df['day'].nunique()} дней, "
+                      f"{pos_peaks_df['position_id'].nunique()} сделок)", flush=True)
+        except Exception as _pp_err:
+            # Старая БД без таблицы position_peak — просто не покажем этот разрез
+            pos_peaks_df = pd.DataFrame()
+            print(f"  [DASHBOARD] position_peak недоступен: {_pp_err!r}", flush=True)
+
         # 5. Итоги
         total_trades = len(trades_df)
         total_profit = float(trades_df['profit_net'].sum()) if not trades_df.empty else 0.0
@@ -629,6 +689,8 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             'active_strategies': active_strategies,
             'total_trades': total_trades,
             'total_profit': total_profit,
+            'peaks_df': peaks_df,
+            'pos_peaks_df': pos_peaks_df,
             'dash_stats': {
                 'window_from': date_from.isoformat(),
                 'window_to': date_to.isoformat(),

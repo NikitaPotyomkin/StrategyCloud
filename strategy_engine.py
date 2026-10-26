@@ -143,7 +143,7 @@ def _short_name(r):
 
 # ═══ МЕТРИКИ И СКОРИНГ ═══
 
-def deduplicate_results(results, min_trades=10, min_score=1.0):
+def deduplicate_results(results, min_trades=None, min_score=1.0, min_tstat=None):
     # --- Проход 1: точная дедупликация по параметрам ---
     best = {}
     for r in results:
@@ -160,11 +160,55 @@ def deduplicate_results(results, min_trades=10, min_score=1.0):
 
     unique = list(best.values())
 
-    # --- Фильтры: мало сделок или слабый score — в топку ---
+    # --- Фильтр ЗНАЧИМОСТИ вместо порога «мало сделок» ---
+    # Проверяем не «сколько сделок», а «отличимо ли ожидание от нуля»:
+    #   t = sqrt(n) · (p·TP − (1−p)·SL) / (sqrt(p(1−p)) · (TP+SL)),  p = win_rate
+    # Двухисходная модель TP/SL: на 10 сделках чемпион (PF 6.46, WR 70%) даёт
+    # t≈2.5 — это лотерея; на 129 сделках скромный edge даёт t≈5 — проходит.
+    # Порог живёт в RiskConfig.min_tstat (0 отключает фильтр).
+    if min_tstat is None:
+        try:
+            from config import RiskConfig
+            min_tstat = float(getattr(RiskConfig(), 'min_tstat', 3.0))
+        except Exception:
+            min_tstat = 3.0
+    _sig_min_n = 5  # ниже 5 сделок статистику считать не на чем
+
+    def _t_stat(_r):
+        """t-статистика ожидания на сделку (в единицах риска)."""
+        _n = float(_r.get('n_trades') or 0)
+        _sl = float(_r.get('sl_points') or 0.0)
+        _tp = float(_r.get('tp_points') or 0.0)
+        # WR 0%/100% дают sd→0 и t→∞ — поджимаем p к [2%, 98%]
+        _p = min(max(float(_r.get('win_rate') or 0.0) / 100.0, 0.02), 0.98)
+        if _n <= 0 or _sl <= 0 or _tp <= 0:
+            return 0.0
+        _edge = _p * _tp - (1.0 - _p) * _sl
+        _sd = math.sqrt(_p * (1.0 - _p)) * (_tp + _sl)
+        if _sd <= 0:
+            return 0.0
+        return math.sqrt(_n) * _edge / _sd
+
+    for _r in unique:
+        _r['t_stat'] = _t_stat(_r)   # сохраняем: видно в ranking и в дэше
+    _n_before_sig = len(unique)
+    _sig_dropped = [r for r in unique
+                    if r['t_stat'] < min_tstat or r.get('n_trades', 0) < _sig_min_n]
     unique = [r for r in unique
-              if r.get('n_trades', 0) >= min_trades
+              if r['t_stat'] >= min_tstat
+              and r.get('n_trades', 0) >= _sig_min_n
               and r.get('score', 0) >= min_score]
     unique.sort(key=lambda r: r['score'], reverse=True)
+    if _sig_dropped:
+        _ex = ", ".join(
+            f"{r['symbol']}/{r.get('type')} t={r['t_stat']:.2f} n={r.get('n_trades')}"
+            for r in sorted(_sig_dropped, key=lambda x: -x.get('score', 0))[:3])
+        print(f"  [SIG-FILTER] отсеяно {len(_sig_dropped)} из {_n_before_sig} комбинаций: "
+              f"t-stat < {min_tstat} (или n < {_sig_min_n}). Примеры: {_ex}", flush=True)
+
+
+
+
 
     # --- Фильтр «плата за риск» ---
     # Отсекаем комбинации, где риск в разы больше цели (SL=1200 / TP=300):

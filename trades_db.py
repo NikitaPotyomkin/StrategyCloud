@@ -182,6 +182,35 @@ def ensure_schema(con):
     );
     CREATE INDEX IF NOT EXISTS ix_peak_day ON daily_peak(day);
 
+    -- position_peak: 1 строка на (день, аккаунт, position_id) — пик floating ОДНОЙ
+    -- сделки внутри дня. daily_peak агрегирует по категории (символ+семейство),
+    -- а здесь — по конкретной позиции: «сделка прошла 99 → 101 → 140 → 200, а
+    -- закрылась по 170» → в peak_float остаётся 200.
+    CREATE TABLE IF NOT EXISTS position_peak (
+        day            TEXT,     -- 'YYYY-MM-DD'
+        account_login  INTEGER,
+        position_id    INTEGER,  -- MT5 position ticket (сделка)
+        symbol         TEXT,
+        family         TEXT,     -- системное семейство стратегии
+        category       TEXT,     -- symbol_family
+        magic          INTEGER,
+        direction      INTEGER,  -- 0=buy, 1=sell
+        volume         REAL,
+        open_price     REAL,
+        peak_float     REAL,     -- макс. (profit+swap) по позиции за день
+        peak_ts        INTEGER,
+        peak_price     REAL,     -- текущая цена в момент пика
+        peak_per_lot   REAL,     -- peak_float / volume
+        min_float      REAL,     -- макс. просадка позиции за день
+        min_ts         INTEGER,
+        realized_net   REAL,     -- итог позиции после закрытия (net), NULL пока открыта
+        opened_ts      INTEGER,
+        samples        INTEGER,
+        PRIMARY KEY (day, account_login, position_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_pospeak_day ON position_peak(day);
+    CREATE INDEX IF NOT EXISTS ix_pospeak_cat ON position_peak(category);
+
     -- Одна строка состояния ингеста.
     -- ── Статус семейств: кто реально участвует в ночных рэнкингах ─────────
     -- Снапшот (перезапись), пишется ПОСЛЕ реранка (main.py: сразу за
@@ -587,12 +616,47 @@ ON CONFLICT(day, account_login, category) DO UPDATE SET
 """
 
 
+# UPSERT пиков ОДНОЙ сделки: MAX(peak_*)/MIN(min_*) внутри дня, как в daily_peak,
+# но ключ — position_id. Значения объёма/цены переписываются вместе с пиком.
+_SQL_POSPEAK_UPSERT = """
+INSERT INTO position_peak (
+    day, account_login, position_id,
+    symbol, family, category, magic, direction, volume, open_price,
+    peak_float, peak_ts, peak_price, peak_per_lot,
+    min_float, min_ts, realized_net, opened_ts, samples
+) VALUES (?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?)
+ON CONFLICT(day, account_login, position_id) DO UPDATE SET
+    symbol       = excluded.symbol,
+    family       = excluded.family,
+    category     = excluded.category,
+    magic        = excluded.magic,
+    direction    = excluded.direction,
+    volume       = excluded.volume,
+    open_price   = excluded.open_price,
+    peak_float   = CASE WHEN excluded.peak_float > position_peak.peak_float
+                        THEN excluded.peak_float ELSE position_peak.peak_float END,
+    peak_ts      = CASE WHEN excluded.peak_float > position_peak.peak_float
+                        THEN excluded.peak_ts ELSE position_peak.peak_ts END,
+    peak_price   = CASE WHEN excluded.peak_float > position_peak.peak_float
+                        THEN excluded.peak_price ELSE position_peak.peak_price END,
+    peak_per_lot = CASE WHEN excluded.peak_float > position_peak.peak_float
+                        THEN excluded.peak_per_lot ELSE position_peak.peak_per_lot END,
+    min_float    = CASE WHEN excluded.min_float < position_peak.min_float
+                        THEN excluded.min_float ELSE position_peak.min_float END,
+    min_ts       = CASE WHEN excluded.min_float < position_peak.min_float
+                        THEN excluded.min_ts ELSE position_peak.min_ts END,
+    samples      = position_peak.samples + 1
+"""
+
+
 def sample_positions(interval=None, path=None, verbose=True):
     """Сэмплер открытых позиций: обновляет daily_peak и equity_samples.
 
     Разрезы:
       equity_samples — 1 строка на вызов: общий floating счёта во времени;
-      daily_peak     — 1 строка на (день, аккаунт, категория): экстремумы MAX/MIN.
+      daily_peak     — 1 строка на (день, аккаунт, категория): экстремумы MAX/MIN;
+      position_peak  — 1 строка на (день, аккаунт, position_id): пик floating
+                       ОДНОЙ сделки (без агрегации по семейству).
 
     interval — интервал планирования (его соблюдает вызывающая сторона, напр. main);
     сама функция только делает один сэмпл. Fail-safe: ошибка → 0, пайплайн не падает.
@@ -625,6 +689,32 @@ def sample_positions(interval=None, path=None, verbose=True):
             slot = per_cat.setdefault(cat, {'float': 0.0, 'vol': 0.0})
             slot['float'] += pl
             slot['vol'] += vol
+
+        # разрез «одна сделка»: пик floating по каждой ОТКРЫТОЙ позиции
+        pos_rows = []
+        for p in positions:
+            try:
+                ticket = int(getattr(p, 'position_id', 0) or 0)
+                if not ticket:
+                    continue
+                pl = float(getattr(p, 'profit', 0.0) or 0.0) + float(getattr(p, 'swap', 0.0) or 0.0)
+                vol = float(getattr(p, 'volume', 0.0) or 0.0)
+                price = float(getattr(p, 'price_current', 0.0) or 0.0)
+                open_price = float(getattr(p, 'price_open', 0.0) or 0.0)
+                direction = int(getattr(p, 'type', 0) or 0)
+                opened_ts = int(getattr(p, 'time', 0) or 0)
+                symbol = getattr(p, 'symbol', '') or ''
+                magic = int(getattr(p, 'magic', 0) or 0)
+            except Exception:
+                continue  # одна кривая позиция — не роняем сэмпл
+            rec = registry.get(magic) or {}
+            pos_rows.append((
+                day, login, ticket,
+                symbol, rec.get('family'), _category_of(symbol, magic, registry), magic,
+                direction, vol, open_price,
+                pl, now_ts, price, (pl / vol) if vol > 0 else None,
+                pl, now_ts, None, opened_ts, 1,
+            ))
 
         con = connect(path)
         ensure_schema(con)
@@ -662,11 +752,27 @@ def sample_positions(interval=None, path=None, verbose=True):
         if rows:
             con.executemany(_SQL_PEAK_UPSERT, rows)
 
+        # 3b) пики по каждой сделке (position_peak) + реализованный итог закрытых
+        if pos_rows:
+            con.executemany(_SQL_POSPEAK_UPSERT, pos_rows)
+            try:
+
+                con.execute(
+                    "UPDATE position_peak SET realized_net = ("
+                    "  SELECT ROUND(SUM(d.profit + d.commission + d.swap + d.fee), 2) "
+                    "  FROM deals d WHERE d.position_id = position_peak.position_id "
+                    "    AND d.entry IN (1, 2)) "
+                    "WHERE day = ? AND account_login = ? AND realized_net IS NULL",
+                    (day, login))
+            except Exception:
+                pass  # реализованный итог — необязательное поле
+
         con.commit()
         con.close()
         if verbose:
             print(f"  [trades_db] sample: позиций {len(positions)}, "
-                  f"floating {floating_total:+,.0f}, категорий {len(per_cat)}", flush=True)
+                  f"floating {floating_total:+,.0f}, категорий {len(per_cat)}, "
+                  f"сделок {len(pos_rows)}", flush=True)
         return len(positions)
     except Exception as exc:
         if verbose:

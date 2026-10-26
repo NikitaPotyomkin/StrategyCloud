@@ -218,6 +218,14 @@ st.markdown("""
         zoom: 2;
     }
 
+    /* Strategy Tree, три метрики: цвет задаёт metric_card (инлайновый color),
+       поэтому CSS-правила для .st-key-tree_metrics больше не нужны. */
+
+
+
+
+
+
     /* Caption */
     .stCaption {
         font-size: 0.75rem;
@@ -390,11 +398,30 @@ def metric_card(label, value, color=None, sub=None):
         "<div style='padding:0;min-height:4.4rem;'>"
         f"<div style='font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;"
         f"color:{COL_MUTED};margin-bottom:0.3rem;'>{label}</div>"
-        f"<div style='font-size:1.5rem;font-weight:600;font-family:{_CARD_FONT};"
-        f"color:{color};line-height:1.2;'>{value}</div>"
+        f"<div style='color:{color};font-size:1.5rem;font-weight:600;line-height:1.2;"
+        f"font-family:{_CARD_FONT};'>{value}</div>"
         f"{sub_html}</div>",
         unsafe_allow_html=True,
     )
+
+
+def metric_colored(label, value, delta=None, delta_color=None):
+    """metric_card, но цифра красится по знаку значения.
+
+    st.metric не умеет красить само значение (только дельту), поэтому
+    «Зелёные / Красные / Перевес» в Strategy Tree идут через этот шим:
+    '+' → COL_GREEN_LT, '−'/'-' → COL_RED_LT, ноль/пусто → COL_MUTED.
+    Подпись (delta) уходит в sub, delta_color оставлен для совместимости.
+    """
+    _v = str(value)
+    _s = _v.strip()
+    if _s.startswith('+'):
+        _c = COL_GREEN_LT
+    elif _s.startswith('−') or _s.startswith('-'):
+        _c = COL_RED_LT
+    else:
+        _c = COL_MUTED
+    metric_card(label, _v, color=_c, sub=(delta or None))
 
 
 def hide_weekend_gaps(fig, saturday_only=True):
@@ -436,10 +463,17 @@ def drop_weekends(df, col='timestamp'):
 
 
 # ── Заголовок ──
+# REFRESH — прямо НАД лейблом STRATEGY CLOUD: кнопка в отдельной узкой колонке,
+# заголовок рендерится следующим рядом (ниже), а не сбоку.
+_col_btn, _col_sp = st.columns([1, 5])
+with _col_btn:
+    if st.button("REFRESH"):
+        load_dashboard_data.clear()
+        st.rerun()
 col_title, col_btn = st.columns([6, 1])
 with col_title:
     st.markdown("<h1>STRATEGY CLOUD <span style='color:#8B949E;font-size:0.8rem;font-weight:400'>/ Dashboard</span></h1>", unsafe_allow_html=True)
-with col_btn:
+if False:  # REFRESH перенесён НАД лейблом (см. _col_btn выше) — старый блок не рендерится
     st.write("")
     if st.button("REFRESH"):
         load_dashboard_data.clear()
@@ -460,9 +494,19 @@ with st.sidebar:
 
 
 # ── Загрузка данных ──
-data = load_dashboard_data(days_back)
+try:
+    data = load_dashboard_data(days_back)
+except Exception as _e_data:
+    # Падение слоя данных (MT5 / trades.db / журналы) не должно убивать страницу:
+    # исключение здесь уносило ВСЕ вкладки — оставался только заголовок.
+    st.error(f"⚠ Ошибка загрузки данных дашборда: {_e_data!r}")
+    data = None
 # Окно периода аллокации (жёсткое) — его используют Strategy Tree и Wheel.
-data_alloc = load_dashboard_data(ALLOC_DAYS)
+try:
+    data_alloc = load_dashboard_data(ALLOC_DAYS)
+except Exception as _e_alloc:
+    st.warning(f"⚠ Окно аллокации {ALLOC_DAYS} дн. не загрузилось: {_e_alloc!r}")
+    data_alloc = None
 if data_alloc is None:
     data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
@@ -924,7 +968,7 @@ with tab_daily:
         _plan_day += timedelta(days=1)
     st.markdown(
         f"<div style='font-size:1.7rem;font-weight:700;color:{COL_TEXT};letter-spacing:0.02em;"
-        f"margin:-0.2rem 0 0.1rem 0;'>Daily Plan — {_plan_day.day} "
+        f"margin:-0.2rem 0 0.1rem 0;'>Дневной план на {_plan_day.day} "
         f"{_RU_MONTHS[_plan_day.month - 1]} ({_RU_WEEKDAYS[_plan_day.weekday()]})</div>",
 
 
@@ -950,6 +994,7 @@ with tab_daily:
         st.caption(f"⚠ План недоступен (journals/active_state.json): {_e!r}")
     if not _act:
         st.info("Нет плана: journals/active_state.json пуст или ещё не пересчитан (ночной прогон).")
+        st.stop()
     else:
         from wheel import compute_categories, calculate_steering_wheel_quotas, category_label
         from config import SteeringParams
@@ -1180,6 +1225,29 @@ with tab_daily:
             def _share(_v, _tot=_tot_lot):
                 return f"{100.0 * _v / _tot:.0f}%" if _tot > 0 else "—"
 
+            # ── Перевес: кто кого перевешивает по прибыли и по объёму ──
+            # Зелёные = категории с Tree PnL > 0, красные = PnL < 0.
+            # Перевес по прибыли = сумма PnL зелёных + сумма PnL красных (красные уже < 0).
+            # Перевес по объёму = доля объёма плана, стоящая в красных категориях.
+            _pnl_g = float(_dfc.loc[_dfc['_pnl'] > 0, '_pnl'].sum())
+            _pnl_r = float(_dfc.loc[_dfc['_pnl'] < 0, '_pnl'].sum())
+            _n_g = int((_dfc['_pnl'] > 0).sum())
+            _n_r = int((_dfc['_pnl'] < 0).sum())
+            _bal = _pnl_g + _pnl_r
+            _red_pct = (100.0 * _red / _tot_lot) if _tot_lot > 0 else None
+            _g1, _g2, _g3 = st.columns(3)
+            _g1.metric("Зелёные", f"{_pnl_g:+,.0f} ₽".replace(',', ' '),
+                       delta=f"{_green:.2f} лот.", delta_color="off")
+            _g1.caption(f"{_n_g} кат.")
+            _g2.metric("Красные", f"{_pnl_r:+,.0f} ₽".replace(',', ' ').replace('-', '−'),
+                       delta=f"{_red:.2f} лот.", delta_color="off")
+            _g2.caption(f"{_n_r} кат.")
+            _g3.metric("Перевес", f"{_bal:+,.0f} ₽".replace(',', ' ').replace('-', '−'),
+                       delta=(f"{_red_pct:.0f}% объёма у красных" if _red_pct is not None
+                              else None),
+        
+                       delta_color="off")
+            _g3.caption("зелёные + красные")
             _mc1, _mc2, _mc3, _mc4 = st.columns(4)
             _mc1.metric("Категорий в плане", f"{len(_dfc)}")
             _mc2.metric("Объём в зелёных", _share(_green))
@@ -1432,6 +1500,72 @@ with tab_risk:
         else:
             st.info("No open positions.")
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            
+
+
+
+            
+
+
+
+
+
+
+
+
+
     # ── Exposure heatmap ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         st.markdown("### Exposure Matrix")
@@ -1482,6 +1616,143 @@ with tab_risk:
     # Источник — data['trades_df']: одна строка = одна ЗАКРЫТАЯ позиция окна дашборда,
     # profit_net — реализованный результат в валюте счёта (₽), уже с комиссией и свопом.
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+        # ═══════════════════════════════════════════════════════════
+        #  ЛУЧШАЯ ТАКТИКА ВХОДА (одна строка вместо развёрнутого разбора)
+        # ═══════════════════════════════════════════════════════════
+        # Пироги отвечают «сколько», но не «что делать». Здесь считаем:
+        #  - какая валюта даёт лучший/худший результат НА СДЕЛКУ (₽/сд., а не
+        #    абсолют — иначе крупный объём всегда «выигрывает»);
+        #  - какой день ВЫХОДА лучший и — с учётом среднего времени удержания —
+        #    в какой день надо ЗАХОДИТЬ: день входа = день выхода − холд в днях
+        #    (выход в среду при холде 24 ч ⇒ заходить во вторник);
+        #  - развёрнутый разбор (лучшая/худшая валюта, топ-3 связок, «избегать») убран по запросу.
+        # ── ЛУЧШАЯ ТАКТИКА ВХОДА: одна строка + цифры подтверждения ──
+        # Категория = валюта (символ без 'rfd') × день ВЫХОДА сделки. День входа =
+        # день выхода − средний холд в днях (выход в среду при холде 24 ч ⇒ заходить
+        # во вторник). Всё остальное (лучшая валюта, худший день и т.п.) убрано.
+        _ins2 = data['trades_df'].copy()
+        _ih2 = None
+        if not _ins2.empty and 'timestamp' in _ins2.columns:
+            _ins2['ccy'] = _ins2['symbol'].astype(str).str.replace('rfd', '')
+            _ins2['wd'] = _ins2['timestamp'].dt.weekday
+            _ins2 = _ins2[_ins2['wd'] < 5]  # суббота/воскресенье — не торговые дни
+            if 'open_time' in _ins2.columns:
+                _h2 = (_ins2['timestamp'] - _ins2['open_time']).dt.total_seconds() / 3600.0
+                _h2 = _h2[_h2.notna() & (_h2 >= 0)]
+                if len(_h2):
+                    _ih2 = float(_h2.mean())
+        # Сдвиг назад по рабочим дням: 24 ч холда = 1 день.
+        _shift2 = max(0, min(int(round((_ih2 or 0.0) / 24.0)), 4))
+        # Предлог уже внутри формы: «во вторник», «в среду» — иначе «в вторник».
+        _WD2 = ('в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу')
+
+        def _entry_idx2(_wd):
+            _i = int(_wd)
+            for _ in range(_shift2):
+                _i = 4 if _i == 0 else _i - 1
+            return _i
+
+        st.markdown("### Лучшая тактика входа")
+        _cmb2 = pd.DataFrame()
+        if not _ins2.empty and 'ccy' in _ins2.columns and 'wd' in _ins2.columns:
+            _agg2 = {'pnl': ('profit_net', 'sum'), 'trades': ('profit_net', 'count')}
+            if 'volume' in _ins2.columns:
+                _agg2['lots'] = ('volume', 'sum')
+            _cmb2 = _ins2.groupby(['ccy', 'wd']).agg(**_agg2).reset_index()
+            if 'lots' not in _cmb2.columns:
+                _cmb2['lots'] = 0.0
+            _cmb2['per'] = _cmb2.apply(
+                lambda _r: (_r['pnl'] / _r['trades']) if _r['trades'] else 0.0, axis=1)
+            # Связка с 1 сделкой — шум, а не тактика: требуем >= 2.
+            # Ранг — СУММА PnL связки, а не ₽/сд.: иначе маленькая, но «плотная»
+            # связка (мало сделок, высокая удельная) перебивала бы крупную прибыль.
+            _cmb2 = _cmb2[_cmb2['trades'] >= 2].sort_values('pnl', ascending=False)
+        if _cmb2.empty:
+            st.caption("Пока нечего советовать: в окне меньше двух закрытых сделок на связку "
+                       "«валюта + день недели».")
+        else:
+            _bb = _cmb2.iloc[0]
+            _ccy_b, _wd_b = str(_bb['ccy']), int(_bb['wd'])
+            st.markdown(f"Входить по **{_ccy_b}** {_WD2[_entry_idx2(_wd_b)]}, "
+                        f"выход {_WD2[_wd_b]}")
+            _conf = (f"{int(_bb['pnl']):+,} ₽ за {int(_bb['trades'])} сд. · "
+                     f"{int(_bb['per']):+,} ₽/сд.")
+            if float(_bb['lots']) > 0:
+                _conf += f" · {float(_bb['lots']):.2f} лот"
+            st.caption(_conf)  # цифры — мелким серым, чтобы не сливались с тактикой
+        _ins = data['trades_df'].copy()  # старый расчёт ниже жив, но его вывод заглушён
+        if not _ins.empty and 'timestamp' in _ins.columns:
+            _ins['ccy'] = _ins['symbol'].astype(str).str.replace('rfd', '')
+            _ins['wd'] = _ins['timestamp'].dt.weekday
+            _ins = _ins[_ins['wd'] < 5]  # суббота/воскресенье — не торговые дни
+        if not _ins.empty:
+            # Средний холд считаем СВОЙ: метрика Avg Hold выше существует только
+            # когда в терминале есть открытые позиции, а вывод нужен всегда.
+            _ih = None
+            if 'open_time' in _ins.columns:
+                _hh = (_ins['timestamp'] - _ins['open_time']).dt.total_seconds() / 3600.0
+                _hh = _hh[_hh.notna() & (_hh >= 0)]
+                if len(_hh):
+                    _ih = float(_hh.mean())
+            _shift = int(round(_ih / 24.0)) if _ih is not None else 0
+            _shift = max(0, min(_shift, 4))
+            _RUWD = ('понедельник', 'вторник', 'среда', 'четверг', 'пятница')
+
+            def _entry_day(_wd_exit):
+                """День ВХОДА по дню выхода: шагаем назад по рабочим дням на _shift."""
+                _i = int(_wd_exit)
+                for _ in range(_shift):
+                    _i = 4 if _i == 0 else _i - 1
+                return _RUWD[_i]
+
+            def _summ(_by):
+                _g = (_ins.groupby(_by)
+                      .agg(pnl=('profit_net', 'sum'),
+                           trades=('profit_net', 'count'),
+                           lots=('volume', 'sum'))
+                      .reset_index())
+                _g['per'] = _g.apply(
+                    lambda _r: (_r['pnl'] / _r['trades']) if _r['trades'] else 0.0, axis=1)
+                return _g
+
+            _ccy_g = _summ('ccy').sort_values('per', ascending=False)
+            _wd_g = _summ('wd').sort_values('per', ascending=False)
+            _cmb = _summ(['ccy', 'wd'])
+            # Связки с 1 сделкой — шум, а не закономерность: требуем >= 2.
+            _cmb_ok = _cmb[_cmb['trades'] >= 2].sort_values('per', ascending=False)
+
+            pass  # старый дубль заголовка убран
+            if _ih is not None:
+                _ = (f"Средний холд {_ih:.1f} ч ({_ih / 24:.1f} дн.) → день входа = "
+                           f"день выхода − {_shift} дн. Дни ниже — по ВЫХОДУ сделки.")
+            else:
+                _ = "Средний холд неизвестен (нет open_time) — дни указаны по выходу сделки."
+            _bul = []
+            if len(_ccy_g):
+                _b1, _w1 = _ccy_g.iloc[0], _ccy_g.iloc[-1]
+                _bul.append(f"**Валюта:** лучшая — {_b1['ccy']} ({int(_b1['per']):+,} ₽/сд. за "
+                            f"{int(_b1['trades'])} сд.), худшая — {_w1['ccy']} "
+                            f"({int(_w1['per']):+,} ₽/сд. за {int(_w1['trades'])} сд.)")
+            if len(_wd_g):
+                _b2, _w2 = _wd_g.iloc[0], _wd_g.iloc[-1]
+                _bul.append(f"**День выхода:** лучший — {_RUWD[int(_b2['wd'])]} "
+                            f"({int(_b2['per']):+,} ₽/сд.), худший — {_RUWD[int(_w2['wd'])]} "
+                            f"({int(_w2['per']):+,} ₽/сд.) → заходить: "
+                            f"**{_entry_day(_b2['wd'])}**")
+            for _, _r in _cmb_ok.head(3).iterrows():
+                _bul.append(f"**{_r['ccy']} · выход {_RUWD[int(_r['wd'])]}** — "
+                            f"{int(_r['pnl']):+,} ₽ за {int(_r['trades'])} сд. "
+                            f"({int(_r['per']):+,} ₽/сд.) → заходить: **{_entry_day(_r['wd'])}**")
+            if len(_cmb_ok) > 3:
+                _tw = _cmb_ok.iloc[-1]
+                _bul.append(f"**Избегать:** {_tw['ccy']} · выход {_RUWD[int(_tw['wd'])]} — "
+                            f"{int(_tw['pnl']):+,} ₽ за {int(_tw['trades'])} сд. "
+                            f"({int(_tw['per']):+,} ₽/сд.)")
+            for _b3 in []:  # старые пункты убраны по запросу (осталась одна строка-тактика)
+                st.markdown("- " + _b3)
+
+        # Небольшой отступ сверху: блок тактики и заголовок пирогов визуально слипались.
+        st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
         st.markdown("### Currency Breakdown — realized P&L & volume")
         _ccy = data['trades_df'].copy()
         _ccy['ccy'] = _ccy['symbol'].str.replace('rfd', '')
@@ -1628,6 +1899,259 @@ with tab_risk:
             _col_wd_lots.caption(f"Volume of closed positions | total {_wd_lots_total:.2f} lots")
         else:
             _col_wd_lots.info("No closed volume in the window.")
+
+
+# ═══════════════════════════════════════════════════════════════
+    # ── ПИК нереализованной прибыли за день (trades_db.position_peak, ПО СДЕЛКЕ) ──
+    # Сделка внутри дня проходит 99 → 101 → 140 → 200 ₽, а закрывается по 170.
+    # На графике должна стоять точка 200 — максимум floating, который сэмплер
+    # засёк за день, а НЕ результат закрытия. position_peak хранит по строке на
+    # (день, position_id): peak_float / peak_per_lot — лучшая зафиксированная
+    # точка ОДНОЙ сделки дня. На график берём ЛУЧШУЮ сделку каждого дня.
+    _pkdf = data.get('pos_peaks_df')
+    if not PLOTLY_AVAILABLE:
+        pass
+    elif _pkdf is None or getattr(_pkdf, 'empty', True):
+        st.info("В trades_db.position_peak нет строк за окно. Пики пишет сэмплер main.py "
+                "(EQUITY_SAMPLE_INTERVAL_SEC = 300 с); если процесс не работал в этот "
+                "период — показывать нечего.")
+    else:
+        _pkdf = _pkdf.copy()
+        for _c in ('peak_float', 'peak_per_lot', 'volume'):
+            _pkdf[_c] = (pd.to_numeric(_pkdf[_c], errors='coerce')
+                         if _c in _pkdf.columns else 0.0)
+        _pkdf = _pkdf.dropna(subset=['peak_float', 'peak_per_lot'])
+        if _pkdf.empty:
+            st.info("В position_peak нет валидных значений (peak_float / peak_per_lot).")
+        else:
+            _ts_col = 'peak_ts'
+            for _cand in ('peak_time', 'peak_ts'):
+                if _cand in _pkdf.columns:
+                    _ts_col = _cand
+                    break
+            _pkdf['_ts_s'] = (pd.to_datetime(_pkdf[_ts_col], errors='coerce')
+                              .dt.strftime('%d.%m %H:%M').fillna(''))
+            _pkdf['_vol'] = _pkdf['volume'].fillna(0.0)
+            # тикет — строкой: в customdata он попадает вместе со строками (hover без «e+09»)
+            if 'position_id' in _pkdf.columns:
+                _pkdf['position_id'] = _pkdf['position_id'].astype(str)
+            # Точки графиков считаются ТАК ЖЕ, как в спеке: см. ниже.
+            # Удельная величина — по спеке: PnL / объём ЭТОЙ ЖЕ сделки (строки дня),
+            # абсолютная — PnL этой же строки. На день ровно одна точка в каждом
+            # графике, поэтому обе кривые описывают одни и те же события.
+            # peak_per_lot уже = peak_float / volume этой же сделки (строки дня).
+
+            # ОДНА строка на день для ОБОИХ графиков — события общие, поэтому и
+            # траектории совпадают: берём СДЕЛКУ с максимальным пиком прибыли дня
+            # (peak_float), а слева показываем ту же точку в ₽/лот.
+            _pk_pl = (_pkdf.loc[_pkdf.groupby('day')['peak_float'].idxmax()]
+                      .sort_values('day').reset_index(drop=True))
+            # Удельная величина = тот же пик прибыли / объём этой же сделки
+            _per_lot_day = _pk_pl['peak_per_lot']
+            _pk_abs = (_pk_pl  # те же события дня: слева в ₽/лот, справа в ₽
+                       .sort_values('day').reset_index(drop=True))
+
+            def _pk_xlab(_frame):
+                _days = list(pd.to_datetime(_frame['day']).dt.date)
+                return [f"{_RU_MONTHS[_d.month - 1][:3]} {_d.day}" for _d in _days]
+
+            _hov = ('<b>%{x}</b><br>%{customdata[0]} (#%{customdata[1]})<br>'
+                    'пик зафиксирован: %{customdata[2]}<br>'
+                    'объём сделки: %{customdata[3]:.2f} лот<br>')
+
+            _fig_pkpl = go.Figure()
+            _fig_pkpl.add_trace(go.Scatter(
+                x=_pk_xlab(_pk_pl), y=_per_lot_day, mode='lines+markers',
+                line=dict(color=COL_BLUE, width=2), marker=dict(size=6, color=COL_BLUE),
+                customdata=_pk_pl[['category', 'position_id', '_ts_s', '_vol',
+                                   'peak_float']].values,
+                hovertemplate=(_hov + 'пик ₽/лот: %{y:,.0f}<br>'
+                               'пик прибыли: %{customdata[4]:,.0f} ₽<extra></extra>'),
+                name='макс ₽/лот за день'))
+            _peak_pl = float(_per_lot_day.max())
+            _lvl_pl = _peak_pl * 0.75
+            _fig_pkpl.add_hline(y=_lvl_pl, line_dash='dash', line_color=COL_GREEN_LT,
+                                annotation_text=(f"75% от пика {_peak_pl:,.0f} = {_lvl_pl:,.0f} ₽/лот".replace(',', ' ')),
+                                annotation_position='top left')
+            _fig_pkpl.add_hline(y=0, line_color=COL_MUTED, line_width=1)
+            _fig_pkpl.update_layout(xaxis_title='', yaxis_title='₽ на лот (пик дня)')
+
+            _fig_pkabs = go.Figure()
+            _fig_pkabs.add_trace(go.Scatter(
+                x=_pk_xlab(_pk_abs), y=_pk_abs['peak_float'], mode='lines+markers',
+                line=dict(color=COL_AMBER, width=2), marker=dict(size=6, color=COL_AMBER),
+                customdata=_pk_abs[['category', 'position_id', '_ts_s', '_vol',
+                                    'peak_per_lot']].values,
+                hovertemplate=(_hov + 'пик прибыли: %{y:,.0f} ₽<br>'
+                               'удельно в пике: %{customdata[4]:,.0f} ₽/лот<extra></extra>'),
+                name='макс прибыль за день, ₽'))
+            _peak_abs = float(_pk_abs['peak_float'].max())
+            _lvl_abs = _peak_abs * 0.75
+            _fig_pkabs.add_hline(y=_lvl_abs, line_dash='dash', line_color=COL_GREEN_LT,
+                                 annotation_text=(f"75% от пика {_peak_abs:,.0f} = {_lvl_abs:,.0f} ₽".replace(',', ' ')),
+                                 annotation_position='top left')
+            _fig_pkabs.add_hline(y=0, line_color=COL_MUTED, line_width=1)
+            _fig_pkabs.update_layout(xaxis_title='', yaxis_title='₽ (пик дня)')
+
+            _col_pl, _col_abs = st.columns(2)
+            with _col_pl:
+                st.markdown("### Максимум нереализованной прибыли за день (₽/лот, по сделке)")
+                st.plotly_chart(plotly_dark_layout(_fig_pkpl, 380),
+                                use_container_width=True, key="risk_peak_per_lot_day")
+                _rec_pl = _pk_pl.loc[_per_lot_day.idxmax()]
+                st.caption(
+                    "Точка = МАКСИМУМ floating-прибыли на лот по ОДНОЙ сделке (позиции), "
+                    "засечённый за день; "
+                    "(та же сделка, что и на правом графике). Шаг сэмплера 5 мин — "
+                    "фактический внутриминутный пик мог быть выше. Нереализованная прибыль — "
+                    "не деньги на счету: позиция могла закрыться хуже пика. Рекорд окна: "
+                    + f"{_peak_pl:,.0f} ₽/лот — {_rec_pl['category']} "
+                      f"#{int(_rec_pl['position_id'])}, "
+                      f"{_rec_pl['_ts_s']}, объём {_rec_pl['_vol']:.2f} лот.")
+            with _col_abs:
+                st.markdown("### Максимум нереализованной прибыли за день, ₽ (по сделке)")
+                st.plotly_chart(plotly_dark_layout(_fig_pkabs, 380),
+                                use_container_width=True, key="risk_peak_float_day")
+                _rec_abs = _pk_abs.loc[_pk_abs['peak_float'].idxmax()]
+                st.caption(
+                    "Точка = МАКСИМУМ нереализованной (floating) прибыли в рублях по ОДНОЙ "
+                    "сделке (позиции), засечённый внутри дня. Не PnL дня и не "
+                    "результат закрытия. Шаг сэмплера 5 мин. Рекорд окна: "
+                    + f"{_rec_abs['peak_float']:,.0f} ₽ — {_rec_abs['category']} "
+                      f"#{int(_rec_abs['position_id'])}, "
+                      f"{_rec_abs['_ts_s']}, объём {_rec_abs['_vol']:.2f} лот.")
+
+if False:  # ── LEGACY: графики по закрытым сделкам (отключено, удалить при чистке) ──
+    # Для каждого дня берём ЛУЧШУЮ закрытую сделку по ₽/лот (net PnL / объём):
+    # «сколько максимум выжималось из одного лота за день». Пунктир — 75% от пика окна.
+    if PLOTLY_AVAILABLE and data.get('trades_df') is not None and not data['trades_df'].empty:
+        _tb = data['trades_df'].copy()
+        _pnl_col = ('profit_net' if 'profit_net' in _tb.columns
+                    else ('profit' if 'profit' in _tb.columns else None))
+        if _pnl_col and 'volume' in _tb.columns and 'timestamp' in _tb.columns:
+            _tb = _tb[pd.to_numeric(_tb['volume'], errors='coerce').fillna(0) > 0].copy()
+            _tb['_per_lot'] = (pd.to_numeric(_tb[_pnl_col], errors='coerce')
+                               / pd.to_numeric(_tb['volume'], errors='coerce'))
+            _tb = _tb.dropna(subset=['_per_lot'])
+            if not _tb.empty:
+                _tb['_day'] = pd.to_datetime(_tb['timestamp']).dt.date
+                _best = _tb.loc[_tb.groupby('_day')['_per_lot'].idxmax()].sort_values('_day')
+                _xlab = [f"{_RU_MONTHS[_d.month - 1][:3]} {_d.day}" for _d in _best['_day']]
+                _peak = float(_best['_per_lot'].max())
+                _lvl75 = _peak * 0.75
+                _fig_bpl = go.Figure()
+                _fig_bpl.add_trace(go.Scatter(
+                    x=_xlab, y=_best['_per_lot'], mode='lines+markers',
+                    line=dict(color=COL_BLUE, width=2),
+                    marker=dict(size=6, color=COL_BLUE),
+                    customdata=(_best[['symbol']].values if 'symbol' in _best.columns
+                                else [['']] * len(_best)),
+                    hovertemplate='%{x}<br>макс ₽/лот: %{y:,.0f}<br>%{customdata[0]}<extra></extra>',
+                    name='макс ₽/лот за день'))
+                if _peak > 0:
+                    _fig_bpl.add_hline(
+                        y=_lvl75, line_dash='dash', line_color=COL_GREEN_LT,
+                        annotation_text=f"75% от пика: {_lvl75:,.0f} ₽/лот".replace(',', ' '),
+                        annotation_position='top left')
+                _fig_bpl.add_hline(y=0, line_color=COL_MUTED, line_width=1)
+                _fig_bpl.update_layout(xaxis_title='', yaxis_title='₽ на лот (максимум дня)')
+                if False: st.markdown("### Максимум удельной прибыли за день (₽/лот)")  # заголовок — в колонке ниже (два графика в ряд)
+                if False: st.plotly_chart(plotly_dark_layout(_fig_bpl, 380),
+                                use_container_width=True, key="risk_best_per_lot")
+                if False: st.caption("Точка = лучшая сделка дня по ₽ на лот (net PnL / объём). "
+                           "Пунктир — 75% от пика за окно. Только закрытые сделки, "
+                           "окно — как у остальных блоков Risk.")
+                # ── То же в АБСОЛЮТЕ: лучшая сделка дня в рублях ──
+                # Тот же отбор (лучшая сделка дня), но по абсолютному net PnL, без деления
+                # на объём: «сколько денег принесла лучшая сделка дня». Удельный график
+                # выше не меняется — это отдельная пара, а не замена.
+                _best_abs = _tb.loc[_tb.groupby('_day')[_pnl_col].idxmax()].sort_values('_day')
+                _peak_abs = float(_best_abs[_pnl_col].max())
+                _lvl75_abs = _peak_abs * 0.75
+                _fig_bpn = go.Figure()
+                _fig_bpn.add_trace(go.Scatter(
+                    x=_xlab, y=_best_abs[_pnl_col], mode='lines+markers',
+                    line=dict(color=COL_AMBER, width=2),
+                    marker=dict(size=6, color=COL_AMBER),
+                    customdata=(_best_abs[['symbol']].values if 'symbol' in _best_abs.columns
+                                else [['']] * len(_best_abs)),
+                    hovertemplate='%{x}<br>макс прибыль: %{y:,.0f} ₽'
+                                  '<br>%{customdata[0]}<extra></extra>',
+                    name='макс прибыль за день, ₽'))
+                if _peak_abs > 0:
+                    _fig_bpn.add_hline(
+                        y=_lvl75_abs, line_dash='dash', line_color=COL_GREEN_LT,
+                        annotation_text=f"75% от пика: {_lvl75_abs:,.0f} ₽".replace(',', ' '),
+                        annotation_position='top left')
+                _fig_bpn.add_hline(y=0, line_color=COL_MUTED, line_width=1)
+                _fig_bpn.update_layout(xaxis_title='', yaxis_title='₽ (лучшая сделка дня)')
+                if False: st.markdown("### Максимум прибыли за день в рублях")  # заголовок — в колонке ниже
+                # ══ Ряд 1: два графика на одной линии (₽/лот и ₽) ══
+                # Фигуры уже собраны выше (_fig_bpl, _fig_bpn) — здесь только
+                # выкладываем их в колонки, чтобы сравнивать «удельно/абсолютно»
+                # на одном уровне глаз и по одним и тем же датам на оси X.
+                _col_pl, _col_abs = st.columns(2)
+                with _col_pl:
+                    st.markdown("### Максимум удельной прибыли за день (₽/лот)")
+                    st.plotly_chart(plotly_dark_layout(_fig_bpl, 380),
+                                    use_container_width=True, key="risk_best_per_lot")
+                    st.caption("Лучшая ЗАКРЫТАЯ сделка дня по ₽ на лот (net PnL / объём). "
+                               "Пунктир — 75% от пика окна.")
+                with _col_abs:
+                    st.markdown("### Максимум прибыли за день, ₽")
+                    st.plotly_chart(plotly_dark_layout(_fig_bpn, 380),
+                                    use_container_width=True, key="risk_best_pnl_day")
+                    st.caption("Лучшая ЗАКРЫТАЯ сделка дня по абсолютному net PnL. "
+                               "Пунктир — 75% от пика окна.")
+
+                # ══ Ряд 2: лучший ЗАФИКСИРОВАННЫЙ пик за день (trades_db.daily_peak) ══
+                # Не «лучшая закрытая сделка», а максимум нереализованного floating,
+                # который сэмплер main.py (300 с) успел записать за день. Строка
+                # daily_peak = (день, категория symbol+family); на графике берём
+                # ЛУЧШУЮ категорию дня — она и есть «лучший пик по сделкам дня».
+                _pkdf = None  # ряд 2 (пики daily_peak) выключен: оставлены только два графика
+                if False: st.markdown("### Лучший зафиксированный пик за день (нереализованная прибыль)")  # ВЫКЛ: лишний третий график, оставлены только два в ряду
+                if _pkdf is None or getattr(_pkdf, 'empty', True):
+                    0 and st.caption("В daily_peak нет строк за окно. Таблицу наполняет сэмплер "
+                               "main.py (EQUITY_SAMPLE_INTERVAL_SEC = 300 с): если процесс "
+                               "не работал в этот период или окно пустое — показывать нечего.")
+                else:
+                    _pk = (_pkdf.loc[_pkdf.groupby('day')['peak_float'].idxmax()]
+                           .sort_values('day').reset_index(drop=True))
+                    _pk_days = list(pd.to_datetime(_pk['day']).dt.date)
+                    _pk_lab = [f"{_RU_MONTHS[_d.month - 1][:3]} {_d.day}" for _d in _pk_days]
+                    _fig_pk = go.Figure(go.Bar(
+                        x=_pk_lab, y=_pk['peak_float'],
+                        marker_color=[COL_GREEN_LT if _v >= 0 else COL_RED_LT
+                                      for _v in _pk['peak_float']],
+                        customdata=_pk[['category', 'peak_time',
+                                        'peak_volume', 'peak_per_lot']].values,
+                        hovertemplate=('<b>%{x}</b><br>пик floating: %{y:,.0f} ₽<br>'
+                                       '%{customdata[0]}<br>зафиксирован: %{customdata[1]}<br>'
+                                       'объём: %{customdata[2]:.2f} лот · '
+                                       '%{customdata[3]:,.0f} ₽/лот<extra></extra>'),
+                        name='пик floating за день'))
+                    _fig_pk.add_hline(y=0, line_color=COL_MUTED, line_width=1)
+                    _fig_pk.update_layout(yaxis_title='₽ (пик категории за день)')
+                    if False: st.plotly_chart(plotly_dark_layout(_fig_pk, 340),
+                                    use_container_width=True, key="risk_peak_float_day")
+                    _bpk = _pk.loc[_pk['peak_float'].idxmax()]
+                    st.caption(
+                        ("Столбик = МАКСИМАЛЬНЫЙ пик нереализованной прибыли, зафиксированный "
+                         "сэмплером за день, по категории «символ+семейство» (лучшая категория дня). "
+                         "Рекорд окна: {v:,.0f} ₽ — {cat}, {ts}, объём {vol:.2f} лот "
+                         "({pl:,.0f} ₽/лот). Шаг сэмплера 5 мин, поэтому фактический экстремум "
+                         "между замерами может быть выше. Нереализованная прибыль — не деньги "
+                         "на счету: позиции могли закрыться хуже пика.").format(
+                            v=float(_bpk['peak_float']), cat=_bpk['category'],
+                            ts=pd.to_datetime(_bpk['peak_time']).strftime('%d.%m %H:%M'),
+                            vol=float(_bpk['peak_volume'] or 0.0),
+                            pl=float(_bpk['peak_per_lot'] or 0.0)))
+                _unused_kw = dict(
+                                use_container_width=True, key="risk_best_pnl_day")
+                if False: st.caption("Точка = лучшая сделка дня по абсолютному net PnL (₽). "
+                           "Пунктир — 75% от пика за окно. Только закрытые сделки, "
+                           "окно — как у остальных блоков Risk.")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1907,9 +2431,7 @@ if False:  # 3D LANDSCAPE: вкладка убрана; код физическ�
 #  STRATEGY TREE
 # ═══════════════════════════════════════════════════════════════
 with tab_tree:
-    st.markdown("### Strategy Tree")
-    if days_back != ALLOC_DAYS:
-        st.info(f"⚠ Дерево построено по окну слайдера: {days_back} дн. Окно реальной перекладки объёма (Wheel / ночной пересчёт) — {ALLOC_DAYS} дн. (config) и от ползунка не зависит.")
+    # Заголовок «### Strategy Tree» убран: имя вкладки уже видно сверху — дубль не нужен.
 
     if not data:
         st.warning("No data.")
@@ -2017,8 +2539,18 @@ with tab_tree:
     # ── Объём: всего / средний недельный темп прироста (week-over-week) ──
     # Слева — суммарный объём за всё окно (закрытые позиции), справа — средний
     # недельный темп прироста объёма, %.
+    if 'volume' not in df_tree.columns:
+        # Без колонки объёма дерево не должно падать: объёмная ячейка покажет 0/—.
+        df_tree['volume'] = 0.0
     df_tree['volume'] = pd.to_numeric(df_tree['volume'], errors='coerce').fillna(0.0)
-    _ts_col = 'timestamp' if 'timestamp' in df_tree.columns else 'time'
+    if 'timestamp' in df_tree.columns:
+        _ts_col = 'timestamp'
+    elif 'time' in df_tree.columns:
+        _ts_col = 'time'
+    else:
+        # Ни одной метки времени — не падаем: недельный темп прироста будет 0.0%.
+        df_tree['time'] = pd.NaT
+        _ts_col = 'time'
     df_tree['_cdate'] = pd.to_datetime(df_tree[_ts_col], unit=('s' if _ts_col == 'time' else None)).dt.normalize()
 
     def _vol_cell(sub):
@@ -2116,6 +2648,46 @@ with tab_tree:
     pnls = [n['pnl'] for n in nodes]
     values = [n['size'] for n in nodes]
 
+    # ── Согласование площадей (иначе treemap валится и вкладка «не грузится») ──
+    # Plotly требует: значение родителя ≥ суммы значений детей. Площадь = |PnL|,
+    # а внутри семьи/символа плюсы и минусы гасят друг друга (дети +300 и −200
+    # при родителе +100), поэтому условие нарушалось и go.Treemap падал с
+    # ValueError «Parent value must be greater than or equal to sum of children
+    # values». Сначала согласуем СНИЗУ ВВЕРХ (родитель = Σ детей) — требование
+    # Plotly, затем пересчитываем СВЕРХУ ВНИЗ по |net PnL| (см. _alloc ниже).
+    _kids = {}
+    for _n in nodes:
+        _kids.setdefault(_n['parent'], []).append(_n['id'])
+    _by_id = {_n['id']: _n for _n in nodes}
+
+    def _fit_sizes(_nid):
+        _ch = _kids.get(_nid, [])
+        if not _ch:
+            return _by_id[_nid]['size']
+        _sum_ch = sum(_fit_sizes(_c) for _c in _ch)
+        _by_id[_nid]['size'] = _sum_ch
+        return _sum_ch
+
+    _fit_sizes('total')  # низ-вверх: parent = Σ детей (иначе Plotly ругается)
+    # ── Площади сверху вниз: пропорционально |ЧИСТОМУ PnL| внутри родителя ──
+    # _fit_sizes даёт семье площадь = Σ|PnL| её стратегий (валовый оборот в обе
+    # стороны), поэтому семья из многих мелких плюсов/минусов (+11k в итоге)
+    # выглядела крупнее семьи с реально большим итогом. Пересчитываем бюджет
+    # родителя на детей по весу |net PnL|: площадь узла ≈ модуль его итога,
+    # а parent = Σ детей сохраняется (требование branchvalues='total').
+    def _alloc(_nid, _budget):
+        _by_id[_nid]['size'] = _budget
+        _ch = _kids.get(_nid, [])
+        if not _ch:
+            return
+        _w = {_c: max(abs(float(_by_id[_c]['pnl'])), 1e-9) for _c in _ch}
+        _sw = sum(_w.values()) or 1.0
+        for _c in _ch:
+            _alloc(_c, _budget * _w[_c] / _sw)
+
+    _alloc('total', max(abs(total_pnl), 1.0))
+    values = [n['size'] for n in nodes]
+
     # Проверка: нет ли дубликатов ID
     if len(ids) != len(set(ids)):
         dupes = [x for x in ids if ids.count(x) > 1]
@@ -2147,13 +2719,76 @@ with tab_tree:
                 f'rgb({int(56 + 174 * _r)}, {int(22 + 50 * _r)}, {int(22 + 44 * _r)})'
             )
 
+    # ── Перевес по дереву: зелёные / красные категории (symbol + family) ──
+    # Считаем по РЕАЛЬНЫМ закрытым сделкам окна (то же, из чего строится treemap):
+    # PnL — сумма profit_net, объём — сумма volume (лоты закрытых сделок).
+    # В Daily Plan эти же метрики считаются по ОБЪЁМУ ПЛАНА (лоты), здесь — по факту.
+    _tcat = (df_tree.groupby(['symbol', 'strategy_type'])
+             .agg(pnl=('profit_net', 'sum'), lots=('volume', 'sum'))
+             .reset_index())
+    _t_tot = float(_tcat['lots'].sum())
+    _t_g_pnl = float(_tcat.loc[_tcat['pnl'] > 0, 'pnl'].sum())
+    _t_r_pnl = float(_tcat.loc[_tcat['pnl'] < 0, 'pnl'].sum())
+    _t_g_lot = float(_tcat.loc[_tcat['pnl'] > 0, 'lots'].sum())
+    _t_r_lot = float(_tcat.loc[_tcat['pnl'] < 0, 'lots'].sum())
+    _t_g_n = int((_tcat['pnl'] > 0).sum())
+    _t_r_n = int((_tcat['pnl'] < 0).sum())
+    _t_bal = _t_g_pnl + _t_r_pnl
+    _t_r_pct = (100.0 * _t_r_lot / _t_tot) if _t_tot > 0 else None
+    # Четыре карточки в РЯД. st.metric не умеет красить значение (только дельту),
+    # поэтому ниже metric_card: он красит цифру по знаку и держит min-height.
+    # Рендер строго внутри with _tN: иначе карточки падают на уровень контейнера
+    # и встают в столбец во всю ширину — ровно это и было видно.
+    # Сколько плиток реально на карте: семьи (rf, percentile, pinbar…) и листья
+    # (стратегии param_key + бакеты Others). Считаем по тем же nodes, из которых
+    # строится treemap, поэтому цифра совпадает с числом блоков на карте.
+    _n_fam = sum(1 for _n in nodes if _n['parent'] == 'total')
+    _n_sym = sum(1 for _n in nodes if str(_n['parent']).startswith('fam_'))
+    _n_leaf = sum(1 for _n in nodes if not _kids.get(_n['id']))
+
+    _t1, _t2, _t3, _t4 = st.columns(4)
+    with _t1:
+        metric_card("Зелёные", f"{_t_g_pnl:+,.0f} ₽".replace(',', ' '),
+                    color=COL_GREEN_LT,
+                    sub=f"{_t_g_lot:.2f} лот. · {_t_g_n} кат.")
+
+    with _t2:
+        metric_card("Красные", f"{_t_r_pnl:+,.0f} ₽".replace(',', ' ').replace('-', '−'),
+                    color=COL_RED_LT,
+                    sub=f"{_t_r_lot:.2f} лот. · {_t_r_n} кат.")
+    with _t3:
+        metric_card("Перевес", f"{_t_bal:+,.0f} ₽".replace(',', ' ').replace('-', '−'),
+                    color=(COL_GREEN_LT if _t_bal >= 0 else COL_RED_LT),
+                    sub=(f"{_t_r_pct:.0f}% объёма у красных" if _t_r_pct is not None
+                         else "зелёные + красные"))
+    with _t4:
+        metric_card("Стратегий на карте", f"{_n_fam}",
+                    color=COL_BLUE,
+                    sub=f"{_n_sym} симв. · {_n_leaf} плиток")
+    st.markdown("<div style='height:0.4rem;'></div>",
+                 unsafe_allow_html=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # CSS .st-key-tree_metrics больше не нужен — цвет задаёт metric_card.
+
     # ── Treemap ────────────────────────────────────────────────
     fig_tree = go.Figure(go.Treemap(
         ids=ids,
         parents=parents,
         labels=labels,
         values=values,
-        branchvalues='remainder',
+        branchvalues='total',  # родитель = Σ детей (см. _fit_sizes/_alloc): 'remainder' падал
         maxdepth=4,
         textinfo='label',
         textfont=dict(size=12, color=COL_TEXT),
@@ -2173,8 +2808,16 @@ with tab_tree:
         font=dict(color=COL_TEXT, size=12),
     )
 
-    # ИСПРАВЛЕНО: use_container_width -> width='stretch'
-    st.plotly_chart(fig_tree, width='stretch', key="strategy_tree")
+    # Откат: width='stretch' → use_container_width (как во всех графиках файла).
+    # Если treemap всё же не отрисуется — вкладка не должна оставаться пустой:
+    # показываем ту же иерархию таблицей (id/parent/|PnL|), чтобы данные были видны.
+    try:
+        st.plotly_chart(fig_tree, use_container_width=True, key="strategy_tree")
+    except Exception as _e_tree:
+        st.error(f"⚠ Treemap не отрисовался: {_e_tree!r}")
+        st.dataframe(pd.DataFrame({'id': ids, 'parent': parents, 'label': labels,
+                                   'size': values, 'pnl': pnls}),
+                     use_container_width=True, hide_index=True)
 
     with st.expander("Reading the Tree — что означают записи", expanded=False):
         st.markdown(
@@ -2193,7 +2836,9 @@ with tab_tree:
 - **±PnL** — чистый реализованный PnL (₽) за окно. `+` прибыль, `−` убыток. Это **реальные закрытые сделки** из журнала (не бэктест).
 - **часть после «·»** — объёмная ячейка `ВСЕГО/±%` (разбор ниже).
 
-**Площадь узла** = |PnL|. Больше площадь = больше модуль прибыли/убытка, **не** больше объём.
+**Площадь узла** = |чистый PnL| узла в долях родителя. Сравнивать площади между собой
+можно только внутри одного родителя (семьи/символа): там дети делят его бюджет
+пропорционально |PnL|. Больше площадь = больше модуль прибыли/убытка, **не** больше объём.
 
 **Цвет** — градиент по PnL, не бинарный «зелёный/красный»:
 - тёмно‑зелёный → ярко‑зелёный: чем больше прибыль (ярче = дальше от нуля);
@@ -2227,7 +2872,9 @@ with tab_tree:
         | Symbol | Family x symbol |
         | Strategy | Top‑3 param_key by PnL + "Others" bucket |
 
-        **Size** — |PnL| (node area). **Color** — PnL gradient: green = profit, red = loss.
+        **Size** — |net PnL| узла: доля родителя пропорциональна |PnL| ребёнка
+        (сравнивать площади корректно внутри одной семьи/символа).
+        **Color** — PnL gradient: green = profit, red = loss.
         **Volume** — после «·»: `total/±%` — суммарный объём за всё окно и
         средний недельный темп прироста объёма (week-over-week, напр. `12.5/+3.2%`).
         Количество сделок убрано — объём сверяем со штурвалом (Wheel).
