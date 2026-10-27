@@ -36,6 +36,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 # ═══ НАСТРОЙКИ (поправь под боевую машину) ═══════════════════════════════════
@@ -54,6 +55,29 @@ PY_FILES_MUST_COMPILE = ('main.py', 'functions.py', 'dashboard.py', 'config.py',
                          'trades_db.py', 'trade_log.py', 'backtest_job.py',
                          'peak_trim.py', 'tactic_tilt.py', 'wheel.py',
                          'strategy_engine.py', 'risk_manager.py', 'daily_report.py')
+
+# ═══ ОКНО БЕЗОПАСНОГО РЕСТАРТА ═══
+# Бот опрашивает рынок раз в poll_interval (5 с) и принимает решения по ЗАКРЫТИЮ
+# баров M5, то есть в :00, :05, :10 ... каждой пятиминутки. Позиции и их SL/TP
+# живут на сервере брокера, рестарт их не трогает, но трейл, kill switch и вход
+# по новому бару делает процесс: если taskkill попадёт на закрытие бара, этот
+# бар будет пропущен. Поэтому рестарт ставим в СЕРЕДИНУ бара: если до закрытия
+# осталось меньше BAR_RESTART_GUARD_SEC - ждём середину следующего бара.
+BAR_SECONDS = 300            # шаг сигнального таймфрейма (M5 = 300 с)
+BAR_RESTART_GUARD_SEC = 90   # минимальный запас до закрытия бара
+
+
+def wait_for_quiet_window():
+    """Сдвигает рестарт в середину M5-бара. Возвращает, сколько секунд ждали."""
+    now = time.time()
+    to_close = BAR_SECONDS - (now % BAR_SECONDS)   # секунд до закрытия текущего бара
+    if to_close > BAR_RESTART_GUARD_SEC:
+        return 0.0
+    wait = to_close + BAR_SECONDS / 2.0            # ближайшая середина бара
+    log(f"рестарт отложен на {wait:.0f} с: до закрытия M5-бара {to_close:.0f} с "
+        f"(порог {BAR_RESTART_GUARD_SEC} с) — чтобы не пропустить вход по бару")
+    time.sleep(wait)
+    return wait
 # Маркеры «идёт полный пересчёт» в journals/run.log.
 RECALC_START = ('Фоновый ПОЛНЫЙ пересчёт поставлен', '🚀 ПОЛНЫЙ пересчёт поставлен')
 RECALC_DONE = ('Фоновый ПОЛНЫЙ пересчёт завершён', '✅ Полный пересчёт завершён')
@@ -335,6 +359,10 @@ def main():
         log(rec['note'])
         write_status(rec, quiet)
         return 0
+    _waited = wait_for_quiet_window()
+    if _waited:
+        rec['note'] = ((rec['note'] + ' · ') if rec['note'] else '') + \
+                      f'рестарт сдвинут на {_waited:.0f} с (закрытие бара M5)'
     if not stop_bot():
         rec.update(ok=False, error='не удалось остановить main.py')
         log(rec['error'])

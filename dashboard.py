@@ -3391,7 +3391,7 @@ if False:  # PIPELINE: вкладка убрана; код физически у
 #  BACKTEST
 # ═══════════════════════════════════════════════════════════════
 with tab_backtest:
-    st.markdown("### Бэктест - график пересчета")
+    st.markdown("### Бэктест — дата, объём и длительность пересчётов")
 
     # Читаем журнал напрямую (без st.cache_data), чтобы данные не «залипали».
     _bt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3417,6 +3417,144 @@ with tab_backtest:
         st.caption("В журнале строк: " + ", ".join(
             f"{_k}: {int(_v)}" for _k, _v in _bt_kinds_all.items())
             + f" | файл: {_bt_path}")
+
+    # ── Источник: где лежит журнал и насколько он свежий (видно ВСЕГДА) ──
+    _bt_ck_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'checkpoints')
+    _bt_marker_path = os.path.join(_bt_ck_dir, 'last_full_recalc.json')
+    _bt_exists = os.path.isfile(_bt_path)
+    if _bt_exists:
+        _bt_mtime = datetime.fromtimestamp(os.path.getmtime(_bt_path))
+        st.caption("Источник: " + _bt_path
+                   + f" | {os.path.getsize(_bt_path):,}".replace(',', ' ') + " байт"
+                   + " | обновлён " + _bt_mtime.strftime('%d.%m.%Y %H:%M'))
+    else:
+        st.error("Журнал прогонов не найден: " + _bt_path)
+
+    # Маркер последнего полного пересчёта (его пишет functions.py на боевой машине).
+    _bt_marker_ts = None
+    try:
+        with open(_bt_marker_path, 'r', encoding='utf-8') as _bt_mf:
+            _bt_marker_ts = (json.load(_bt_mf) or {}).get('last_full_recalc')
+    except (OSError, ValueError, TypeError, AttributeError):
+        _bt_marker_ts = None
+
+    def _bt_parse_ts(_v):
+        """ISO-строка → datetime (None, если пусто или битая)."""
+        try:
+            return datetime.fromisoformat(str(_v)) if _v else None
+        except (ValueError, TypeError):
+            return None
+
+    def _bt_ago(_ts):
+        """Давность по-человечески: '13 мин назад', '1 ч 07 мин назад', '2 дн назад'."""
+        if _ts is None:
+            return '—'
+        _mins = int((datetime.now() - _ts).total_seconds() // 60)
+        if _mins < 1:
+            return 'только что'
+        if _mins < 60:
+            return f'{_mins} мин назад'
+        if _mins < 60 * 24:
+            return f'{_mins // 60} ч {_mins % 60:02d} мин назад'
+        return f'{_mins // 1440} дн назад'
+
+    def _bt_ru(_n):
+        """Число с пробелами между тысячами: 60543 → '60 543'."""
+        try:
+            return f"{int(_n):,}".replace(',', ' ')
+        except (TypeError, ValueError):
+            return '—'
+
+    # Полные прогоны (сырые dict — pandas нужен только для графика и лога ниже).
+    _bt_full_raw = [r for r in _bt_rows
+                    if r.get('kind', 'full') == 'full' and _bt_parse_ts(r.get('ts'))]
+    _bt_full_raw.sort(key=lambda r: _bt_parse_ts(r.get('ts')))
+    _bt_last_raw = _bt_full_raw[-1] if _bt_full_raw else None
+    _bt_last_dt = _bt_parse_ts(_bt_last_raw.get('ts')) if _bt_last_raw else None
+    _bt_marker_dt = _bt_parse_ts(_bt_marker_ts)
+
+    # ── Шапка: ДАТА последнего полного пересчёта и объём обсчёта ──
+    _bt_head_ts = _bt_last_dt or _bt_marker_dt
+    _bt_head_n = _bt_head_sym = _bt_head_res = 0
+    _bt_head_el = 0.0
+    if _bt_last_raw:
+        _bt_head_n = int(_bt_last_raw.get('combos_done')
+                         or _bt_last_raw.get('combos') or 0)
+        _bt_head_sym = int(_bt_last_raw.get('symbols') or 0)
+        _bt_head_res = int(_bt_last_raw.get('results') or 0)
+        _bt_head_el = float(_bt_last_raw.get('elapsed_sec') or 0.0)
+    if _bt_head_ts is not None:
+        st.markdown(
+            f"<div style='margin:0.1rem 0 0.5rem 0;line-height:1.5;'>"
+            f"<span style='font-size:1.05rem;color:{COL_GREEN_LT};font-weight:600;'>"
+            f"Последний полный пересчёт: {_bt_head_ts.strftime('%d.%m.%Y %H:%M')}</span>"
+            f"<span style='color:{COL_MUTED};'> · {_bt_ago(_bt_head_ts)}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if _bt_last_raw:
+            _bt_k1, _bt_k2, _bt_k3, _bt_k4 = st.columns(4)
+            with _bt_k1:
+                st.metric("Комбинаций пересчитано", _bt_ru(_bt_head_n))
+            with _bt_k2:
+                st.metric("Символов", _bt_head_sym if _bt_head_sym else '—')
+            with _bt_k3:
+                st.metric("Длительность, мин",
+                          f"{_bt_head_el / 60.0:.1f}" if _bt_head_el else '—')
+            with _bt_k4:
+                st.metric("Стратегий в пуле", _bt_ru(_bt_head_res))
+        else:
+            st.caption("Объём и длительность появятся, когда журнал прогонов "
+                       "синхронизируется с боевой машиной: "
+                       "`python sync_journals_from_network.py`.")
+        if _bt_marker_dt and _bt_last_dt is None:
+            st.warning("Маркер last_full_recalc.json есть ("
+                       + _bt_marker_dt.strftime('%d.%m.%Y %H:%M')
+                       + "), а полных записей в журнале прогонов нет — журнал отстал. "
+                         "Синхронизировать: `python sync_journals_from_network.py`.")
+        elif (_bt_marker_dt and _bt_last_dt
+              and abs((_bt_marker_dt - _bt_last_dt).total_seconds()) > 300):
+            st.warning("Маркер last_full_recalc.json ("
+                       + _bt_marker_dt.strftime('%d.%m.%Y %H:%M')
+                       + ") расходится с журналом прогонов ("
+                       + _bt_last_dt.strftime('%d.%m.%Y %H:%M')
+                       + ") — журналы не синхронизированы с боевой машиной: "
+                         "`python sync_journals_from_network.py`.")
+
+    # ── Чекпойнты по символам: физический объём обсчёта на диске ──
+    _BT_CK_SKIP = {'last_full_recalc.json', 'last_run.json', 'night_reset.json',
+                   'tactic_tilt.json', 'deploy_status.json', 'backtest_history.jsonl'}
+    _bt_per_sym = (int(round(_bt_head_n / _bt_head_sym))
+                   if _bt_head_n and _bt_head_sym else None)
+    _bt_ck_rows = []
+    try:
+        _bt_ck_names = sorted(os.listdir(_bt_ck_dir))
+    except OSError:
+        _bt_ck_names = []
+    for _bt_fn in _bt_ck_names:
+        if not _bt_fn.endswith('.json') or _bt_fn in _BT_CK_SKIP:
+            continue
+        _bt_fp = os.path.join(_bt_ck_dir, _bt_fn)
+        try:
+            _bt_stt = os.stat(_bt_fp)
+        except OSError:
+            continue
+        _bt_ck_mtime = datetime.fromtimestamp(_bt_stt.st_mtime)
+        _bt_ck_rows.append({
+            'Символ': _bt_fn[:-5],
+            'Комбинаций (≈)': _bt_per_sym if _bt_per_sym else '—',
+            'Чекпойнт, МБ': round(_bt_stt.st_size / (1024 * 1024), 1),
+            'Пересчитан': _bt_ck_mtime.strftime('%d.%m.%Y %H:%M'),
+            'Давность': _bt_ago(_bt_ck_mtime),
+        })
+    if _bt_ck_rows:
+        st.markdown("#### Чекпойнты по символам")
+        st.dataframe(pd.DataFrame(_bt_ck_rows), use_container_width=True, hide_index=True)
+        st.caption("«Чекпойнт, МБ» — размер файла корзины по символу: это и есть объём "
+                   "обсчёта на диске. «Комбинаций (≈)» — из последнего прогона "
+                   "(всего ÷ символов), по символам корзина одинаковая.")
+    elif _bt_rows:
+        st.caption("Чекпойнтов по символам нет в " + _bt_ck_dir)
 
     if not _bt_rows:
         st.info("Журнал прогонов пуст — появится после первого бэктеста "
@@ -3641,14 +3779,19 @@ with tab_backtest:
                    "«Символы» — сколько символов пересчитано заново. «В корзине» — символов всего (пересчёт + чекпойнты). «Пропущ.» — символов взято из чекпоинтов. "
                    "«В пуле» — сколько стратегий в пуле результатов после мержа/дедупа. "
                    "Ночи без счёта вкладка не показывает.")
-        _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%Y-%m-%d %H:%M')
+        st.markdown("#### Журнал прогонов")
+        _bt_log['Дата/время'] = _bt_log['ts'].dt.strftime('%d.%m.%Y %H:%M')
+        _bt_log['Прошло'] = _bt_log['ts'].apply(
+            lambda _t: _bt_ago(_t.to_pydatetime()) if pd.notna(_t) else '—')
         _bt_log['Тип'] = _bt_log['kind'].map({'full': 'Полный'})
                                               # (инкремент удалён: остаётся только полный пересчёт)
         _bt_log['Длительность (мин)'] = _bt_log['minutes'].round(1)
         # Скорость режима: фактически посчитанные комбинации в секунду.
         _bt_log['Комб/с'] = (_bt_log['done'] / _bt_log['elapsed_sec'].replace(0, np.nan)).round(2)
         def _bt_fmt(v):
-            return int(v) if pd.notna(v) else '—'
+            if not pd.notna(v):
+                return '—'
+            return f"{int(v):,}".replace(',', ' ')
         _bt_log['Считано'] = _bt_log['done'].apply(_bt_fmt)
         _bt_log['План'] = _bt_log['plan'].apply(_bt_fmt)
         _bt_log['Символы'] = _bt_log['symbols'].apply(_bt_fmt)
@@ -3657,7 +3800,7 @@ with tab_backtest:
         _bt_log['В пуле'] = _bt_log['results'].apply(_bt_fmt)
 
         st.dataframe(
-            _bt_log[['Дата/время', 'Тип', 'Длительность (мин)', 'Комб/с',
+            _bt_log[['Дата/время', 'Прошло', 'Тип', 'Длительность (мин)', 'Комб/с',
                      'Считано', 'План', 'Символы', 'В корзине', 'Пропущ.', 'В пуле']],
             use_container_width=True, hide_index=True,
         )
