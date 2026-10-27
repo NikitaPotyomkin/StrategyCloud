@@ -529,11 +529,13 @@ def deploy_badge():
     if _err:
         _bits.append(_err[:140])
 
+    _detail = ' · '.join(_bits)
     st.markdown(
-        f"<div style='margin:0 0 0.9rem 0;font-size:0.78rem;color:{COL_MUTED};'>"
-        f"<span style='color:{_color};font-weight:600;'>📦 деплой</span>"
-        f" &nbsp;{_when} &nbsp;·&nbsp; <span style='color:{_color};'>{_state}</span>"
-        + ''.join(f" &nbsp;·&nbsp; {b}" for b in _bits)
+        f"<div style='margin:0.35rem 0 0.7rem 0;font-size:0.75rem;line-height:1.45;'>"
+        f"<span style='color:{_color};font-weight:600;'>📦 {_state}</span>"
+        f"<br><span style='color:{COL_MUTED};'>{_when}</span>"
+                + (f"<br><span style='color:{COL_MUTED};'>{_detail}</span>" if _detail else '')
+        # старое: одна строка с разделителями — в сайдбар не влезала
         + "</div>",
         unsafe_allow_html=True,
     )
@@ -544,6 +546,9 @@ with st.sidebar:
     days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, ALLOC_DAYS)
 
     st.caption("Auto-refresh: 30s")
+
+    # Последний автодеплой на боевой машине (checkpoints/deploy_status.json).
+    deploy_badge()
 
 
 
