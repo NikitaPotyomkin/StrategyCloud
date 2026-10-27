@@ -11,10 +11,10 @@ sync_journals_from_network.py, который ЖУРНАЛЫ СЛИВАЕТ, а 
                       оранжевым: молчаливого «ничего не было» больше нет.
 Реранк по чекпойнтам (kind='none') в файл не пишется вовсе.
 
-Порядок на вкладке: дата последнего пересчёта → две цифры (сколько прогонов и
-средняя длительность) → график → таблица прогонов.
-Таблица и цифры рисуются своим HTML, а не st.dataframe/st.metric: у dataframe
-текст в canvas, размер шрифта там не увеличить никаким CSS.
+Порядок на вкладке: дата последнего пересчёта → ряд цифр последнего прогона
+(комбинаций пересчитано, символов, длительность, стратегий в пуле) → график →
+таблица прогонов. Таблица и цифры рисуются своим HTML, а не st.dataframe/st.metric:
+у dataframe текст в canvas, размер шрифта там не увеличить никаким CSS.
 """
 import json
 import os
@@ -63,11 +63,14 @@ TABLE_CSS = """
 .bt-table th.num { text-align: right; }
 .bt-table tr:hover td { background: #1D293D; }
 .bt-table td.bad { color: #D29922; }
-.bt-stats { display: flex; gap: 34px; margin: 0.1rem 0 0.8rem 0; }
-.bt-stats .lbl { color: #8B949E; font-size: 1.02rem; }
-.bt-stats .val { color: #C9D1D9; font-size: 1.65rem; font-weight: 700;
-                 font-variant-numeric: tabular-nums; }
+.bt-stats { display: flex; flex-wrap: wrap; align-items: flex-end;
+            gap: 38px; margin: 0.2rem 0 1.0rem 0; }
+.bt-stats .lbl { color: #8B949E; font-size: 1.05rem; white-space: nowrap; }
+.bt-stats .val { color: #C9D1D9; font-size: 1.9rem; font-weight: 700;
+                 line-height: 1.15; font-variant-numeric: tabular-nums;
+                 white-space: nowrap; }
 .bt-stats .val.bad { color: #D29922; }
+.bt-stats .lbl.hint { cursor: help; border-bottom: 1px dotted #30363D; }
 </style>
 """
 
@@ -155,30 +158,57 @@ def _runs_frame():
     return df.sort_values('ts', ascending=False)
 
 
+def _cell(label, value, cls='val', hint=''):
+    """Одна ячейка ряда: подпись сверху, число снизу."""
+    lbl_cls = 'lbl hint' if hint else 'lbl'
+    title = f" title='{hint}'" if hint else ''
+    return (f"<div><div class='{lbl_cls}'{title}>{label}</div>"
+            f"<div class='{cls}'>{value}</div></div>")
+
+
 def _stats_html(df):
-    """Цифры над графиком: сколько было пересчётов и средняя длительность."""
+    """Ряд цифр над графиком — всё за ОДИН ряд, без повторов.
+
+    Комбинаций пересчитано / Символов / Длительность, мин / Стратегий в пуле —
+    цифры последнего ПОЛНОГО прогона (если полных ещё нет — последнего неполного,
+    тогда они оранжевые). Средняя длительность не отдельным лейблом, а подсказкой
+    на лейбле «Длительность, мин»: иначе на вкладке три раза одно и то же число.
+    Пустой журнал — тот же ряд с прочерками, чтобы вёрстка была видна сразу.
+    """
+    if df.empty:
+        return (TABLE_CSS + "<div class='bt-stats'>"
+                + _cell('Комбинаций пересчитано', '—')
+                + _cell('Символов', '—')
+                + _cell('Длительность, мин', '—')
+                + _cell('Стратегий в пуле', '—')
+                + "</div>")
+
     full = df[df['is_full']]
     n_full = int(len(full))
     n_bad = int(len(df) - n_full)
     avg_min = full['minutes'].mean() if n_full else float('nan')
-    html = (
-        TABLE_CSS
-        + "<div class='bt-stats'>"
-        + f"<div><div class='lbl'>Пересчётов</div>"
-          f"<div class='val'>{n_full}</div></div>"
-        + f"<div><div class='lbl'>Средняя длительность, мин</div>"
-          f"<div class='val'>{_f(avg_min, 1)}</div></div>"
-    )
+    row = full.iloc[0] if not full.empty else df.iloc[0]
+    bad = not bool(row['is_full'])
+    vcls = 'val bad' if bad else 'val'
+    # Старые строки журнала могут не иметь symbols — берём symbols_total.
+    sym = row['symbols'] if pd.notna(row['symbols']) else row['symbols_total']
+    hint = (f"Средняя по {n_full} полным прогонам: {_f(avg_min, 1)} мин"
+            if n_full else "Полных прогонов ещё не было")
+    html = (TABLE_CSS + "<div class='bt-stats'>"
+            + _cell('Комбинаций пересчитано', _ru(row['done']), vcls)
+            + _cell('Символов', _ru(sym), vcls)
+            + _cell('Длительность, мин', _f(row['minutes'], 1), vcls, hint=hint)
+            + _cell('Стратегий в пуле', _ru(row['results']), vcls)
+            + _cell('Пересчётов', n_full))
     if n_bad:
-        html += (f"<div><div class='lbl'>Неполных (не зачтены)</div>"
-                 f"<div class='val bad'>{n_bad}</div></div>")
+        html += _cell('Неполных (не зачтены)', n_bad, 'val bad')
     return html + "</div>"
 
 
 def _runs_html(df):
     """Таблица прогонов: дата, длительность, скорость, объём, покрытие."""
     head = ('Дата/время', 'Длительность, мин', 'Комб/с', 'Считано', 'План',
-            'Покрытие, %', 'Символов', 'В пуле')
+            'Покрытие, %', 'Символов', 'Стратегий в пуле')
     rows = []
     for _, r in df.iterrows():
         cover_cls = 'num' if r['is_full'] else 'num bad'
@@ -223,7 +253,7 @@ def _chart(df):
                 'Считано: %{customdata[0]} из %{customdata[1]}<br>'
                 'Покрытие: %{customdata[2]:.1f}%<br>'
                 'Символов: %{customdata[3]}<br>'
-                'В пуле: %{customdata[4]}<extra></extra>'
+                'Стратегий в пуле: %{customdata[4]}<extra></extra>'
             ),
         ))
     # Легенда нужна только когда на графике есть оба вида точек.
@@ -246,7 +276,7 @@ def _chart(df):
 
 
 def render_backtest_tab():
-    """Вся вкладка Backtest: дата, цифры, график, таблица."""
+    """Вся вкладка Backtest: дата, ряд цифр, график, таблица."""
     st.markdown(f"<div style='font-size:1.9rem;font-weight:700;"
                 f"color:{COL_TEXT};margin:0 0 0.2rem 0;'>Бэктест пересчётов</div>",
                 unsafe_allow_html=True)
@@ -277,13 +307,13 @@ def render_backtest_tab():
                        f"данные не синхронизированы: "
                        f"`python sync_journals_from_network.py`")
 
-    if df.empty:
-        st.info("Полных прогонов пока нет — появятся после ближайшего полного "
-                "пересчёта (checkpoints/backtest_history.jsonl).")
-        return
-
-    # ── Цифры: сколько пересчётов и средняя длительность ──
+    # ── Ряд цифр последнего пересчёта (одна строка, без повторов) ──
     st.markdown(_stats_html(df), unsafe_allow_html=True)
+
+    if df.empty:
+        st.info("Полных прогонов пока нет — цифры заполнятся после ближайшего "
+                "полного пересчёта (checkpoints/backtest_history.jsonl).")
+        return
 
     # ── График, под ним таблица ──
     if PLOTLY_AVAILABLE:
