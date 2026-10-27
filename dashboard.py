@@ -270,6 +270,29 @@ def make_gradient_colors(values, positive_hex='#2EA043', negative_hex='#DA3633')
     return colors
 
 
+def _pk_y_range(series, lines):
+    """Диапазон оси Y для графиков пиков: покрывает ТОЧКИ и все горизонтальные линии.
+
+    Зачем: add_hline в plotly не участвует в автомасштабе оси. Если значение линии
+    выходит за пределы данных (пик окна ниже линии, или в данных есть гигантский
+    выброс), линия оказывается за краем видимой области и «прилипает» к низу
+    графика — выглядит как непересчитанный порог. Поэтому диапазон задаём явно:
+    min/max по точкам и линиям + 6% запаса снизу и 12% сверху.
+    """
+    vals = pd.to_numeric(pd.Series(list(series)), errors='coerce')
+    vals = vals[np.isfinite(vals)]
+    cand = [float(v) for v in list(lines) if v is not None and np.isfinite(float(v))]
+    if not vals.empty:
+        cand += [float(vals.min()), float(vals.max())]
+    if not cand:
+        return None
+    lo, hi = min(cand), max(cand)
+    if hi <= lo:
+        hi = lo + 1.0
+    span = hi - lo
+    return [lo - span * 0.06, hi + span * 0.12]
+
+
 def plotly_dark_layout(fig, height=400):
     """Применяет тёмную институциональную тему к plotly-фигуре."""
     fig.update_layout(
@@ -1822,8 +1845,8 @@ with tab_risk:
             ))
             _col_pnl.plotly_chart(plotly_dark_layout(_fig_ccy, 480), use_container_width=True,
                                   key="risk_pnl_by_currency")
-            _col_pnl.caption(f"Realized P&L of closed positions in window | % base = Σ|P&L| = "
-                               f"{_abs_total:,.0f} ₽ (+ and − do not cancel) | slice = |P&L|")
+            # caption под пирогом убран: числа уже в подписях слайсов и в hover
+ 
         else:
             _col_pnl.info("No closed positions with non-zero P&L in the window.")
 
@@ -1861,8 +1884,8 @@ with tab_risk:
             _col_lots.plotly_chart(plotly_dark_layout(_fig_lots, 480),
                                    use_container_width=True,
                                    key="risk_volume_by_currency")
-            _col_lots.caption(f"Volume of closed positions in window | "
-                              f"total {_lots_total:.2f} lots")
+            # caption под пирогом убран: числа уже в подписях слайсов и в hover
+ 
         else:
             _col_lots.info("No closed volume in the window.")
 
@@ -1911,8 +1934,8 @@ with tab_risk:
             _col_wd_pnl.plotly_chart(plotly_dark_layout(_fig_wd, 480),
                                      use_container_width=True,
                                      key="risk_pnl_by_weekday")
-            _col_wd_pnl.caption(f"Closed positions by exit day | % base = Σ|P&L| = "
-                                f"{_wd_abs:,.0f} ₽ (+ and − do not cancel)")
+            # caption под пирогом убран: числа уже в подписях слайсов и в hover
+ 
         else:
             _col_wd_pnl.info("No closed positions in the window.")
         if _wl_values and _wd_lots_total > 0:
@@ -1928,7 +1951,7 @@ with tab_risk:
             _col_wd_lots.plotly_chart(plotly_dark_layout(_fig_wdl, 480),
                                       use_container_width=True,
                                       key="risk_volume_by_weekday")
-            _col_wd_lots.caption(f"Volume of closed positions | total {_wd_lots_total:.2f} lots")
+            # caption под пирогом убран: числа уже в подписях слайсов и в hover
         else:
             _col_wd_lots.info("No closed volume in the window.")
 
@@ -1979,7 +2002,9 @@ with tab_risk:
             _pk_pl = (_pkdf.loc[_pkdf.groupby('day')['peak_float'].idxmax()]
                       .sort_values('day').reset_index(drop=True))
             # Удельная величина = тот же пик прибыли / объём этой же сделки
-            _per_lot_day = _pk_pl['peak_per_lot']
+            _per_lot_day = pd.to_numeric(_pk_pl['peak_per_lot'], errors='coerce')
+            # NaN/inf в пиках ломают и максимум, и автомасштаб оси — выкидываем.
+            _per_lot_day = _per_lot_day.where(np.isfinite(_per_lot_day))
             _pk_abs = (_pk_pl  # те же события дня: слева в ₽/лот, справа в ₽
                        .sort_values('day').reset_index(drop=True))
 
@@ -2000,13 +2025,15 @@ with tab_risk:
                 hovertemplate=(_hov + 'пик ₽/лот: %{y:,.0f}<br>'
                                'пик прибыли: %{customdata[4]:,.0f} ₽<extra></extra>'),
                 name='макс ₽/лот за день'))
-            _peak_pl = float(_per_lot_day.max())
+            _peak_pl = float(_per_lot_day.max()) if _per_lot_day.notna().any() else 0.0
             _lvl_pl = _peak_pl * 0.75
             _fig_pkpl.add_hline(y=_lvl_pl, line_dash='dash', line_color=COL_GREEN_LT,
-                                annotation_text=(f"75% от пика {_peak_pl:,.0f} = {_lvl_pl:,.0f} ₽/лот".replace(',', ' ')),
+                                annotation_text=(f"порог 75% = {_lvl_pl:,.0f} ₽/лот (пик окна {_peak_pl:,.0f})".replace(',', ' ')),
                                 annotation_position='top left')
             _fig_pkpl.add_hline(y=0, line_color=COL_MUTED, line_width=1)
             _fig_pkpl.update_layout(xaxis_title='', yaxis_title='₽ на лот (пик дня)')
+            # Ось — явно (точки + линия 75% + нуль), чтобы порог не уезжал за край.
+            _fig_pkpl.update_yaxes(range=_pk_y_range(_per_lot_day, [_lvl_pl, 0.0]))
 
             _fig_pkabs = go.Figure()
             _fig_pkabs.add_trace(go.Scatter(
@@ -2017,41 +2044,31 @@ with tab_risk:
                 hovertemplate=(_hov + 'пик прибыли: %{y:,.0f} ₽<br>'
                                'удельно в пике: %{customdata[4]:,.0f} ₽/лот<extra></extra>'),
                 name='макс прибыль за день, ₽'))
-            _peak_abs = float(_pk_abs['peak_float'].max())
+            _abs_vals = _pk_abs['peak_float']
+            _abs_vals = _abs_vals.where(np.isfinite(_abs_vals))
+            _peak_abs = float(_abs_vals.max()) if _abs_vals.notna().any() else 0.0
+            # 75% от пика ОКНА (тот же порог, что на графике выше)
             _lvl_abs = _peak_abs * 0.75
             _fig_pkabs.add_hline(y=_lvl_abs, line_dash='dash', line_color=COL_GREEN_LT,
-                                 annotation_text=(f"75% от пика {_peak_abs:,.0f} = {_lvl_abs:,.0f} ₽".replace(',', ' ')),
+                                 annotation_text=(f"порог 75% = {_lvl_abs:,.0f} ₽ (пик окна {_peak_abs:,.0f})".replace(',', ' ')),
                                  annotation_position='top left')
             _fig_pkabs.add_hline(y=0, line_color=COL_MUTED, line_width=1)
             _fig_pkabs.update_layout(xaxis_title='', yaxis_title='₽ (пик дня)')
+            # Ось — явно (точки + линия 75% + нуль), чтобы порог не уезжал за край.
+            _fig_pkabs.update_yaxes(range=_pk_y_range(_abs_vals, [_lvl_abs, 0.0]))
 
             _col_pl, _col_abs = st.columns(2)
             with _col_pl:
                 st.markdown("### Максимум нереализованной прибыли за день (₽/лот, по сделке)")
                 st.plotly_chart(plotly_dark_layout(_fig_pkpl, 380),
                                 use_container_width=True, key="risk_peak_per_lot_day")
-                _rec_pl = _pk_pl.loc[_per_lot_day.idxmax()]
-                st.caption(
-                    "Точка = МАКСИМУМ floating-прибыли на лот по ОДНОЙ сделке (позиции), "
-                    "засечённый за день; "
-                    "(та же сделка, что и на правом графике). Шаг сэмплера 5 мин — "
-                    "фактический внутриминутный пик мог быть выше. Нереализованная прибыль — "
-                    "не деньги на счету: позиция могла закрыться хуже пика. Рекорд окна: "
-                    + f"{_peak_pl:,.0f} ₽/лот — {_rec_pl['category']} "
-                      f"#{int(_rec_pl['position_id'])}, "
-                      f"{_rec_pl['_ts_s']}, объём {_rec_pl['_vol']:.2f} лот.")
+                _rec_pl = (_pk_pl.loc[_per_lot_day.idxmax()]
+                           if _per_lot_day.notna().any() else None)
             with _col_abs:
                 st.markdown("### Максимум нереализованной прибыли за день, ₽ (по сделке)")
                 st.plotly_chart(plotly_dark_layout(_fig_pkabs, 380),
                                 use_container_width=True, key="risk_peak_float_day")
                 _rec_abs = _pk_abs.loc[_pk_abs['peak_float'].idxmax()]
-                st.caption(
-                    "Точка = МАКСИМУМ нереализованной (floating) прибыли в рублях по ОДНОЙ "
-                    "сделке (позиции), засечённый внутри дня. Не PnL дня и не "
-                    "результат закрытия. Шаг сэмплера 5 мин. Рекорд окна: "
-                    + f"{_rec_abs['peak_float']:,.0f} ₽ — {_rec_abs['category']} "
-                      f"#{int(_rec_abs['position_id'])}, "
-                      f"{_rec_abs['_ts_s']}, объём {_rec_abs['_vol']:.2f} лот.")
 
 # ═══════════════════════════════════════════════════════════════
 #  STRATEGIES
