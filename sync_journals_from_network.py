@@ -34,6 +34,7 @@ CHECKPOINT_LIGHT_FILES = (
     'night_reset.json',
     'last_full_recalc.json',
     'last_run.json',
+    'deploy_status.json',
 )
 
 

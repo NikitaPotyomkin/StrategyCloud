@@ -480,6 +480,65 @@ if False:  # REFRESH перенесён НАД лейблом (см. _col_btn в
         st.rerun()
 
 # ── Настройки ──
+# ── Статус последнего деплоя (пишет deploy_pull.py на боевой машине) ──
+def load_deploy_status():
+    """checkpoints/deploy_status.json — последний цикл автодеплоя.
+    Файл создаёт deploy_pull.py на боевой машине, сюда приезжает
+    через sync_journals_from_network.py (CHECKPOINT_LIGHT_FILES)."""
+    _p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      'checkpoints', 'deploy_status.json')
+    try:
+        with open(_p, 'r', encoding='utf-8') as _f:
+            return json.load(_f)
+    except (OSError, ValueError):
+        return None
+
+
+def deploy_badge():
+    """Одна строка: когда был последний деплой, что уехало, перезапущен ли бот."""
+    _st = load_deploy_status()
+    if not _st:
+        st.caption("📦 Деплой: нет данных (checkpoints/deploy_status.json не синхронизирован)")
+        return
+    _ts = str(_st.get('ts') or '')
+    try:
+        _when = datetime.fromisoformat(_ts).strftime('%d.%m %H:%M')
+    except ValueError:
+        _when = _ts[:16] or '?'
+    _ok = bool(_st.get('ok', True))
+    if not _ok:
+        _color, _state = COL_RED, '✖ ошибка'
+    elif _st.get('deployed'):
+        _color, _state = COL_GREEN_LT, '✔ выкачен'
+    else:
+        _color, _state = COL_MUTED, '⏸ без изменений'
+
+    _bits = []
+    _from, _to = (_st.get('from') or ''), (_st.get('to') or '')
+    if _from or _to:
+        _bits.append(f"{_from or '?'} → {_to or '?'}")
+    _n_files = len(_st.get('files') or [])
+    if _n_files:
+        _bits.append(f"файлов {_n_files}")
+    if _st.get('restarted'):
+        _bits.append('бот перезапущен')
+    _note = (_st.get('note') or '').strip()
+    if _note:
+        _bits.append(_note)
+    _err = (_st.get('error') or '').strip()
+    if _err:
+        _bits.append(_err[:140])
+
+    st.markdown(
+        f"<div style='margin:0 0 0.9rem 0;font-size:0.78rem;color:{COL_MUTED};'>"
+        f"<span style='color:{_color};font-weight:600;'>📦 деплой</span>"
+        f" &nbsp;{_when} &nbsp;·&nbsp; <span style='color:{_color};'>{_state}</span>"
+        + ''.join(f" &nbsp;·&nbsp; {b}" for b in _bits)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 with st.sidebar:
     st.markdown("### Configuration")
     days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, ALLOC_DAYS)
@@ -547,6 +606,8 @@ with tab_overview:
         f"</div>",
         unsafe_allow_html=True,
     )
+
+    deploy_badge()
 
     col1, col2, col3 = st.columns(3)
     updated = datetime.fromisoformat(data['updated']).strftime('%H:%M:%S')
