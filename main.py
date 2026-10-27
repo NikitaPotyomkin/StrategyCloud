@@ -968,6 +968,7 @@ if __name__ == '__main__':
     now = datetime.now()
     weekend_full_due = False
     days_since_full = None   # для диагностики: сколько дней с последнего ПОЛНОГО пересчёта
+    _bg_started = False      # True = ПОЛНЫЙ проход поставлен фоновым job (async-ветка ниже)
     if bt_cfg.auto_weekend_recalc or bt_cfg.full_recalc_daily:  # окно выходных + догон в будни, если уик-энд пропущен
         # Один ПОЛНЫЙ пересчёт на окно выходных (Сб–Вс). Если окно пропущено — догон в будни (см. _full_recalc_due).
         # Дата последнего ПОЛНОГО пересчёта берётся из last_full_recalc.json
@@ -1021,6 +1022,7 @@ if __name__ == '__main__':
                 _bg_start(bt_cfg.symbols, symbol_data, strategy_params, bt_cfg)
                 FORCE_RECALC = False
                 weekend_full_due = False
+                _bg_started = True      # честная строка решения ниже: полный проход уже в фоне
                 print(f"  🚀 ПОЛНЫЙ пересчёт поставлен в фон "
                       f"({backtest_worker_count(bt_cfg)} процессов) — старт на чекпойнтах, "
                       f"результат применится по завершении")
@@ -1039,7 +1041,7 @@ if __name__ == '__main__':
                                       ts=datetime.combine(_seed, datetime.min.time()))
 
     _log_recalc_chain(now, night_reset_path, full_recalc_marker_path, is_first_run,
-                      bt_cfg.full_recalc_min_gap_days, days_since_full, weekend_full_due, manual_full)
+                      bt_cfg.full_recalc_min_gap_days, days_since_full, weekend_full_due or _bg_started, manual_full)
 
     if manual_full:
         print("  ⚙️  full_recalc_mode=True — РУЧНОЙ ПОЛНЫЙ ПЕРЕСЧЁТ всех стратегий")

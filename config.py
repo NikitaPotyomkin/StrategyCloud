@@ -449,7 +449,9 @@ class BacktestConfig:
     force_recalc: bool = False
     full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни реранк по чекпойнтам, выходные полный)
     auto_weekend_recalc: bool = True  # True = автоматический ПОЛНЫЙ пересчёт в выходные (Сб/Вс); False = только ручной запуск
-    full_recalc_daily: bool = False  # True = обновлять ВСЮ корзину каждую ночь (окно выходных не учитывается).
+    full_recalc_daily: bool = True  # True = обновлять ВСЮ корзину каждую ночь (окно выходных не учитывается).
+    # 27.10 включено по просьбе «полные пересчёты каждый день»: полный проход ставится
+    # фоновым job (async_backtest), цикл не блокируется, маркер пишется по завершении.
     # ВРЕМЕННО False (22.10): полный пересчёт — синхронный вызов в боевом цикле и держит его
     # закрытым 150–230 мин. Включаем обратно, когда пересчёт будет вынесен в фоновый job
     # (backtest_job.BacktestJob + приём результата в цикле), то есть когда блокировки не будет.
@@ -470,7 +472,7 @@ class BacktestConfig:
     numpy_loop: bool = True  # True = быстрая петля бэктеста на numpy-массивах вместо df['col'].iloc[i]
                              # (strategies/_bt_core.py). False = прежний iloc-цикл (эталон паритета,
                              # откат одной строкой). Гейт: python tools/loop_parity.py
-    full_refresh_window_end_hour: int = 10  # окно для ПОЛНОГО обновления в будни: night_backtest_hour..этот час (в выходные — всегда)
+    full_refresh_window_end_hour: int = 10  # Конец "окна выходных" (полный проход в будни ставится с 03:00 до этого часа). 27.10: возвращено 10.
     connection_timeout_sec: int = 300
     connection_warn_every_sec: int = 600
     journal_save_every_sec: int = 300

@@ -2725,7 +2725,7 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             print(f"\n  🌙 Ночного пересчёта сегодня ещё не было — считаем ВСЕ стратегии заново")
     else:
         if last_night_reset:
-            print(f"\n  ✅ Ночной пересчёт выполнен {last_night_reset.strftime('%H:%M')} — кэш + инкремент новых стратегий")
+            print(f"\n  ✅ Ночной пересчёт по чекпойнтам: night_reset.json {last_night_reset.strftime('%d.%m %H:%M')} — сетка не пересчитывалась")
         else:
             print(f"\n  🌙 нет кэша прошлого прогона — считаем ВСЕ стратегии заново")
 
