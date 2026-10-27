@@ -20,6 +20,7 @@
 если последний элемент пути равен 'journals', берётся его родитель.
 """
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -84,6 +85,13 @@ def copy_directory(src, dst, keep_files=None):
                 skipped += 1
                 continue
             try:
+                if item.endswith('.jsonl'):
+                    # Журналы СЛИВАЕМ, а не затираем: copy2 уничтожал локальную
+                    # историю прогонов, если в сети строк было меньше.
+                    _n = _merge_jsonl(src_path, dst_path)
+                    copied += 1
+                    print(f"  ✓ {item}: слито {_n} строк{_fmt_size(Path(dst_path))}")
+                    continue
                 shutil.copy2(src_path, dst_path)  # copy2 сохраняет метаданные
                 copied += 1
                 print(f"  ✓ {item}{_fmt_size(Path(dst_path))}")
@@ -105,6 +113,77 @@ def copy_directory(src, dst, keep_files=None):
                 print(f"  ✗ {item}/: {e}")
 
     return copied, skipped, errors
+
+
+def _merge_jsonl(src_path, dst_path):
+    """Слить журнал прогонов из сети с локальным, а не затирать его.
+
+    backtest_history.jsonl копился раньше через shutil.copy2, то есть локальная
+    история полностью заменялась сетевой. Если на боевой машине строк меньше
+    (журнал почистили или он только появился), здесь история исчезала.
+    Здесь объединяем по ключу (ts, kind) и пишем по времени — потери нет.
+    """
+    recs = {}
+    for path in (dst_path, src_path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(obj, dict):
+                        continue
+                    recs[(str(obj.get('ts') or ''), str(obj.get('kind') or 'none'))] = obj
+        except OSError:
+            continue
+    if not recs:
+        return 0
+    tmp = str(dst_path) + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        for key in sorted(recs):
+            f.write(json.dumps(recs[key], ensure_ascii=False) + '\n')
+    os.replace(tmp, dst_path)
+    return len(recs)
+
+
+def _history_summary():
+    """Сводка по ЛОКАЛЬНОМУ backtest_history.jsonl после синка.
+
+    Нужна, чтобы «на графике ничего не появилось» не разбиралось вслепую: сразу видно,
+    сколько строк, какие kind и какой последний прогон приехал с боевой машины.
+    """
+    path = Path(__file__).parent / 'checkpoints' / 'backtest_history.jsonl'
+    if not path.exists():
+        return f"  📓 backtest_history.jsonl: файла нет — {path}"
+    kinds, last_ts, total = {}, '', 0
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                total += 1
+                kk = str(obj.get('kind') or 'none')
+                kinds[kk] = kinds.get(kk, 0) + 1
+                ts = str(obj.get('ts') or '')
+                if ts > last_ts:
+                    last_ts = ts
+    except OSError as exc:
+        return f"  📓 backtest_history.jsonl: не читается ({exc!r})"
+    parts = ', '.join(f"{k}={v}" for k, v in sorted(kinds.items()))
+    return (f"  📓 backtest_history.jsonl: строк {total}"
+            f"{' (' + parts + ')' if parts else ''}; "
+            f"последний прогон {last_ts or '—'}")
 
 
 def _resolve_root(raw_path):
@@ -229,6 +308,9 @@ def main():
     print(f"  ✗ Ошибок:          {len(all_errors)}")
     print(f"  ⏭ Пропущено:       {total_skipped}")
     print(f"  ⏱ Время:           {elapsed:.2f} сек")
+    if not args.no_checkpoints:
+        print(_history_summary())
+    print()
     print()
 
     if all_errors:

@@ -70,7 +70,7 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
         'ts': (ts or datetime.datetime.now()).isoformat(timespec='seconds'),
         # kind сохраняем как есть (full / partial / incremental): дэшборд
         # рисует их отдельными сериями и считает скорость по каждому режиму.
-        'kind': kind if kind in ('full', 'partial', 'incremental') else 'none',
+        'kind': kind if kind in ('full', 'partial', 'incremental', 'incomplete') else 'none',
         'elapsed_sec': round(float(elapsed_sec), 1),
         'combos': int(combos),
         'combos_done': int(combos),  # факт = план (для partial тоже)
@@ -95,6 +95,59 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
     global LAST_RUN_KIND
     LAST_RUN_KIND = rec['kind']
     return rec
+
+
+# ═══ ЗАМОК «ИДЁТ ПОЛНЫЙ ПЕРЕСЧЁТ» ═══
+# Деплой (deploy_pull.py) перезапускает бота по коммиту и тем самым убивает фоновый
+# пересчёт на 2–4 часа. Раньше «идёт ли пересчёт» угадывалось по маркерам в run.log:
+# после рестарта маркер завершения уже не появлялся, и деплой блокировался навсегда
+# (лечилось только --force). Замок честный — файл со временем старта, поэтому убитый
+# прогон не блокирует деплой дольше max_age_hours.
+def _full_recalc_lock_path():
+    """Путь к замку: checkpoints/full_recalc_inprogress.json."""
+    return os.path.join(_checkpoint_dir(), 'full_recalc_inprogress.json')
+
+
+def _full_recalc_lock_write(combos_plan=0, symbols=0):
+    """Поставить замок «идёт ПОЛНЫЙ пересчёт»."""
+    try:
+        with open(_full_recalc_lock_path(), 'w', encoding='utf-8') as f:
+            json.dump({'started_at': datetime.datetime.now().isoformat(timespec='seconds'),
+                       'pid': os.getpid(),
+                       'combos_plan': int(combos_plan or 0),
+                       'symbols': int(symbols or 0)},
+                      f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        print(f"  [WARN] замок пересчёта не записан: {exc!r}", flush=True)
+
+
+def _full_recalc_lock_clear():
+    """Снять замок пересчёта (после завершения прогона)."""
+    try:
+        os.remove(_full_recalc_lock_path())
+    except OSError:
+        pass
+
+
+def full_recalc_running(max_age_hours=8.0):
+    """Идёт ли ПОЛНЫЙ пересчёт прямо сейчас. Возвращает (running, info).
+
+    Замок старше max_age_hours считается протухшим (бота убили — файл остался).
+    Иначе один прерванный ночной прогон блокировал бы деплой навсегда.
+    """
+    try:
+        with open(_full_recalc_lock_path(), 'r', encoding='utf-8') as f:
+            info = json.load(f) or {}
+    except (OSError, ValueError):
+        return False, {}
+    try:
+        started = datetime.datetime.fromisoformat(str(info.get('started_at') or ''))
+    except ValueError:
+        return False, info
+    age_h = (datetime.datetime.now() - started).total_seconds() / 3600.0
+    if age_h > float(max_age_hours):
+        return False, info
+    return True, info
 
 
 # ═══ СТАТУС СЕМЕЙСТВ: кто участвует в ночных рэнкингах ═══
@@ -347,8 +400,13 @@ def save_checkpoint(symbol, results, last_bar_time=None, families=None):
         'results': results
     }
     try:
-        with open(path, 'w', encoding='utf-8') as f:
+        # Атомарная запись: файл 13–14 МБ пишется через .tmp и os.replace. Иначе читатель
+        # (реранк в боевом цикле, sync, дэшборд) мог поймать недописанный JSON, получить
+        # None от load_checkpoint и запустить символ в пересчёт заново.
+        _tmp = path + '.tmp'
+        with open(_tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, separators=(',', ':'), default=json_default)
+        os.replace(_tmp, path)   # атомарная подмена: половину файла никто не прочитает
     except (OSError, TypeError) as exc:
         print(f"  [WARN] Чекпойнт {symbol} не записан ({path}): {exc!r} — "
               f"символ может уйти в пересчёт заново", flush=True)
@@ -375,6 +433,7 @@ def list_checkpoints():
         # попадали в список чекпойнтов и ломали проверку «чекпойнтов нет».
         if fname.endswith('.json') and fname not in ('night_reset.json', 'last_run.json',
                                                      'last_full_recalc.json',
+                                                     'full_recalc_inprogress.json',
                                                      'backtest_history.jsonl'):
             symbol = fname[:-5]  # убрать .json
             checkpoints.append(symbol)
@@ -3014,6 +3073,15 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
     combos_plan = combos_per_symbol * basket_symbols          # полный план корзины
     n_skipped = len(skipped_symbols)
 
+    # ── Замок «идёт ПОЛНЫЙ пересчёт» ──
+    # Фоновый прогон длится 2–4 часа. Деплой по коммиту перезапускает main.py и убил бы
+    # его на середине (чекпойнты остались бы частичными). deploy_pull.py читает этот файл
+    # и откладывает рестарт. Замок снимается в конце прогона; протухший (>8 ч) игнорируется.
+    if force_full_recalc:
+        _full_recalc_lock_write(combos_plan, basket_symbols)
+        print(f"  🔒 Замок полного пересчёта: деплой откладывается "
+              f"({combos_plan:,} комб., {basket_symbols} симв.)", flush=True)
+
     # ── Вывод плана бэктеста ──
     print(f"\n{'═' * 60}")
     if n_skipped > 0:
@@ -3317,6 +3385,26 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             except (OSError, TypeError):
                 pass
 
+    # ═══ ПОКРЫТИЕ ПЛАНА: 'full' ставится ПО ФАКТУ, а не по флагу намерения ═══
+    # Раньше kind='full' писался по force_full_recalc, и прогон по кэшу за 51 с попадал
+    # в журнал как полный пересчёт. Теперь 'full' — только если посчитаны ВСЕ комбинации
+    # плана и в прогоне участвовала вся корзина символов. Иначе 'incomplete' (оранжевая
+    # точка в дэшеборде), а реранк по чекпойнтам не пишется вовсе.
+    _covered_symbols = total_symbols + len(skipped_symbols)
+    _coverage = (float(combos_done_total) / float(combos_plan)) if combos_plan else 0.0
+    _full_ok = bool(force_full_recalc
+                    and combos_done_total >= combos_plan
+                    and _covered_symbols >= len(SYMBOLS))
+    _run_kind = 'full' if _full_ok else ('incomplete' if force_full_recalc else 'none')
+    if force_full_recalc:
+        if _full_ok:
+            _verdict = 'ПОЛНЫЙ пересчёт зачтён'
+        else:
+            _verdict = ('НЕПОЛНЫЙ: маркер не двигаем, повторим следующей ночью')
+        print(f"  📊 Покрытие плана: {combos_done_total:,} из {combos_plan:,} комб. "
+              f"({_coverage * 100:.1f}%), символов {_covered_symbols} из {len(SYMBOLS)} "
+              f"→ {_verdict}", flush=True)
+
     # ── Статистика прогона ──
     try:
         # ═══ Журнал прогонов (вкладка Backtest в дэшборде) ═══
@@ -3325,10 +3413,8 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             combos_done=combos_done_total,
             symbols_total=basket_symbols,
             combos_plan=combos_plan,
-            kind=('full' if force_full_recalc
-                  else 'none'),
-                  # partial/инкремент удалены из проекта: пишем только 'full', а
-                  # прогон по кэшу (реранк) в журнал не попадает вовсе.
+            kind=_run_kind,
+            coverage_pct=round(_coverage * 100.0, 1),
             skipped=len(skipped_symbols),
             ok=True,
             is_night_run=is_night_run,
@@ -3347,6 +3433,32 @@ def run_full_backtest(symbols, symbol_data, strategy_params, backtest_config,
             }, f, ensure_ascii=False, indent=2)
     except (OSError, TypeError):
         pass
+
+    # ═══ ЗАМОК + МАРКЕР ПОЛНОГО ПЕРЕСЧЁТА ═══
+    # Замок снимаем ВСЕГДА (иначе деплой будет отложен до конца дня). Маркер
+    # last_full_recalc.json двигаем ТОЛЬКО при 100% покрытии плана: иначе следующая
+    # ночь считала бы «полный уже был» и молча пропускалась — так и терялись недели.
+    if force_full_recalc:
+        _full_recalc_lock_clear()
+        if _full_ok:
+            try:
+                with _safe_marker_write(
+                        os.path.join(_checkpoint_dir(), 'last_full_recalc.json'),
+                        'last_full_recalc.json') as f:
+                    json.dump({'last_full_recalc': datetime.datetime.now().isoformat(),
+                               'elapsed_sec': round(total_elapsed, 1),
+                               'combos_done': int(combos_done_total),
+                               'combos_plan': int(combos_plan),
+                               'coverage_pct': round(_coverage * 100.0, 1),
+                               'symbols': int(_covered_symbols)},
+                              f, ensure_ascii=False, indent=2)
+                print(f"  ✅ Маркер ПОЛНОГО пересчёта обновлён "
+                      f"({datetime.datetime.now():%d.%m %H:%M})", flush=True)
+            except (OSError, TypeError):
+                pass
+        else:
+            print(f"  ⚠️  Маркер ПОЛНОГО пересчёта НЕ обновлён: покрытие "
+                  f"{_coverage * 100:.1f}% — следующая ночь пересчитает заново", flush=True)
 
     # ═══ ОБНОВЛЕНИЕ night_reset.json (статус completed) ═══
     if is_night_run:

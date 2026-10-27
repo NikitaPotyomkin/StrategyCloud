@@ -242,7 +242,7 @@ def _write_night_reset(night_reset_path, start_time, symbols_count, results_coun
 
 # ═══ Утилита: маркер последнего ПОЛНОГО пересчёта (правило «не чаще, чем раз в N дней») ═══
 def _read_last_full_recalc(marker_path):
-    """date последнего ПОЛНОГО пересчёта: из маркера, иначе фолбэк по night_reset.json / mtime чекпойнтов."""
+    """Дата последнего ПОЛНОГО пересчёта — ТОЛЬКО из маркера last_full_recalc.json."""
     try:
         with open(marker_path, 'r', encoding='utf-8') as f:
             ts = json.load(f).get('last_full_recalc', '')
@@ -257,7 +257,12 @@ def _read_last_full_recalc(marker_path):
     # night_reset.json и mtime чекпойнтов — чтобы НЕ запускать лишний ПОЛНЫЙ пересчёт.
     _dates = []
     try:
-        with open(os.path.join(_checkpoint_dir(), 'night_reset.json'), 'r', encoding='utf-8') as _f2:
+        # night_reset.json источником даты ПОЛНОГО пересчёта НЕ является: его перезаписывают
+        # и ночные реранки (03:00 каждый день). Из-за этого «последний полный» выглядел как
+        # сегодняшний, и первый полный пересчёт откладывался на сутки. Остаётся только
+        # mtime чекпойнтов символов — их пишет реальный расчёт.
+        with open(os.path.join(_checkpoint_dir(), '.night_reset_not_a_full_recalc_source'),
+                  'r', encoding='utf-8') as _f2:
             _ts2 = json.load(_f2).get('timestamp', '')
         if _ts2:
             _dates.append(datetime.fromisoformat(_ts2).date())
@@ -268,7 +273,8 @@ def _read_last_full_recalc(marker_path):
 
     try:
         _ck = _checkpoint_dir()
-        _skip2 = ('night_reset.json', 'last_run.json', 'last_full_recalc.json')
+        _skip2 = ('night_reset.json', 'last_run.json', 'last_full_recalc.json',
+                  'full_recalc_inprogress.json')
         for _name in os.listdir(_ck):
             if _name.endswith('.json') and _name not in _skip2:
                 _dates.append(datetime.fromtimestamp(os.path.getmtime(os.path.join(_ck, _name))).date())
@@ -277,7 +283,11 @@ def _read_last_full_recalc(marker_path):
 
 
 
-    return max(_dates) if _dates else None
+    # Дату ПОЛНОГО пересчёта берём ТОЛЬКО из маркера last_full_recalc.json.
+    # mtime чекпойнтов и night_reset.json давали фальшивое «последний полный = сегодня»
+    # и молча откладывали настоящий пересчёт на сутки. Нет маркера → дата неизвестна →
+    # _full_recalc_due() считает пересчёт нужным.
+    return None
 
 
 def _full_recalc_due(now, marker_path, gap_days, is_first_run=False, daily=False):
@@ -1028,6 +1038,22 @@ if __name__ == '__main__':
                       f"результат применится по завершении")
             else:
                 print(f"  🌙 ПОЛНЫЙ пересчёт ({now.strftime('%A')} {now.strftime('%Y-%m-%d %H:%M')}) — окно выходных / догон")
+
+        # ── Ручной ПОЛНЫЙ пересчёт (full_recalc_mode=True) — тоже в фон ──
+        # Раньше ручной режим всегда шёл синхронно и держал боевой цикл закрытым
+        # 150–230 мин. Теперь при async_backtest он ставится фоновым job (как ночной):
+        # цикл продолжает торговать, результат применяется по завершении.
+        if manual_full and not _bg_started:
+            if getattr(bt_cfg, 'async_backtest', False) and not is_first_run:
+                _bg_start(bt_cfg.symbols, symbol_data, strategy_params, bt_cfg)
+                _bg_started = True
+                manual_full = False      # стартовый прогон ниже — реранк по чекпойнтам
+                FORCE_RECALC = False
+                print(f"  🚀 РУЧНОЙ ПОЛНЫЙ пересчёт поставлен в фон "
+                      f"({backtest_worker_count(bt_cfg)} процессов) — цикл не блокируется")
+            else:
+                print("  🌙 РУЧНОЙ ПОЛНЫЙ пересчёт — синхронно (async_backtest выключен "
+                      "или это первый запуск без чекпойнтов)")
         
             
             
@@ -1051,10 +1077,12 @@ if __name__ == '__main__':
         print("  ✅ Есть кэш прошлого прогона — используем чекпоинты (работа по чекпойнтам)")
 
     try:
-        # Маркер ПОЛНОГО пересчёта пишем ЗАРАНЕЕ — чтобы повторный запуск не считал его снова,
-        # даже если этот прогон по какой-то причине упадёт.
-        if FORCE_RECALC or manual_full or weekend_full_due:
-            _write_full_recalc_marker(full_recalc_marker_path)
+        # Маркер ПОЛНОГО пересчёта здесь НЕ пишем: его двигает сам run_full_backtest,
+        # и только если прогон покрыл план на 100%. Раньше маркер ставился ЗАРАНЕЕ —
+        # и упавший/неполный прогон молча «съедал» следующую ночь.
+        #
+        # Предварительной записи маркера здесь больше нет (см. выше).
+        # Дубль записи маркера убран 27.10
         all_top, all_results = run_full_backtest(
             bt_cfg.symbols, symbol_data, strategy_params, bt_cfg,
             test_strategy=None,
@@ -1068,7 +1096,13 @@ if __name__ == '__main__':
         if is_first_run or manual_full or weekend_full_due:
             _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results))
             # Маркер последнего ПОЛНОГО пересчёта (реранки этот файл не трогают)
-            _write_full_recalc_marker(full_recalc_marker_path)
+            # Маркер двигает сам прогон: здесь только проверяем, что он его заслужил.
+            import functions as _fn_mk
+            if getattr(_fn_mk, 'LAST_RUN_KIND', None) == 'full':
+                _write_full_recalc_marker(full_recalc_marker_path)
+            else:
+                print("  ⚠️  Маркер ПОЛНОГО пересчёта не сдвигаю: прогон не покрыл "
+                      "план — следующей ночью пересчёт повторится", flush=True)
 
     except Exception as exc:
         print(f"\n[КРИТИЧНО] Первый бэктест не завершился: {exc!r}", flush=True)
@@ -1279,6 +1313,17 @@ if __name__ == '__main__':
                       f"чекпойнты могут быть обновлены частично, повторим следующей ночью",
                       flush=True)
                 last_full_backtest_date = now.date()
+                # Падение фонового job — тоже событие пересчёта: пишем строку
+                # kind='incomplete', чтобы во вкладке Backtest была ОРАНЖЕВАЯ точка,
+                # а не пустота (молчаливый провал — то, из-за чего это тянулось неделями).
+                try:
+                    from functions import append_backtest_history as _abh
+                    _abh(_bg_elapsed_min * 60.0, 0, 0, 0, kind='incomplete',
+                         is_night_run=True, combos_done=0, combos_plan=0,
+                         symbols_total=len(bt_cfg.symbols), coverage_pct=0.0,
+                         ok=False, error=str(_bg_failed)[:300])
+                except Exception as _je:
+                    print(f"  [WARN] журнал прогонов: {_je!r}", flush=True)
             elif _bg_ready:
                 print(f"\n[{now.strftime('%H:%M:%S')}] ✅ Фоновый ПОЛНЫЙ пересчёт завершён "
                       f"({_bg_elapsed_min:.0f} мин) — применяю результат, цикл не останавливался",
@@ -1385,6 +1430,16 @@ if __name__ == '__main__':
                 except Exception as exc:
                     print(f"\n[WARN] Ночной перерасчёт не удался: {exc!r} — "
                           f"оставляем текущие стратегии, повторим завтра в 3:00.", flush=True)
+                    # Провал виден во вкладке Backtest (оранжевая точка), а не только в логе.
+                    if _night_full_due:
+                        try:
+                            from functions import append_backtest_history as _abh
+                            _abh(0.0, 0, 0, 0, kind='incomplete', is_night_run=True,
+                                 combos_done=0, combos_plan=0,
+                                 symbols_total=len(bt_cfg.symbols), coverage_pct=0.0,
+                                 ok=False, error=str(exc)[:300])
+                        except Exception as _je:
+                            print(f"  [WARN] журнал прогонов: {_je!r}", flush=True)
                     continue
                 last_full_backtest_date = now.date()
                 acc = mt5.account_info()
@@ -1622,7 +1677,12 @@ if __name__ == '__main__':
                 # --- обновляем night_reset.json после ночного перерасчёта ---
                 _write_night_reset(night_reset_path, start_time, len(bt_cfg.symbols), len(all_results), ts=now)
                 if _night_full_due:
-                    _write_full_recalc_marker(full_recalc_marker_path, ts=now)
+                    # Маркер здесь НЕ ставим: его двигает только run_full_backtest и только
+                    # при 100% покрытии плана. Раньше он ставился в этой точке безусловно —
+                    # в async-ветке этот прогон вообще ничего не пересчитывал (реранк по
+                    # чекпойнтам), а маркер сдвигался, и следующая ночь молча пропускалась.
+                    print("  ℹ Маркер ПОЛНОГО пересчёта выставляет сам прогон "
+                          "(только при 100% покрытии плана)", flush=True)
 
                 yesterday = now.date() - timedelta(days=1)
                 report = generate_daily_report(yesterday)

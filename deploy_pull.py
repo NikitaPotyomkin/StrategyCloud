@@ -78,9 +78,18 @@ def wait_for_quiet_window():
         f"(порог {BAR_RESTART_GUARD_SEC} с) — чтобы не пропустить вход по бару")
     time.sleep(wait)
     return wait
-# Маркеры «идёт полный пересчёт» в journals/run.log.
-RECALC_START = ('Фоновый ПОЛНЫЙ пересчёт поставлен', '🚀 ПОЛНЫЙ пересчёт поставлен')
-RECALC_DONE = ('Фоновый ПОЛНЫЙ пересчёт завершён', '✅ Полный пересчёт завершён')
+# ── Замок «идёт полный пересчёт» ──
+# Ставит сам бэктест (functions._full_recalc_lock_write) и снимает по завершении.
+# Раньше «идёт ли пересчёт» угадывалось по маркерам в хвосте journals/run.log — и после
+# рестарта бота маркер завершения уже не появлялся, поэтому деплой откладывался НАВСЕГДА
+# (лечилось только --force). Файл старше FULL_RECALC_LOCK_MAX_HOURS считается протухшим.
+FULL_RECALC_LOCK = os.path.join('checkpoints', 'full_recalc_inprogress.json')
+FULL_RECALC_LOCK_MAX_HOURS = 8.0
+# Детект по логу выведен из работы (оставлен только как справка о старом поведении).
+RECALC_START = ()
+RECALC_DONE = ()
+RECALC_START_OLD = ('Фоновый ПОЛНЫЙ пересчёт поставлен', '🚀 ПОЛНЫЙ пересчёт поставлен')
+RECALC_DONE_OLD = ('Фоновый ПОЛНЫЙ пересчёт завершён', '✅ Полный пересчёт завершён')
 
 
 # ═══ ЛОГИ ════════════════════════════════════════════════════════════════════
@@ -148,7 +157,30 @@ def changed_py_files(old_sha, new_sha):
 
 # ═══ ПРОВЕРКИ ════════════════════════════════════════════════════════════════
 def recalc_running():
-    """Идёт ли полный пересчёт — по маркерам в хвосте journals/run.log."""
+    """Идёт ли ПОЛНЫЙ пересчёт — по замку checkpoints/full_recalc_inprogress.json.
+
+    Замок ставит сам бэктест на время полного прохода (2–4 часа) и снимает по
+    завершении. Протухший замок (> FULL_RECALC_LOCK_MAX_HOURS) игнорируется: если бота
+    убили, файл остался — но деплой не должен ждать его вечно.
+    """
+    lock_path = os.path.join(HERE, FULL_RECALC_LOCK)
+    try:
+        with open(lock_path, 'r', encoding='utf-8') as f:
+            info = json.load(f) or {}
+    except (OSError, ValueError):
+        return False
+    try:
+        started = datetime.fromisoformat(str(info.get('started_at') or ''))
+    except ValueError:
+        return False
+    age_h = (datetime.now() - started).total_seconds() / 3600.0
+    if age_h > FULL_RECALC_LOCK_MAX_HOURS:
+        log(f"замок пересчёта протух ({age_h:.1f} ч) — игнорирую")
+        return False
+    log(f"идёт ПОЛНЫЙ пересчёт с {started:%d.%m %H:%M} "
+        f"(план {info.get('combos_plan')} комб.) — деплой отложен")
+    return True
+    # ── старый детект по run.log (выведен из работы 27.10) ──
     try:
         with open(RUN_LOG, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()[-400:]

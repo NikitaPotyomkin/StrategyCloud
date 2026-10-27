@@ -3391,7 +3391,14 @@ if False:  # PIPELINE: вкладка убрана; код физически у
 #  BACKTEST
 # ═══════════════════════════════════════════════════════════════
 with tab_backtest:
-    st.markdown("### Бэктест — дата, объём и длительность пересчётов")
+    # Вкладка живёт в backtest_tab.py: дата последнего пересчёта, таблица
+    # прогонов, график. Метрик-дублей с длительностью здесь больше нет.
+    import importlib
+    import backtest_tab
+    # reload: правки в backtest_tab.py видны на Rerun без перезапуска Streamlit
+    importlib.reload(backtest_tab)
+    backtest_tab.render_backtest_tab()
+    st.stop()  # старый код вкладки ниже не исполняется (вычистить при чистке)
 
     # Читаем журнал напрямую (без st.cache_data), чтобы данные не «залипали».
     _bt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3421,9 +3428,6 @@ with tab_backtest:
     _bt_exists = os.path.isfile(_bt_path)
     if _bt_exists:
         _bt_mtime = datetime.fromtimestamp(os.path.getmtime(_bt_path))
-        st.caption("Источник: " + _bt_path
-                   + f" | {os.path.getsize(_bt_path):,}".replace(',', ' ') + " байт"
-                   + " | обновлён " + _bt_mtime.strftime('%d.%m.%Y %H:%M'))
     else:
         st.error("Журнал прогонов не найден: " + _bt_path)
 
@@ -3484,7 +3488,6 @@ with tab_backtest:
         st.markdown(
             f"<div style='margin:0.1rem 0 0.5rem 0;line-height:1.5;'>"
             f"<span style='font-size:1.05rem;color:{COL_GREEN_LT};font-weight:600;'>"
-            f"Последний полный пересчёт: {_bt_head_ts.strftime('%d.%m.%Y %H:%M')}</span>"
             f"<span style='color:{COL_MUTED};'> · {_bt_ago(_bt_head_ts)}</span>"
             f"</div>",
             unsafe_allow_html=True,
@@ -3544,13 +3547,13 @@ with tab_backtest:
             'Пересчитан': _bt_ck_mtime.strftime('%d.%m.%Y %H:%M'),
             'Давность': _bt_ago(_bt_ck_mtime),
         })
-    if _bt_ck_rows:
+    if False:  # таблица чекпойнтов по символам удалена — на вкладке только прогоны
         st.markdown("#### Чекпойнты по символам")
         st.dataframe(pd.DataFrame(_bt_ck_rows), use_container_width=True, hide_index=True)
         st.caption("«Чекпойнт, МБ» — размер файла корзины по символу: это и есть объём "
                    "обсчёта на диске. «Комбинаций (≈)» — из последнего прогона "
                    "(всего ÷ символов), по символам корзина одинаковая.")
-    elif _bt_rows:
+    elif False:  # (ветка «чекпойнтов нет» тоже не нужна)
         st.caption("Чекпойнтов по символам нет в " + _bt_ck_dir)
 
     if not _bt_rows:
