@@ -515,8 +515,8 @@ def deploy_badge():
 
     _bits = []
     _from, _to = (_st.get('from') or ''), (_st.get('to') or '')
-    if _from or _to:
-        _bits.append(f"{_from or '?'} → {_to or '?'}")
+    _from = _to = ''  # хеши не показываем
+        # хеши коммитов (d0f7623 → d32b996) не показываем — пользователю они ничего не говорят
     _n_files = len(_st.get('files') or [])
     if _n_files:
         _bits.append(f"файлов {_n_files}")
@@ -612,7 +612,7 @@ with tab_overview:
         unsafe_allow_html=True,
     )
 
-    deploy_badge()
+        # индикатор последнего деплоя рендерится только в сайдбаре (см. выше)
 
     col1, col2, col3 = st.columns(3)
     updated = datetime.fromisoformat(data['updated']).strftime('%H:%M:%S')
