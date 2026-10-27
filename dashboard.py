@@ -3414,9 +3414,6 @@ with tab_backtest:
         # Состав журнала — видно ВСЕГДА, а не только когда всё отфильтровалось:
         # так сразу понятно, какие прогоны в файле есть (по kind).
         _bt_kinds_all = pd.Series([r.get('kind', 'none') for r in _bt_rows]).value_counts()
-        st.caption("В журнале строк: " + ", ".join(
-            f"{_k}: {int(_v)}" for _k, _v in _bt_kinds_all.items())
-            + f" | файл: {_bt_path}")
 
     # ── Источник: где лежит журнал и насколько он свежий (видно ВСЕГДА) ──
     _bt_ck_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'checkpoints')
