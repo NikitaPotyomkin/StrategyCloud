@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import json
 import glob
+import shutil
 import os
 import csv
 from itertools import product
@@ -58,6 +59,33 @@ def _history_path():
     return os.path.join(d, 'backtest_history.jsonl')
 
 
+def publish_state_to_journals():
+    """Опубликовать лёгкие файлы состояния в journals/ — канал, который виден по сети.
+
+    На боевой машине по SMB виден ТОЛЬКО journals/: листинг checkpoints/ падает с
+    WinError 3 («путь не найден»), хотя на самой машине каталог на месте (это видно
+    в run.log: «📁 Чекпойнты: …»). Поэтому маркеры и журнал прогонов дублируем в
+    journals/ — синхронизация на рабочем ПК забирает их оттуда.
+    Ошибка публикации не должна ронять прогон.
+    """
+    jdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'journals')
+    names = ('backtest_history.jsonl', 'night_reset.json',
+             'last_full_recalc.json', 'last_run.json', 'deploy_status.json')
+    try:
+        os.makedirs(jdir, exist_ok=True)
+    except OSError as exc:
+        print(f"  [WARN] публикация состояния: journals/ недоступен: {exc!r}", flush=True)
+        return
+    for name in names:
+        src = os.path.join(_checkpoint_dir(), name)
+        if not os.path.isfile(src):
+            continue
+        try:
+            shutil.copy2(src, os.path.join(jdir, name))
+        except OSError as exc:
+            print(f"  [WARN] публикация {name} в journals/: {exc!r}", flush=True)
+
+
 def append_backtest_history(elapsed_sec, symbols, combos, results,
                             kind='none', is_night_run=False, ts=None, **extra):
     """Дописывает одну строку в журнал прогонов бэктеста (JSONL).
@@ -90,6 +118,8 @@ def append_backtest_history(elapsed_sec, symbols, combos, results,
                 f.write(json.dumps(rec, ensure_ascii=False) + '\n')
     except OSError as exc:
         print(f"  [WARN] Журнал прогонов не записан: {exc!r}")
+    # Зеркало в journals/ — его синхронизация на рабочем ПК забирает всегда.
+    publish_state_to_journals()
     # Режим прогона — наружу: main.py пишет его в таблицу family_status
     # (trades_db). Импорт по имени не годится — значение меняется в рантайме.
     global LAST_RUN_KIND

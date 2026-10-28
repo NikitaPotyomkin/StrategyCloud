@@ -54,6 +54,75 @@ def _fmt_size(path):
     return ''
 
 
+def _diag_dir(path):
+    """Почему каталог не листается: путь, ссылка/джанкшн, содержимое родителя."""
+    p = str(path)
+    try:
+        print(f"    isdir={os.path.isdir(p)} lexists={os.path.lexists(p)}")
+    except OSError:
+        pass
+    try:
+        target = os.readlink(p)
+        print(f"    это ссылка/джанкшн → {target}")
+    except OSError:
+        pass
+    try:
+        parent = os.path.dirname(p)
+        names = sorted(os.listdir(parent))
+        shown = ', '.join(names[:15])
+        print(f"    в родителе {parent}: {shown}{' …' if len(names) > 15 else ''}")
+    except OSError:
+        pass
+
+
+def _copy_named_files(src, dst, names):
+    """Точечное копирование по именам — когда листинг каталога недоступен.
+
+    Возвращает (copied, errors). Отсутствующие файлы тихо пропускаются:
+    на боевой машине какие-то из них могут быть ещё не созданы.
+    """
+    copied = 0
+    errors = []
+    for name in names:
+        src_path = os.path.join(str(src), name)
+        dst_path = os.path.join(str(dst), name)
+        try:
+            if not os.path.isfile(src_path):
+                continue
+            if name.endswith('.jsonl'):
+                _n = _merge_jsonl(src_path, dst_path)
+                print(f"  ✓ {name}: слито {_n} строк{_fmt_size(Path(dst_path))}")
+            else:
+                shutil.copy2(src_path, dst_path)
+                print(f"  ✓ {name}{_fmt_size(Path(dst_path))}")
+            copied += 1
+        except Exception as e:
+            errors.append((name, str(e)))
+            print(f"  ✗ {name}: {e}")
+    return copied, errors
+
+
+def _fallback_no_listing(src, dst, keep_files, exc, copied, skipped, errors):
+    """Каталог не листается (SMB-джанкшн / WinError 3) — тянем файлы по именам.
+
+    journals/ и checkpoints/ живут в одной шаре, но checkpoints может быть
+    джанкшном на другой диск: exists() → True, а listdir падает «путь не найден».
+    Прямое чтение по имени при этом обычно работает, поэтому лёгкие файлы
+    состояния пробуем забрать вслепую — дэшборду нужен backtest_history.jsonl.
+    """
+    print(f"  ✗ {src}: каталог не читается ({exc!r})")
+    _diag_dir(src)
+    if not keep_files:
+        return copied, skipped, errors + [(str(src), f'listdir: {exc!r}')]
+    print("  ↳ пробую точечно по именам (листинг недоступен, файлы могут читаться):")
+    _copied, _errs = _copy_named_files(src, dst, keep_files)
+    copied += _copied
+    if _copied:
+        return copied, skipped, errors
+    errors.extend(_errs)
+    return copied, skipped, errors + [(str(src), f'listdir: {exc!r}')]
+
+
 def copy_directory(src, dst, keep_files=None):
     """Копировать содержимое директории src в dst.
 
@@ -74,8 +143,8 @@ def copy_directory(src, dst, keep_files=None):
         # «Системе не удается найти указанный путь»). Раньше это прерывало весь
         # sync: journals/ уже был скопирован, но checkpoints/ валил скрипт, и
         # вкладка Backtest так и не получала backtest_history.jsonl.
-        print(f"  ✗ {src}: каталог не читается ({exc!r}) — пропуск")
-        return copied, skipped, errors + [(str(src), f'listdir: {exc!r}')]
+        return _fallback_no_listing(src, dst, keep_files, exc, copied, skipped, errors)
+        # Диагностика и точечное копирование по именам — внутри _fallback_no_listing.
     for item in _items:
         src_path = os.path.join(src, item)
         dst_path = os.path.join(dst, item)
@@ -221,6 +290,9 @@ def build_parser():
                          '(или к его папке journals). По умолчанию: %(default)s')
     ap.add_argument('--with-combos', action='store_true',
                     help='Копировать и тяжёлые посимвольные кэши checkpoints/<SYMBOL>.json')
+    ap.add_argument('--checkpoints-dir', default=None,
+                    help='Свой путь к checkpoints/ в сети (если на боевой машине это '
+                         'джанкшн/другой диск). Пример: \\\\192.168.0.106\\d$\\StrategyCloud\\checkpoints')
     ap.add_argument('--no-checkpoints', action='store_true',
                     help='Не трогать checkpoints/ (только journals/, как раньше)')
     ap.add_argument('-y', '--yes', action='store_true',
@@ -237,7 +309,9 @@ def main():
     targets = [('journals', network_root / 'journals', None)]
     if not args.no_checkpoints:
         keep = None if args.with_combos else set(CHECKPOINT_LIGHT_FILES)
-        targets.append(('checkpoints', network_root / 'checkpoints', keep))
+        ckpt_src = (Path(args.checkpoints_dir) if args.checkpoints_dir
+                    else network_root / 'checkpoints')
+        targets.append(('checkpoints', ckpt_src, keep))
 
     print("=" * 70)
     print("  SYNCHRONIZE FROM NETWORK")
@@ -299,6 +373,40 @@ def main():
             print(f"  (пропущено {skipped} тяжёлых/непрофильных файлов)")
         print()
 
+    # Страховка: бот дублирует журнал прогонов в journals/. Если checkpoints/ в сети
+    # недоступен (джанкшн на другой диск), история прогонов приезжает оттуда.
+    _mirror = project_dir / 'journals' / 'backtest_history.jsonl'
+    _local_hist = project_dir / 'checkpoints' / 'backtest_history.jsonl'
+    if _mirror.exists() and not args.no_checkpoints:
+        try:
+            _local_hist.parent.mkdir(parents=True, exist_ok=True)
+            _n = _merge_jsonl(str(_mirror), str(_local_hist))
+            total_copied += 1
+            print(f"  ↳ backtest_history.jsonl из journals/ (копия бота): "
+                  f"строк {_n}{_fmt_size(_local_hist)}")
+        except OSError as exc:
+            all_errors.append(('journals/backtest_history.jsonl', str(exc)))
+    # Остальные лёгкие файлы состояния бот публикует в journals/ тем же вызовом
+    # functions.publish_state_to_journals(): маркеры прогонов и деплоя.
+    if not args.no_checkpoints:
+        for _name in CHECKPOINT_LIGHT_FILES:
+            if _name.endswith('.jsonl'):
+                continue          # уже слит выше
+            _src_pub = project_dir / 'journals' / _name
+            _dst_ck = project_dir / 'checkpoints' / _name
+            if not _src_pub.exists():
+                continue
+            try:
+                if _dst_ck.exists() and _dst_ck.stat().st_mtime >= _src_pub.stat().st_mtime:
+                    continue
+                _dst_ck.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(_src_pub, _dst_ck)
+                total_copied += 1
+                print(f"  ↳ {_name} из journals/ (публикация бота){_fmt_size(_dst_ck)}")
+            except OSError as exc:
+                all_errors.append((f'journals/{_name}', str(exc)))
+    print()
+
     elapsed = (datetime.now() - start_time).total_seconds()
 
     print("=" * 70)
@@ -320,7 +428,13 @@ def main():
         print()
 
     if total_copied > 0:
-        print("  ✅ Синхронизация завершена успешно!")
+        _hist = project_dir / 'checkpoints' / 'backtest_history.jsonl'
+        _state_ok = _hist.exists() and _hist.stat().st_size > 0
+        print("  ✅ Синхронизация завершена успешно!" if (not all_errors or _state_ok) else
+              "  ⚠ Синхронизация завершена ЧАСТИЧНО: journals/ приехали, "
+              "но checkpoints/ — нет (вкладка Backtest останется пустой).")
+        if _state_ok and all_errors:
+            print("     (checkpoints/ по сети недоступен — состояние взято из journals/)")
         print(f"  📁 journals: {project_dir / 'journals'}")
         if not args.no_checkpoints:
             print(f"  📁 checkpoints: {project_dir / 'checkpoints'}"

@@ -459,7 +459,7 @@ class BacktestConfig:
     poll_interval: int = 5
     top_n: Optional[int] = 9999        # None = без ограничения
     force_recalc: bool = False
-    full_recalc_mode: bool = False  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни реранк по чекпойнтам, выходные полный)
+    full_recalc_mode: bool = True  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни реранк по чекпойнтам, выходные полный)
     auto_weekend_recalc: bool = True  # True = автоматический ПОЛНЫЙ пересчёт в выходные (Сб/Вс); False = только ручной запуск
     full_recalc_daily: bool = True  # True = обновлять ВСЮ корзину каждую ночь (окно выходных не учитывается).
     # 27.10: включено решением от 27.10 — полный проход ставится
