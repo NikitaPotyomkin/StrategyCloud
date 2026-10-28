@@ -279,7 +279,8 @@ def apply_probation_cap(ranked_results, cap=SUSPECT_SCORE_CAP, verbose=True):
 
 def distribute_lots(ranked_results, symbol_data, balance,
                     max_risk_pct=0.05, min_lot=0.01, min_score=0.8, max_per_type=None,
-                    per_trade_risk_pct=0.005, plan_max_strategies=None):
+                    per_trade_risk_pct=0.005, plan_max_strategies=None,
+                    max_lot_per_strategy=None):
     """Распределяет лоты пропорционально score в рамках квоты риска.
 
     Использует _normalize_volume для округления лотов по шагу брокера
@@ -410,6 +411,27 @@ def distribute_lots(ranked_results, symbol_data, balance,
                 x['lot'] = max(math.floor(_raw * 100) / 100, min_lot)
 
     # Финальная фильтрация: оставляем только стратегии с lot >= min_lot
+    # --- Ceiling for one strategy (lots), applied after the per-trade money cap ---
+    # The money cap alone is not a fairness rule: JPY crosses have a cheap SL in
+    # rubles per lot, so the cap was spent as 2.02 lots while a EUR strategy got
+    # 0.4. A hard lot ceiling makes the plan readable: leader <= max_lot.
+    if max_lot_per_strategy is None:
+        try:
+            from config import RiskParams as _RP3
+            max_lot_per_strategy = float(getattr(_RP3(), 'max_lot_per_strategy', 0) or 0)
+        except Exception:
+            max_lot_per_strategy = 0.0
+    if max_lot_per_strategy and max_lot_per_strategy > 0:
+        for x in active:
+            if x['lot'] <= max_lot_per_strategy:
+                continue
+            info = symbol_data.get(x['symbol'], {}).get('info')
+            if info is not None:
+                _v = _normalize_volume(max_lot_per_strategy, info)
+                x['lot'] = max(min(_v if _v is not None else min_lot, max_lot_per_strategy), min_lot)
+            else:
+                x['lot'] = max(min(max_lot_per_strategy, x['lot']), min_lot)
+
     active = [x for x in active if x['lot'] >= min_lot]
 
     return active

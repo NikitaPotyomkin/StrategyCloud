@@ -13,7 +13,7 @@ _SYNC_BARS = 8
 
 # Сколько опросов ждём реальный бар, если в момент закрытия часа терминал его ещё
 # не агрегировал (опрос раз в poll_interval ≈ 5 с → ~30 с ожидания).
-_SYNC_RETRY_POLLS = 6
+_SYNC_RETRY_POLLS = 720   # 720 polls x 5 s = keep retrying for the whole hour instead of 30 s
 
 
 def load_h1(symbol):

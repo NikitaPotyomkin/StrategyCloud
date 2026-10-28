@@ -1341,7 +1341,7 @@ with tab_daily:
                 fig_cat.update_yaxes(title_text='Σ объём, лот')
                 st.markdown("#### Объём по категориям (символ + семейство)")
                 st.plotly_chart(fig_cat, use_container_width=True)
-        st.markdown("#### План по категориям (символ + семейство)")
+        st.markdown("#### План по категориям")
         _cat_rows = []
         for _sid, _grp in df_plan.groupby('sid'):
             _ccat = _cat_by_id.get(_sid, {})
