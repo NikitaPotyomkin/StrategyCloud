@@ -1,0 +1,169 @@
+================================================================================================
+                 REGISTRY AUDIT -- GENERATED FROM CODE
+                 2026-10-28 13:49:40
+================================================================================================
+
+SOURCES (every number below is read from these files, none are estimated):
+  strategies/_registry.py     REGISTRY (81 entries), ENABLED_BATCH
+  config.py                   BacktestConfig / RiskParams / SYMBOLS
+  journals/active_state.json  live plan snapshot
+  journals/ranking.txt        last rerank output
+
+CONVENTIONS
+  grid      = values of one parameter key (registry `grid` list)
+  per_sym   = len(grid) x 3 SL x 3 TP  (per-symbol SL/TP grid is 3x3)
+  night     = per_sym x 7 symbols
+  min_len   = bars of history required before the first live signal
+  window    = 90 calendar days = 1543 H1 bars = 12.9 trading weeks
+
+================================================================================================
+SECTION 1: REGISTRY (81 strategies, 81 enabled in the live batch)
+================================================================================================
+  #   key            label         grid                      n   min   sym  en
+------------------------------------------------------------------------------------------------
+  1   triple_ema     TripleEMA     [8,10,14,20             ] 4   120    36  yes
+  2   adx_di         ADX-DI        [7,14,21                ] 3   120    27  yes
+  3   ultimate       UO            [7,14,21                ] 3   120    27  yes
+  4   cmo            CMO           [14,20                  ] 2    60    18  yes
+  5   donchian_vol   DonchVol      [10,20,55               ] 3    60    27  yes
+  6   ema2050        EMA2050       [10,20,30,50            ] 4   200    36  yes
+  7   hull           Hull          [10,16,27,40            ] 4   200    36  yes
+  8   ribbon         Ribbon        [10,20                  ] 2   200    18  yes
+  9   dualema        DualEMA       [10,20,30               ] 3   200    27  yes
+  10  macdline       MACDLine      [8,12,16                ] 3   200    27  yes
+  11  macdema        MACDEMA       [8,12,16                ] 3   200    27  yes
+  12  vwmacd         VWMACD        [8,12,16                ] 3   200    27  yes
+  13  wmaema         WMAEMA        [10,20,30               ] 3   200    27  yes
+  14  adxbreak       ADXBreak      [7,14,21                ] 3   200    27  yes
+  15  momthr         MomThr        [5,10,20                ] 3   200    27  yes
+  16  hhll           HHLL          [5,10,20                ] 3   120    27  yes
+  17  bbwalk         BBWalk        [10,20,30               ] 3   120    27  yes
+  18  bbrsi          BBRsi         [10,20,30               ] 3   120    27  yes
+  19  bbmacd         BBMacd        [10,20,30               ] 3   120    27  yes
+  20  adxbb          ADXBB         [7,14,21                ] 3   120    27  yes
+  21  dpo            DPO           [10,20,30               ] 3   120    27  yes
+  22  ppo            PPO           [10,20,30               ] 3   120    27  yes
+  23  vortex         Vortex        [10,14,20               ] 3   120    27  yes
+  24  roc            ROC           [10,14,20               ] 3   120    27  yes
+  25  elder          Elder         [10,14,20               ] 3   120    27  yes
+  26  forceidx       ForceIdx      [10,13,20               ] 3   120    27  yes
+  27  stochma        StochMA       [10,14,20               ] 3   120    27  yes
+  28  stochrsiema    StochRSIEMA   [10,14,20               ] 3   160    27  yes
+  29  cciext         CCIExt        [14,20,30               ] 3   120    27  yes
+  30  pearson        Pearson       [20,30,50               ] 3   160    27  yes
+  31  partcorr       PartCorr      [20,30,50               ] 3   160    27  yes
+  32  dyncorr        DynCorr       [20,30,50               ] 3   160    27  yes
+  33  corrbreak      CorrBreak     [20,30,50               ] 3   160    27  yes
+  34  covbreak       CovBreak      [20,30,50               ] 3   160    27  yes
+  35  obvslope       OBVSlope      [10,20,30               ] 3   120    27  yes
+  36  obvema         OBVEMA        [10,20,30               ] 3   120    27  yes
+  37  cmf            CMF           [10,20,30               ] 3   120    27  yes
+  38  adline         ADLine        [10,20,30               ] 3   120    27  yes
+  39  voltrend       VolTrend      [10,20,30               ] 3   120    27  yes
+  40  volspike       VolSpike      [10,20,30               ] 3   120    27  yes
+  41  heikin         Heikin        [10,20                  ] 2   120    18  yes
+  42  macdrsi        MACDRSI       [8,12,16                ] 3   160    27  yes
+  43  emapara        EMAPara       [10,20,30               ] 3   200    27  yes
+  44  ichimoku_tk    IchiTK        [9,14,20                ] 3   200    27  yes
+  45  ichimoku_cloud IchiCloud     [20,26,52               ] 3   200    27  yes
+  46  ichimoku_chiko IchiChikou    [9,14,20                ] 3   200    27  yes
+  47  ichimoku_full  IchiFull      [9,14,20                ] 3   200    27  yes
+  48  fibonacci      Fib           [10,20,50               ] 3   120    27  yes
+  49  atrrev         ATRRev        [10,14,20               ] 3   120    27  yes
+  50  monthlyhl      MonthlyHL     [20,55                  ] 2   120    18  yes
+  51  prevweek       PrevWeek      [5,10,20                ] 3   120    27  yes
+  52  monpivot       MonPivot      [20,55                  ] 2   120    18  yes
+  53  weekpivot      WeekPivot     [5,20                   ] 2   120    18  yes
+  54  pivotbounce    PivotBounce   [10,20,55               ] 3   120    27  yes
+  55  asianbreak     AsianBreak    [10,20,30               ] 3   120    27  yes
+  56  firstbar       FirstBar      [10,20,55               ] 3   120    27  yes
+  57  gapfill        GapFill       [5,10,20                ] 3   120    27  yes
+  58  dowmom         DoWMom        [5,10,20                ] 3   120    27  yes
+  59  rangedaily     RangeDaily    [10,20,30               ] 3   120    27  yes
+  60  doji           Doji          [10,20,50               ] 3   120    27  yes
+  61  dbltopbot      DblTopBot     [10,20,50               ] 3   120    27  yes
+  62  srbounce       SRBounce      [10,20,50               ] 3   120    27  yes
+  63  threecrows     3Crows        [5,10,20                ] 3   120    27  yes
+  64  tweezer        Tweezer       [5,10,20                ] 3   120    27  yes
+  65  keltatr        KeltATR       [10,20,30               ] 3   120    27  yes
+  66  strema         STrendEMA     [10,14,20               ] 3   160    27  yes
+  67  coinflip       CoinFlip      [10,20,30               ] 3   120    27  yes
+  68  smoothedma     SmoothMA      [10,20,30               ] 3   200    27  yes
+  69  spearman       Spearman      [20,30,50               ] 3   160    27  yes
+  70  keltbreak      KeltBreak     [10,20,30               ] 3   120    27  yes
+  71  atrchan        ATRChan       [10,14,20               ] 3   120    27  yes
+  72  rsiob          RSIOB         [7,14,21                ] 3   120    27  yes
+  73  stochastic_rsi StochRSI      [7,14,21                ] 3   120    27  yes
+  74  mfi            MFI           [7,14,21                ] 3   120    27  yes
+  75  macdzero       MACDZero      [8,12,16                ] 3   120    27  yes
+  76  rsieema        RSIEMA        [7,14,21                ] 3   160    27  yes
+  77  donchadx       DonchADX      [10,20,55               ] 3   200    27  yes
+  78  insidebar      InsideBar     [5,10,20                ] 3   120    27  yes
+  79  tworsi         TwoRSI        [7,14,21                ] 3   120    27  yes
+  80  willstoch      WillStoch     [7,14,21                ] 3   120    27  yes
+  81  tsi            TSI           [10,14,20               ] 3   120    27  yes
+------------------------------------------------------------------------------------------------
+  TOTAL                                     240        2160
+
+================================================================================================
+SECTION 2: AGGREGATES
+================================================================================================
+  strategies in registry ............ 81
+  strategies enabled (live batch) ... 81  (240 grid steps, 2160 combos/symbol)
+  grid steps per symbol ............. 240 -> 2160 combos/symbol -> 15120 per night
+  grid size distribution ............ 2 values: 6 strategies, 3 values: 72 strategies, 4 values: 3 strategies
+  min_tstat filter .................. 2.50
+  max_per_type ...................... 8
+  risk quota ........................ 20.0% of balance
+  per-trade risk cap ................ 0.50% of balance
+  registry share of the nightly plan  25.0% of 60543 combinations
+
+================================================================================================
+SECTION 3: WARMUP VS BACKTEST WINDOW
+================================================================================================
+  min_len    0-  60 :  2 strategies | up to   3.9% of window | 2.5 trading days
+  min_len   61- 120 : 52 strategies | up to   7.8% of window | 5.0 trading days
+  min_len  121- 160 : 10 strategies | up to  10.4% of window | 6.7 trading days
+  min_len  161- 200 : 17 strategies | up to  13.0% of window | 8.3 trading days
+
+  Reference: 120 H1 bars = 1 trading week (5 x 24 bars), not 2.5 weeks.
+  200-bar warmup at a 90-day window costs 13.0% of the sample.
+
+================================================================================================
+SECTION 4: LIVE STATE (journals/, point in time)
+================================================================================================
+  plan snapshot ..................... 2026-10-28T13:32:52.052652
+  strategies in plan ................ 23  (enabled 20)
+  plan by family .................... cci:4, coint:5, logreg:1, lrc:1, percentile:1, skewness:8, vwap:2, williams_r:1
+  sum of lots ....................... 1.00
+  balance / risk quota .............. 1034067 / 206813
+  trades per strategy in plan ....... min 5, median 22, max 131
+
+  last ranking ...................... 2026-10-28 05:08:22 | window 90 days | 28 combos
+  survivors by family ............... cci:4, coint:5, logreg:1, lrc:1, percentile:1, skewness:13, vwap:2, williams_r:1
+  plan vs survivors ................. 23 in plan / 28 ranked
+
+================================================================================================
+SECTION 5: CHECKS
+================================================================================================
+  PASS  ENABLED_BATCH keys all exist in REGISTRY
+  PASS  labels are unique
+  PASS  registry contract 240 grid steps -> 2160 combos/symbol (actual 240 -> 2160)
+  PASS  min_len >= max(grid) for every strategy
+  PASS  live batch non-empty: 81 of 81 strategies, 2160 combos/symbol, 15120 per night
+  PASS  warmup fits in 25% of the 1543-bar window (min_len <= 385)
+
+================================================================================================
+SECTION 6: WHAT THIS REPORT DOES NOT CLAIM
+================================================================================================
+  * No "realism" score. Backtest realism is decided by intrabar SL/TP
+    ordering, spread/commission/swap modelling and entry timing -- see
+    strategies/_bt_core.py -- not by how long a human would review a file.
+  * No runtime estimate from theory. Measured reference: 60,543 combos
+    over 7 symbols took 12 minutes on 28.10 (03:00:08 -> 03:12:53, 3
+    workers) = ~84 combos/s, so this registry alone is a minutes-scale
+    job at both 30- and 90-day windows.
+  * No ranking advice. Survival is decided by the t-stat filter; the
+    survivors are listed in journals/ranking.txt (Section 4), not here.
+
+END OF REPORT

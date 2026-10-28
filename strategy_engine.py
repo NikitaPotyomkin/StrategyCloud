@@ -169,8 +169,8 @@ def deduplicate_results(results, min_trades=None, min_score=1.0, min_tstat=None)
     # Порог живёт в RiskConfig.min_tstat (0 отключает фильтр).
     if min_tstat is None:
         try:
-            from config import RiskConfig
-            min_tstat = float(getattr(RiskConfig(), 'min_tstat', 3.0))
+            from config import RiskParams   # RiskParams, not RiskConfig: the old name raised ImportError and silently kept 3.0
+            min_tstat = float(getattr(RiskParams(), 'min_tstat', 2.5))
         except Exception:
             min_tstat = 3.0
     _sig_min_n = 5  # ниже 5 сделок статистику считать не на чем
@@ -195,6 +195,7 @@ def deduplicate_results(results, min_trades=None, min_score=1.0, min_tstat=None)
     _n_before_sig = len(unique)
     _sig_dropped = [r for r in unique
                     if r['t_stat'] < min_tstat or r.get('n_trades', 0) < _sig_min_n]
+    _all_rows = list(unique)   # pre-filter set: family champions are taken from it
     unique = [r for r in unique
               if r['t_stat'] >= min_tstat
               and r.get('n_trades', 0) >= _sig_min_n
@@ -231,6 +232,42 @@ def deduplicate_results(results, min_trades=None, min_score=1.0, min_tstat=None)
         _pf = float(r.get('profit_factor') or 0.0)
         return _pf * (1.0 - _wr) / _wr >= MIN_PAYOFF
 
+    # --- Breadth: best combo of EVERY family (symbol + type) enters the ranking ---
+    # Without this the ranking keeps only families that beat the t-test (7-8 of
+    # ~118), the registry never reaches the plan and the plan freezes on the same
+    # old families. Hard quality gates stay: n_trades >= min_trades_rank,
+    # profit > 0, score >= min_score and the TP/SL payoff filter below.
+    _rank_all, _min_trades_rank = True, 10
+    try:
+        from config import BacktestConfig as _BTC
+        _btc = _BTC()
+        _rank_all = bool(getattr(_btc, 'rank_all_families', True))
+        _min_trades_rank = int(getattr(_btc, 'min_trades_rank', 10) or 10)
+    except Exception:
+        pass
+    if _rank_all:
+        _strict_keys = {(r['symbol'], r.get('type', 'stoch')) for r in unique}
+        _champ = {}
+        for r in _all_rows:
+            _k = (r['symbol'], r.get('type', 'stoch'))
+            if _k in _strict_keys:
+                continue
+            if int(r.get('n_trades') or 0) < _min_trades_rank:
+                continue
+            if float(r.get('profit') or 0.0) <= 0.0:
+                continue
+            if float(r.get('score') or 0.0) < min_score:
+                continue
+            if _k not in _champ or r['score'] > _champ[_k]['score']:
+                _champ[_k] = r
+        if _champ:
+            for _r in _champ.values():
+                _r['champ'] = True
+            unique = unique + list(_champ.values())
+            unique.sort(key=lambda r: r['score'], reverse=True)
+            print(f"  [FAMILY-CHAMPIONS] added {len(_champ)} best-of-family rows "
+                  f"(n >= {_min_trades_rank}) that missed the t-stat filter", flush=True)
+
     _n_before_rr = len(unique)
     unique = [r for r in unique if _passes_risk_reward(r)]
     _n_dropped_rr = _n_before_rr - len(unique)
@@ -254,6 +291,11 @@ def deduplicate_results(results, min_trades=None, min_score=1.0, min_tstat=None)
         for s in selected:
             if r['symbol'] != s['symbol']:
                 continue
+            # Two different families are not duplicates even with identical P&L:
+            # the old cross-family check left 1-2 luckiest families and deleted the rest.
+            if r.get('type', 'stoch') != s.get('type', 'stoch'):
+                continue
+                # (duplicate continue removed: type check above)
             profit_close = abs(r['profit'] - s['profit']) / max(abs(r['profit']), 1) < 0.05 #хардкод
             n_trades_r = r.get('n_trades', 0)
             n_trades_s = s.get('n_trades', 0)

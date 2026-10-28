@@ -405,6 +405,9 @@ class RiskParams:
     # не дают «-20k одной сделкой»: лот режется до balance*pct / sl_money.
     per_trade_risk_pct: float = 0.005
     min_lot: float = 0.01
+    # Hard cap for the live plan size (number of strategy slots). Breadth is
+    # limited by the quota / min_lot budget: 40 slots is wider than the old 20-23.
+    plan_max_strategies: int = 40
     min_score: float = 1.0
     # Значимость вместо жёсткого порога «10 сделок»: t-статистика ожидания
     # на сделку. 2.5 ≈ 98.8% на ОДНУ гипотезу; по 6265 уникальным комбинациям
@@ -457,6 +460,13 @@ class BacktestConfig:
                               # 28.10 03:00→03:12), значит 90 дн. ≈ 35–40 мин.
                               # На время прогона торговля не стоит: план прежний.
     poll_interval: int = 5
+    # Breadth of the ranking: the best combo of EVERY family (symbol + type) gets
+    # a row even if it cannot pass the t-stat test. Quality gates stay in
+    # strategy_engine.deduplicate_results: n_trades >= min_trades_rank, profit > 0,
+    # score >= min_score and the TP/SL payoff filter.
+    rank_all_families: bool = True
+    min_trades_rank: int = 10
+    max_per_symbol_pct: float = 0.30
     top_n: Optional[int] = 9999        # None = без ограничения
     force_recalc: bool = False
     full_recalc_mode: bool = True  # True = РУЧНОЙ полный пересчёт при запуске (в любой день); False = авторежим (будни реранк по чекпойнтам, выходные полный)

@@ -279,7 +279,7 @@ def apply_probation_cap(ranked_results, cap=SUSPECT_SCORE_CAP, verbose=True):
 
 def distribute_lots(ranked_results, symbol_data, balance,
                     max_risk_pct=0.05, min_lot=0.01, min_score=0.8, max_per_type=None,
-                    per_trade_risk_pct=0.005):
+                    per_trade_risk_pct=0.005, plan_max_strategies=None):
     """Распределяет лоты пропорционально score в рамках квоты риска.
 
     Использует _normalize_volume для округления лотов по шагу брокера
@@ -346,6 +346,21 @@ def distribute_lots(ranked_results, symbol_data, balance,
             type_counts[_stype] = type_counts.get(_stype, 0) + 1
         active.append(c)
         
+
+    # --- Hard cap: plan breadth is limited by the quota / min_lot budget ---
+    # Without a cap every family champion would become a 0.01-lot position and the
+    # summed risk would blow past the quota. active is in round-robin-by-family
+    # order, so truncation keeps the mix of families instead of one hot type.
+    if plan_max_strategies is None:
+        try:
+            from config import RiskParams as _RP
+            plan_max_strategies = int(getattr(_RP(), 'plan_max_strategies', 0) or 0)
+        except Exception:
+            plan_max_strategies = 0
+    if plan_max_strategies and len(active) > plan_max_strategies:
+        print(f"  [PLAN-CAP] {len(active)} -> {plan_max_strategies} strategies "
+              f"(round-robin by family)", flush=True)
+        active = active[:plan_max_strategies]
 
     if not active:
         return []
