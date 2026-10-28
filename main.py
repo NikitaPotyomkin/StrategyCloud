@@ -37,7 +37,7 @@ from wheel import (
     apply_tree_weighting, record_category_id,
 )
 from risk_manager import (
-    calc_metrics, composite_score, distribute_lots, check_integration_budget, lot_ceiling,
+    calc_metrics, composite_score, distribute_lots, check_integration_budget, lot_ceiling_money,
     check_daily_loss_limit, check_equity_stop, check_margin_level, realtime_quota_recalc,
     MAX_COMBOS_PER_STRATEGY,
     _sl_money_per_lot, _normalize_volume,
@@ -756,11 +756,15 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
             _info = symbol_data.get(s['symbol'], {}).get('info')
             _vol = _normalize_volume(new_lot, _info)
             new_lot = max(_vol if _vol is not None else risk_cfg.min_lot, risk_cfg.min_lot)
-            # Ceiling for one strategy: the wheel gave USDJPY 2.02 lots while the
-            # rest of the plan sat at 0.01-0.36 - small sl_money per lot + a big
-            # category quota. distribute_lots already caps; the wheel rewrites lots
-            # after it, so the cap has to be repeated here.
-            _max_lot = lot_ceiling(_m, risk_quota, len(active_strategies))
+
+
+
+
+            # Ceiling for one strategy: a money rule on the balance, so a single
+            # JPY strategy can never take a whole lot of a 1M deposit.
+            _max_lot = lot_ceiling_money(symbol=s['symbol'], info=_info,
+                                         sl_points=s.get('sl_points'),
+                                         balance=balance, sl_money=_m)
             if _max_lot > 0 and new_lot > _max_lot:
                 new_lot = _max_lot
             if abs(new_lot - s['lot']) > 1e-9:
@@ -800,7 +804,11 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
         _q_sync = float(risk_quota or 0.0)
         if _q_sync > 0:
             for _sk, _sv in active_strategies.items():
-                _cap_sv = lot_ceiling(_slm.get(_sk, 0.0), _q_sync, len(active_strategies))
+                _cap_sv = lot_ceiling_money(
+                    symbol=_sv.get('symbol'),
+                    info=symbol_data.get(_sv.get('symbol'), {}).get('info'),
+                    sl_points=_sv.get('sl_points'),
+                    balance=balance, sl_money=_slm.get(_sk, 0.0))
                 if _cap_sv > 0 and float(_sv.get('lot') or 0) > _cap_sv:
                     _sv['lot'] = _cap_sv
         _lot_by_key = {_k: _v.get('lot') for _k, _v in active_strategies.items()}

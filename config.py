@@ -408,13 +408,21 @@ class RiskParams:
     # Hard cap for the live plan size (number of strategy slots). Breadth is
     # limited by the quota / min_lot budget: 40 slots is wider than the old 20-23.
     plan_max_strategies: int = 40
-    # Ceiling for ONE strategy as a share of the risk quota (not in lots):
-    # lot_cap = quota * max_risk_share_pct / 100 / sl_money_per_lot (per symbol).
-    # equal_share = quota / n_strategies  (risk if the quota were split evenly)
-    # lot_cap     = equal_share * lot_share_of_equal / sl_money_per_lot
-    # 33 strategies of 206 813 RUB -> equal 6 267, cap 3 134 RUB, i.e. ~1.2 lots
-    # on USDJPY (sl_money 2 560 per lot) and ~0.5 on NZD. 0 disables the ceiling.
-    lot_share_of_equal: float = 0.5
+    # Ceiling for ONE strategy is a MONEY rule, not a lot constant
+    # (see risk_manager.lot_ceiling_money):
+    #   cap = min(balance*per_trade_risk_pct / sl_money_per_lot,
+    #             balance*risk_1000_points_pct / money_per_1000_points)
+    # Calibration behind risk_1000_points_pct: 0.5 lot of USDJPY on a 1000-point
+    # move costs 0.5 * 1000 * 0.001 * 100 000 = 50 000 JPY = ~25 300 RUB, i.e.
+    # 2.53% of a 1 000 000 RUB deposit. 2.5% keeps the plan leader at ~0.5 lot at
+    # today's balance and scales automatically with the balance.
+    risk_1000_points_pct: float = 0.025
+
+
+
+
+
+
     min_score: float = 1.0
     # Значимость вместо жёсткого порога «10 сделок»: t-статистика ожидания
     # на сделку. 2.5 ≈ 98.8% на ОДНУ гипотезу; по 6265 уникальным комбинациям

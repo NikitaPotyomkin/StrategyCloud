@@ -102,6 +102,12 @@ def _sl_money_per_lot(symbol, info, sl_points):
     """
     if sl_points <= 0:
         return 0.0
+    # Explicit arithmetic first (see money_per_points): the old order_calc_profit
+    # path returned an order of magnitude less than the point arithmetic, which is
+    # how a 450-point USDJPY stop looked like 2.5k RUB per lot instead of ~23k.
+    _mpp = money_per_points(symbol, info, sl_points)
+    if _mpp > 0:
+        return _mpp
     point = getattr(info, 'point', None) or 0
     if point <= 0:
         return 0.0
@@ -124,8 +130,8 @@ def _sl_money_per_lot(symbol, info, sl_points):
     return 0.0
 
 
-def lot_ceiling(sl_money, quota, n_strategies, share_factor=None):
-    """Lot ceiling for ONE strategy, derived from the plan itself.
+def _lot_ceiling_quota_share(sl_money, quota, n_strategies, share_factor=None):
+    """LEGACY quota-share ceiling - kept for reference, not used by the bot.
 
     equal_share = quota / n_strategies          # risk if the quota were split evenly
     money_cap   = equal_share * share_factor    # this strategy may take at most that
@@ -151,6 +157,144 @@ def lot_ceiling(sl_money, quota, n_strategies, share_factor=None):
     if share_factor <= 0 or _m <= 0 or _q <= 0 or _n <= 0:
         return 0.0
     return (_q / _n) * share_factor / _m
+
+
+_QUOTE_CACHE = {}
+
+
+def _quote(a, b):
+    """Price of 1 unit of `a` in units of `b`, taken from the broker's symbols."""
+    key = (a, b)
+    if key in _QUOTE_CACHE:
+        return _QUOTE_CACHE[key]
+    val = None
+    for suf in ('', 'rfd', '.rfd', 'm', 'pro'):
+        try:
+            t = mt5.symbol_info_tick(f"{a}{b}{suf}")
+        except Exception:
+            t = None
+        if t is not None and (getattr(t, 'bid', 0) or 0) > 0:
+            val = float(t.bid)
+            break
+    _QUOTE_CACHE[key] = val
+    return val
+
+
+def _rate_to_account(ccy):
+    """How many account-currency units one unit of `ccy` is worth."""
+    if not ccy:
+        return 0.0
+    acc = 'RUB'
+    try:
+        ai = mt5.account_info()
+        if ai is not None and getattr(ai, 'currency', None):
+            acc = ai.currency
+    except Exception:
+        pass
+    if ccy == acc:
+        return 1.0
+    r = _quote(ccy, acc)
+    if r:
+        return r
+    r = _quote(acc, ccy)
+    if r:
+        return 1.0 / r
+    # cross through USD: RUB per JPY = (RUB per USD) / (JPY per USD)
+    usd_acc = _quote('USD', acc)
+    usd_ccy = _quote('USD', ccy)
+    if usd_acc and usd_ccy:
+        return usd_acc / usd_ccy
+    return 0.0
+
+
+def money_per_points(symbol, info, points):
+    """Money (account currency) lost by 1.0 lot on an adverse move of `points`.
+
+    Explicit arithmetic first: points * point * contract_size * fx_rate.
+    It works even when the broker reports trade_tick_value = 0 (Alfa-Forex
+    does), which is why the old tick_value fallback silently returned 0 risk.
+    order_calc_profit is a cross-check: the larger of the two wins, so a broken
+    quote can never understate the risk.
+    """
+    try:
+        pts = float(points or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if pts <= 0:
+        return 0.0
+    if info is None:
+        try:
+            info = mt5.symbol_info(symbol)
+        except Exception:
+            info = None
+    if info is None:
+        return 0.0
+    point = float(getattr(info, 'point', 0) or 0)
+    contract = float(getattr(info, 'trade_contract_size', 0) or 0)
+    manual = 0.0
+    if point > 0 and contract > 0:
+        rate = _rate_to_account(getattr(info, 'currency_profit', '') or '')
+        if rate > 0:
+            manual = pts * point * contract * rate
+    ocp = 0.0
+    try:
+        tick = mt5.symbol_info_tick(symbol)
+    except Exception:
+        tick = None
+    if tick is not None and point > 0 and (getattr(tick, 'ask', 0) or 0) > 0:
+        p = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, 1.0,
+                                  tick.ask, tick.ask - pts * point)
+        if p is not None:
+            ocp = abs(float(p))
+    return max(manual, ocp)
+
+
+def money_per_1000_points(symbol, info=None):
+    """Risk of 1.0 lot on a 1000-point adverse move - the headline risk number."""
+    return money_per_points(symbol, info, 1000.0)
+
+
+def lot_ceiling_money(symbol=None, info=None, sl_points=None, balance=0.0,
+                      sl_money=None):
+    """Ceiling for ONE strategy in lots. Two money rules, no lot constants:
+
+      1) loss when its own SL triggers     <= balance * per_trade_risk_pct
+      2) loss on a 1000-point adverse move <= balance * risk_1000_points_pct
+
+    cap = min(rule1 / sl_money, rule2 / money_per_1000_points)
+
+    Both numerators are RUB and both denominators are RUB per lot, so the cap
+    scales with the balance and the symbol's point value instead of being a
+    hard-coded lot size. At balance 1 000 000 RUB a 1000-point USDJPY move costs
+    ~50 600 RUB per lot, so 2.5% of the deposit buys 0.49 lot.
+    """
+    try:
+        bal = float(balance or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if bal <= 0:
+        return 0.0
+    try:
+        from config import RiskParams as _RPc
+        _rp = _RPc()
+        p_trade = float(getattr(_rp, 'per_trade_risk_pct', 0.005) or 0.0)
+        p_1000 = float(getattr(_rp, 'risk_1000_points_pct', 0.025) or 0.0)
+    except Exception:
+        p_trade, p_1000 = 0.005, 0.025
+    try:
+        m = float(sl_money or 0.0)
+    except (TypeError, ValueError):
+        m = 0.0
+    if m <= 0 and symbol:
+        m = money_per_points(symbol, info, sl_points)
+    caps = []
+    if p_trade > 0 and m > 0:
+        caps.append(bal * p_trade / m)
+    if p_1000 > 0 and symbol:
+        m1000 = money_per_1000_points(symbol, info)
+        if m1000 > 0:
+            caps.append(bal * p_1000 / m1000)
+    return min(caps) if caps else 0.0
 
 
 def _calc_position_pnl(symbol, lot, entry_price, exit_price, direction, info=None):
@@ -440,20 +584,28 @@ def distribute_lots(ranked_results, symbol_data, balance,
                 x['lot'] = max(math.floor(_raw * 100) / 100, min_lot)
 
     # Финальная фильтрация: оставляем только стратегии с lot >= min_lot
-    # --- Ceiling per strategy: a SHARE of the equal split (quota / n), not a lot ---
-    # cap_money = (quota / n_strategies) * lot_share_of_equal; lot_cap = cap_money / sl_money
-    # The money cap alone is not a fairness rule: JPY crosses have a cheap SL in
-    # rubles per lot, so the cap was spent as 2.02 lots while a EUR strategy got
-    # 0.4. A hard lot ceiling makes the plan readable: leader <= max_lot.
+    # --- Ceiling per strategy: money rules on the balance (see lot_ceiling_money) ---
+    # cap = min(balance*per_trade_risk_pct / sl_money,
+    #           balance*risk_1000_points_pct / money_per_1000_points)
+    # One strategy may not risk more than its own slice of the deposit, whatever
+    # symbol it trades. That is what stops a single JPY strategy from taking a
+    # whole lot while the rest of the plan sits at 0.01-0.36.
+
+
+
+
     if max_lot_per_strategy is None:
         try:
-            from config import RiskParams as _RP3
-            max_lot_per_strategy = float(getattr(_RP3(), 'lot_share_of_equal', 0) or 0)
+            # ceiling is always on; the flag is kept for backward compatibility
+            max_lot_per_strategy = 1.0
         except Exception:
             max_lot_per_strategy = 0.0
     if max_lot_per_strategy and max_lot_per_strategy > 0:
         for x in active:
-            _cap = lot_ceiling(x['sl_money'], quota, len(active), max_lot_per_strategy)
+            _cap = lot_ceiling_money(symbol=x['symbol'],
+                                     info=symbol_data.get(x['symbol'], {}).get('info'),
+                                     sl_points=x.get('sl_points'),
+                                     balance=balance, sl_money=x['sl_money'])
             if _cap <= 0 or x['lot'] <= _cap:
                 continue
             info = symbol_data.get(x['symbol'], {}).get('info')

@@ -90,7 +90,9 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
         per_vol = np.nan
         m = (g['vol'] > 0) & np.isfinite(g['vol']) & np.isfinite(g['fl'])
         if bool(m.any()):
-            sub = g[m].copy()
+            # idxmax() returns an INDEX LABEL, so the subset must have 0..n-1 labels
+            # for the .iloc[] lookups below (otherwise: IndexError out-of-bounds).
+            sub = g[m].copy().reset_index(drop=True)
             sub['per'] = sub['fl'] / sub['vol']
             j = int(sub['per'].idxmax())
             per_lot = float(sub['per'].iloc[j])

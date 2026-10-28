@@ -1199,6 +1199,13 @@ with tab_daily:
                     risk = lot * _m if _m else None
                 except Exception:
                     risk = None
+            risk1000 = None
+            try:
+                from risk_manager import money_per_1000_points as _m1k_fn
+                _m1k = _m1k_fn(sym, mt5.symbol_info(sym))
+                risk1000 = lot * _m1k if _m1k else None
+            except Exception:
+                risk1000 = None
             pass  # _m уже посчитан выше; дубль-сброс убран
             _vol = cat.get('volume') or 0.0
             rows.append({
@@ -1212,6 +1219,7 @@ with tab_daily:
                 'TP': s.get('tp_points'),
                 'lot': lot,
                 'risk ₽': risk,
+                'risk 1000п ₽': risk1000,
                 'sl_money': _m,
                 'sym_raw': sym,
                 'BT score': s.get('score'),
@@ -1311,7 +1319,14 @@ with tab_daily:
         c2.metric("Planned volume", f"{df_plan['lot'].sum():.2f} lots")
         c3.metric("Risk budget", f"{_quota:,.0f} RUB")
         _used = df_plan['risk ₽'].dropna().sum()
-        c4.metric("Used risk", f"{_used:,.0f} RUB" if _used > 0 else "—")
+        _used1k = df_plan['risk 1000п ₽'].dropna()
+        _used1k_sum = float(_used1k.sum()) if len(_used1k) else 0.0
+        _used1k_max = float(_used1k.max()) if len(_used1k) else 0.0
+        c4.metric("Риск 1000 пт, Σ", (f"{_used1k_sum:,.0f} ₽".replace(',', ' ')
+                                     if _used1k_sum > 0 else "—"),
+                  delta=(f"макс на стратегию {_used1k_max:,.0f} ₽".replace(',', ' ')
+                         if _used1k_max > 0 else None),
+                  delta_color="off")
 
         # ── План ↔ Strategy Tree: тот же уровень гранулярности (категория symbol+family) ──
         # Tree считает PnL по реальным закрытым сделкам окна аллокации; план — по стратегиям.
@@ -1350,6 +1365,10 @@ with tab_daily:
             _ctr = _ccat.get('trades')
             _lot_sum = float(_grp['lot'].sum())
             _risk_sum = float(_grp['risk ₽'].dropna().sum()) if _grp['risk ₽'].notna().any() else None
+            _r1k = (_grp['risk 1000п ₽'].dropna()
+                    if 'risk 1000п ₽' in _grp.columns else pd.Series(dtype=float))
+            _risk1k_sum = float(_r1k.sum()) if len(_r1k) else None
+            _risk1k_avg = float(_r1k.mean()) if len(_r1k) else None
             _cat_rows.append({
                 'Категория': _grp['category'].iloc[0],
                 'Tree PnL ₽': ('—' if _cpnl is None else f"{_cpnl:,.0f}".replace(',', ' ')),
@@ -1359,6 +1378,8 @@ with tab_daily:
                 'Стратегий': len(_grp),
                 'Σ lot': round(_lot_sum, 2),
                 'Σ risk ₽': (round(_risk_sum, 0) if _risk_sum is not None else None),
+                'Риск стратегии 1000 пт ₽': (round(_risk1k_avg, 0) if _risk1k_avg is not None else None),
+                'Σ риск 1000 пт ₽': (round(_risk1k_sum, 0) if _risk1k_sum is not None else None),
                 '_pnl': _cpnl,
                 '_lot': _lot_sum,
             })
@@ -1372,29 +1393,29 @@ with tab_daily:
             def _share(_v, _tot=_tot_lot):
                 return f"{100.0 * _v / _tot:.0f}%" if _tot > 0 else "—"
 
-            # ── Перевес: кто кого перевешивает по прибыли и по объёму ──
-            # Зелёные = категории с Tree PnL > 0, красные = PnL < 0.
-            # Перевес по прибыли = сумма PnL зелёных + сумма PnL красных (красные уже < 0).
-            # Перевес по объёму = доля объёма плана, стоящая в красных категориях.
-            _pnl_g = float(_dfc.loc[_dfc['_pnl'] > 0, '_pnl'].sum())
-            _pnl_r = float(_dfc.loc[_dfc['_pnl'] < 0, '_pnl'].sum())
-            _n_g = int((_dfc['_pnl'] > 0).sum())
-            _n_r = int((_dfc['_pnl'] < 0).sum())
-            _bal = _pnl_g + _pnl_r
-            _red_pct = (100.0 * _red / _tot_lot) if _tot_lot > 0 else None
-            _g1, _g2, _g3 = st.columns(3)
-            _g1.metric("Зелёные", f"{_pnl_g:+,.0f} ₽".replace(',', ' '),
-                       delta=f"{_green:.2f} лот.", delta_color="off")
-            _g1.caption(f"{_n_g} кат.")
-            _g2.metric("Красные", f"{_pnl_r:+,.0f} ₽".replace(',', ' ').replace('-', '−'),
-                       delta=f"{_red:.2f} лот.", delta_color="off")
-            _g2.caption(f"{_n_r} кат.")
-            _g3.metric("Перевес", f"{_bal:+,.0f} ₽".replace(',', ' ').replace('-', '−'),
-                       delta=(f"{_red_pct:.0f}% объёма у красных" if _red_pct is not None
-                              else None),
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         
-                       delta_color="off")
-            _g3.caption("зелёные + красные")
+
+
             _mc1, _mc2, _mc3, _mc4 = st.columns(4)
             _mc1.metric("Категорий в плане", f"{len(_dfc)}")
             _mc2.metric("Объём в зелёных", _share(_green))
@@ -1434,6 +1455,7 @@ with tab_risk:
         total_volume = sum(p.volume for p in positions)
         n_positions = len(positions)
 
+        from risk_manager import money_per_points as _mpp
         max_loss = 0.0
         no_sl_count = 0
         risk_by_symbol = {}
@@ -1442,10 +1464,14 @@ with tab_risk:
             sl_loss = 0.0
             if p.sl != 0:
                 info = mt5.symbol_info(p.symbol)
-                if info and info.trade_tick_value > 0 and info.trade_tick_size > 0:
-                    sl_distance = abs(p.price_current - p.sl)
-                    loss_in_ticks = sl_distance / info.trade_tick_size
-                    sl_loss = p.volume * loss_in_ticks * info.trade_tick_value
+                if info and info.point > 0:
+                    # RUB risk from the point distance: trade_tick_value is 0 at this
+                    # broker, so the old formula always produced 0 and the column was dead.
+                    _pts = abs(p.price_current - p.sl) / info.point
+                    sl_loss = p.volume * _mpp(p.symbol, info, _pts)
+
+
+
             else:
                 no_sl_count += 1
             max_loss += sl_loss
@@ -1483,7 +1509,7 @@ with tab_risk:
             st.metric("Unrealized P&L", f"{unrealized_pnl:+,.1f} RUB",
                       delta_color="inverse")
         with col_r3:
-            st.metric("Max Risk (SL)", f"{max_loss:,.1f} RUB")
+            st.metric("Риск SL, ₽", f"{max_loss:,.1f} RUB")
         with col_r4:
             # Удержание: часы, в скобках — дни; среднее по закрытым позициям окна.
             st.metric("Avg Hold, h (d)",
