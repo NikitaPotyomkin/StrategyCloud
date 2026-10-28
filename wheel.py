@@ -661,5 +661,12 @@ def apply_tree_weighting(active, symbol_data, balance, risk_pct,
                               min_lot=min_lot, gamma=gamma, min_trades=min_trades)
     for i, r in enumerate(active):
         if lots.get(i):
-            r['lot'] = lots[i]
+            # Ceiling: tree weighting writes lots after distribute_lots, so the cap
+            # must live here too (2.02 lots on a cheap-SL category came from this path).
+            try:
+                from config import RiskParams as _RP_tree
+                _max_lot = float(getattr(_RP_tree(), 'max_lot_per_strategy', 0) or 0)
+            except Exception:
+                _max_lot = 0.0
+            r['lot'] = min(float(lots[i]), _max_lot) if _max_lot > 0 else lots[i]
     return active
