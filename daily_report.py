@@ -676,6 +676,34 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             pos_peaks_df = pd.DataFrame()
             print(f"  [DASHBOARD] position_peak недоступен: {_pp_err!r}", flush=True)
 
+        # 4d. Эквити счёта во времени (trades_db.equity_samples) ────────────
+        # 1 строка = 1 замер сэмплера main.py (~300 с): balance / equity / floating_total.
+        # Нужно блоку «пик эквити за день» на вкладке Risk: пик ПО СДЕЛКЕ упирается в её
+        # тейк (см. risk_equity_block.py), а по счёту видно, какая цифра вообще была
+        # в моменте — та, что видна в терминале и потом «схлопывается».
+        equity_df = pd.DataFrame()
+        try:
+            import trades_db as _tdb
+            _eq_con = _tdb.connect(readonly=True)
+            _eq_from = int((date_to - datetime.timedelta(days=days_back)).timestamp())
+            # floating_volume появился позже (миграция в trades_db.ensure_schema):
+            # в старых базах строки дадут NULL, и график ₽/лот просто не построится.
+            _eq_cols = {r[1] for r in _eq_con.execute("PRAGMA table_info(equity_samples)")}
+            _vol_sel = ("floating_volume" if 'floating_volume' in _eq_cols
+                        else "NULL AS floating_volume")
+            equity_df = pd.read_sql_query(
+                "SELECT ts, balance, equity, floating_total, n_positions, "
+                f"{_vol_sel} FROM equity_samples WHERE ts >= ? ORDER BY ts",
+                _eq_con, params=(_eq_from,))
+            _eq_con.close()
+            if equity_df is not None and len(equity_df):
+                print(f"  [DASHBOARD] equity_samples: {len(equity_df)} сэмплов "
+                      f"за {days_back} дн.", flush=True)
+        except Exception as _eq_err:
+            # Старая БД без equity_samples — блок пика эквити просто не покажем
+            equity_df = pd.DataFrame()
+            print(f"  [DASHBOARD] equity_samples недоступен: {_eq_err!r}", flush=True)
+
         # 5. Итоги
         total_trades = len(trades_df)
         total_profit = float(trades_df['profit_net'].sum()) if not trades_df.empty else 0.0
@@ -691,6 +719,7 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             'total_profit': total_profit,
             'peaks_df': peaks_df,
             'pos_peaks_df': pos_peaks_df,
+            'equity_df': equity_df,
             'dash_stats': {
                 'window_from': date_from.isoformat(),
                 'window_to': date_to.isoformat(),

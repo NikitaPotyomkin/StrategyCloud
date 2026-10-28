@@ -158,8 +158,6 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
             exited = False
             p = 0.0
             d = position['direction']
-            next_i = i + 1 if i + 1 < len(df) else i
-
             if d == 'long':
                 if current_low <= position['sl']:
                     p = _profit(position['entry'], position['sl'],
@@ -170,7 +168,7 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
                                 tick_value, tick_size, sim_lot, 'long')
                     exited = True
                 elif check_exit(prev_signal, curr_signal, 'long',
-                               bb_middle=_c_bb_middle[next_i],
+                               bb_middle=_c_bb_middle[i],
                                prev_close=_c_close[i-1] if i > 0 else curr_close,
                                curr_close=curr_close):
                     p = _profit(position['entry'], curr_close,
@@ -186,7 +184,7 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
                                 tick_value, tick_size, sim_lot, 'short')
                     exited = True
                 elif check_exit(prev_signal, curr_signal, 'short',
-                               bb_middle=_c_bb_middle[next_i],
+                               bb_middle=_c_bb_middle[i],
                                prev_close=_c_close[i-1] if i > 0 else curr_close,
                                curr_close=curr_close):
                     p = _profit(position['entry'], curr_close,
@@ -207,12 +205,12 @@ def backtest(df, bb_period, bb_std, squeeze_pct, sl_points, tp_points, point,
         if position is None:
             entry_dir = check_entry(prev_signal, curr_signal)
             if entry_dir == 'long':
-                entry = curr_close - spread
+                entry = curr_close + spread  # pay ASK (close + spread)
                 _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
-                entry = curr_close + spread
+                entry = curr_close - spread  # receive BID (close - spread)
                 _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}

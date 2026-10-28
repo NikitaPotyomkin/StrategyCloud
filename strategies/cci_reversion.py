@@ -175,12 +175,12 @@ def backtest(df, period, threshold, sl_points, tp_points, point,
         if position is None:
             entry_dir = check_entry(prev_signal, curr_signal)
             if entry_dir == 'long':
-                entry = curr_close - spread
+                entry = curr_close + spread  # pay ASK (close + spread)
                 _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
-                entry = curr_close + spread
+                entry = curr_close - spread  # receive BID (close - spread)
                 _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}

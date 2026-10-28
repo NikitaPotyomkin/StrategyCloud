@@ -566,7 +566,9 @@ def deploy_badge():
 
 with st.sidebar:
     st.markdown("### Configuration")
-    days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, ALLOC_DAYS)
+    # Дефолт 14 дн. (не ALLOC_DAYS): слайдер — визуальное окно дашборда, а не окно
+    # аллокации. 14 дней дают читаемые графики и совпадают с недельным ритмом недель.
+    days_back = st.slider("Dashboard lookback (visual, days)", 1, 90, 14)
 
     st.caption("Auto-refresh: 30s")
 
@@ -598,7 +600,7 @@ if data_alloc is None:
     data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
 # ── Табы ──
-tab_overview, tab_tree, tab_finstatement, tab_daily, tab_risk, tab_strategies, tab_steering, tab_backtest = st.tabs([
+tab_overview, tab_tree, tab_finstatement, tab_daily, tab_risk, tab_strategies, tab_steering, tab_backtest, tab_roadmap = st.tabs([
     "Overview",
     "Strategy Tree",
     "FinStatement",
@@ -607,6 +609,7 @@ tab_overview, tab_tree, tab_finstatement, tab_daily, tab_risk, tab_strategies, t
     "Strategies",
     "Wheel",
     "Backtest",
+    "Roadmap",
 
 
 ])
@@ -1963,8 +1966,18 @@ with tab_risk:
     # засёк за день, а НЕ результат закрытия. position_peak хранит по строке на
     # (день, position_id): peak_float / peak_per_lot — лучшая зафиксированная
     # точка ОДНОЙ сделки дня. На график берём ЛУЧШУЮ сделку каждого дня.
-    _pkdf = data.get('pos_peaks_df')
-    if not PLOTLY_AVAILABLE:
+    # ── ПИК ЭКВИТИ СЧЁТА за день (trades_db.equity_samples), ТОЛЬКО НАБЛЮДЕНИЕ ──
+    # Разрез «пик нереализованной прибыли ПО ОДНОЙ СДЕЛКЕ» ниже выключен: у сделки
+    # есть TP, поэтому её пик и есть тейк — «закрывать на 90% пика» смысла не имеет.
+    # По счёту же пик складывается из floating всех позиций и именно та цифра видна
+    # в терминале («прибыль огромная, но нельзя закрыть, потом схлопывается»).
+    # Никаких закрытий/фиксаций по пику здесь нет — собираем статистику.
+    import importlib
+    import risk_equity_block
+    importlib.reload(risk_equity_block)   # правки видны на Rerun без перезапуска
+    risk_equity_block.render(data, days_back)
+    _pkdf = None                          # старое: data.get('pos_peaks_df')
+    if True:  # ── ВЫКЛЮЧЕНО: разрез «пик по одной сделке» (пик сделки = её TP)
         pass
     elif _pkdf is None or getattr(_pkdf, 'empty', True):
         st.info("В trades_db.position_peak нет строк за окно. Пики пишет сэмплер main.py "
@@ -2946,6 +2959,20 @@ with tab_steering:
 
 
 
+
+
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ROADMAP — все модули strategies/ и слои их подключения
+# ═══════════════════════════════════════════════════════════════
+with tab_roadmap:
+    # Вкладка живёт в roadmap_tab.py. Рендерим ДО Backtest: тот блок заканчивается
+    # st.stop(), поэтому всё, что стоит после него, не выполняется никогда.
+    import importlib
+    import roadmap_tab
+    importlib.reload(roadmap_tab)  # правки в roadmap_tab.py видны на Rerun
+    roadmap_tab.render_roadmap_tab()
 
 # ═══════════════════════════════════════════════════════════════
 #  BACKTEST

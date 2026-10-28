@@ -13,7 +13,8 @@ from risk_manager import (
     _normalize_volume, _position_profit, DEFAULT_LOT, json_default,
     get_positions, positions_total, check_margin_available, check_margin_level_after_open,
     get_stops_levels, validate_stops, check_position_limits,
-    check_daily_loss_limit, check_equity_stop, realtime_quota_recalc
+    check_daily_loss_limit, check_equity_stop, realtime_quota_recalc,
+    _sl_money_per_lot,
 )
 
 from config import RiskParams
@@ -1170,6 +1171,207 @@ def close_order(symbol, ticket, direction, magic, symbol_data):
     return price
 
 
+# ═══ КВОТА КАТЕГОРИИ: ГЕЙТ НА ВХОД ═══
+# План строит distribute_lots по бэктесту и открытые сделки не видит вовсе.
+# Штурвал учитывает риск открытых позиций только в момент перекладки лота
+# (раз в interval_sec) и умеет ровно одно: q=0 → kill switch. Из-за этого
+# категория могла набрать позиций сверх своей квоты: 19.10 USDCHFrfd_cci держал
+# ПЯТЬ позиций на 0.28 лота при квоте 0.0058 риск-квоты (≈1.2k ₽ против ≈20k ₽
+# риска до SL) — и это не мешало открывать новые.
+# Гейт считает в тех же единицах, что и штурвал: риск категории в рублях
+# (лот × деньги риска на 1 лот по SL) против её доли риск-квоты счёта.
+QUOTAS_FILENAME = 'steering_quotas.json'
+_QUOTA_BLOCKED_WARNED = set()   # по какому ключу уже сказали «квота занята» (без спама)
+QUOTA_MAGIC_MIN = 770000        # пул magic наших стратегий (config.bt_cfg.magic_base)
+QUOTA_MAGIC_MAX = 869999        # ручные/чужие сделки квоту категорий не расходуют
+
+
+def _journals_dir():
+    """Папка journals рядом с исходниками (квоты, журнал, состояние)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'journals')
+
+
+def load_steering_quotas(path=None):
+    """Квоты штурвала: sid 'symbol_family' -> доля риск-квоты (сумма ≈ 1.0).
+
+    Пустой dict — файла нет или он не читается: гейт в этом случае выключается
+    (торговля не должна вставать из-за отсутствующего файла квот).
+    """
+    path = path or os.path.join(_journals_dir(), QUOTAS_FILENAME)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f) or {}
+        return {str(k): float(v) for k, v in raw.items()}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _sid_of(s):
+    """Категория стратегии 'symbol_family' — ровно та же, что у квот и Strategy Tree."""
+    fam = s.get('type') or s.get('family')
+    if not fam:
+        return None
+    return f"{s.get('symbol', '')}_{fam}"
+
+
+def _risk_per_lot_cached(symbol, sl_points, symbol_data, cache):
+    """Деньги риска на 1 лот по SL, ₽ (кэш на один проход проверки сигналов)."""
+    key = (symbol, float(sl_points or 0))
+    if key in cache:
+        return cache[key]
+    info = symbol_data.get(symbol, {}).get('info')
+    try:
+        val = _sl_money_per_lot(symbol, info, sl_points or 0)
+    except Exception:
+        val = 0.0
+    cache[key] = val
+    return val
+
+
+def _magic_category_map(active_strategies):
+    """magic -> sid 'symbol_family'. Сначала активные стратегии, затем реестр.
+
+    Реестр нужен для «осиротевших» позиций: стратегия выпала из топа, но сделка
+    осталась открытой (rerank её не закрыл) — квоту она всё равно расходует.
+    """
+    out = {}
+    for s in (active_strategies or {}).values():
+        try:
+            mg = int(s.get('magic') or 0)
+        except (TypeError, ValueError):
+            continue
+        sid_active = _sid_of(s)
+        if mg and sid_active:
+            out[mg] = sid_active
+    try:
+        with open(_registry_path(), 'r', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                try:
+                    mg = int(row.get('magic') or 0)
+                except (TypeError, ValueError):
+                    continue
+                if mg and mg not in out and row.get('symbol') and row.get('type'):
+                    out[mg] = f"{row['symbol']}_{row['type']}"
+    except (OSError, ValueError, KeyError):
+        pass
+    return out
+
+
+def _open_positions_risk(active_strategies, symbol_data, cache):
+    """[(sid, ₽ риска)] по РЕАЛЬНЫМ позициям MT5: лот × SL самой позиции.
+
+    Только свой пул magic [770000..869999]: ручные и чужие сделки квоту наших
+    категорий не расходуют. SL берём из позиции, поэтому считаются и сделки,
+    которых уже нет в плане (стратегия выпала из топа, позиция осталась).
+    """
+    magic_sid = _magic_category_map(active_strategies)
+    out = {}
+    try:
+        positions = mt5.positions_get() or ()
+    except Exception:
+        positions = ()
+    for p in positions:
+        try:
+            magic = int(getattr(p, 'magic', 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (QUOTA_MAGIC_MIN <= magic <= QUOTA_MAGIC_MAX):
+            continue
+        sid = magic_sid.get(magic)
+        if not sid:
+            continue
+        symbol = getattr(p, 'symbol', '')
+        info = symbol_data.get(symbol, {}).get('info')
+        point = getattr(info, 'point', 0) or 0
+        sl_price = float(getattr(p, 'sl', 0) or 0)
+        sl_points = (abs(float(p.price_open) - sl_price) / point) if (point > 0 and sl_price > 0) else 0.0
+        if sl_points <= 0 or float(p.volume) <= 0:
+            continue   # без SL риск позиции неизвестен — квоту не расходует
+        risk = float(p.volume) * _risk_per_lot_cached(symbol, sl_points, symbol_data, cache)
+        out[sid] = out.get(sid, 0.0) + risk
+    return list(out.items())
+
+
+def build_quota_gate(active_strategies, symbol_data, risk_cfg):
+    """Контекст гейта квоты: квоты, занятый риск по категориям, риск-квота счёта.
+
+    None — гейт выключен (нет файла квот или баланса): входить разрешено.
+    """
+    if not getattr(risk_cfg, 'quota_gate_enabled', True):
+        return None
+    quotas = load_steering_quotas()
+    if not quotas:
+        return None
+    acc = mt5.account_info()
+    if acc is None or not getattr(acc, 'balance', 0):
+        return None
+    ctx = {'quotas': quotas,
+           'risk_quota': float(acc.balance) * float(risk_cfg.max_risk_pct),
+           'used': {}, 'used_all': 0.0, 'slm': {}}
+    for sid, risk in _open_positions_risk(active_strategies, symbol_data, ctx['slm']):
+        if risk <= 0:
+            continue
+            continue
+        if sid:
+            ctx['used'][sid] = ctx['used'].get(sid, 0.0) + risk
+        ctx['used_all'] += risk
+        # остаток старого тела (учёт уже выполнен выше)
+        # (аккумуляция выполнена выше — этот блок больше не нужен)
+        # ctx['used'][sid] = ... — уже посчитано выше
+        # ctx['used_all'] += risk — уже посчитано выше
+    return ctx
+
+
+def quota_gate_check(ctx, key, s, symbol_data):
+    """Можно ли открывать новую позицию по стратегии key. Возвращает (ok, reason).
+
+    Правила:
+      1) категории нет в файле квот — пропускаем (вне штурвала);
+      2) квота категории = 0 — вход запрещён (дубль к kill switch);
+      3) риск категории уже занял её долю риск-квоты (лот × SL открытых позиций
+         плюс риск новой сделки) — вход запрещён;
+      4) первая позиция категории открывается всегда: min_lot не дробится, иначе
+         категория с крошечной квотой не смогла бы торговать вовсе.
+    Разрешённый риск сразу засчитывается категории: следующий вход в том же
+    проходе видит уже зарезервированный объём.
+    """
+    if ctx is None:
+        return True, ''
+    sid = _sid_of(s)
+    if not sid:
+        return True, ''
+    q = ctx['quotas'].get(sid)
+    if q is None:
+        return True, ''
+    if q <= 0:
+        return False, f'квота категории {sid} = 0'
+    new_risk = float(s.get('lot') or 0.0) * _risk_per_lot_cached(
+        s.get('symbol'), s.get('sl_points'), symbol_data, ctx['slm'])
+    allowed = ctx['risk_quota'] * float(q)
+    used = float(ctx['used'].get(sid, 0.0))
+    if used > 0 and allowed > 0 and (used + new_risk) > allowed:
+        return False, (f'квота категории {sid} занята: риск {used:,.0f} + '
+                       f'{new_risk:,.0f} > {allowed:,.0f} ₽ (q {float(q):.4f})')
+    if ctx['risk_quota'] > 0 and ctx['used_all'] >= ctx['risk_quota']:
+        return False, (f'риск-квота счёта занята: {ctx["used_all"]:,.0f} ≥ '
+                       f'{ctx["risk_quota"]:,.0f} ₽')
+    ctx['used'][sid] = used + new_risk
+    ctx['used_all'] += new_risk
+    return True, ''
+
+
+def quota_gate_ok(ctx, key, s, symbol_data):
+    """Обёртка для ветки входа: True — можно; False — нет (причина печатается один раз)."""
+    ok, why = quota_gate_check(ctx, key, s, symbol_data)
+    if ok:
+        _QUOTA_BLOCKED_WARNED.discard(key)
+        return True
+    if key not in _QUOTA_BLOCKED_WARNED:
+        _QUOTA_BLOCKED_WARNED.add(key)
+        print(f"  -> [{key}] Пропущен вход: {why}", flush=True)
+    return False
+
+
 # ═══ ПРОВЕРКА СИГНАЛОВ ═══
 def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn,
                          check_exit_stoch_fn, check_entry_stoch_fn, calc_parabolic_fn,
@@ -1234,6 +1436,11 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
     risk_params = {'check_margin': True, 'check_stops': True,
         'min_margin_level_pct': risk_cfg.min_margin_level_pct,
         'min_sl_distance_points': risk_cfg.min_sl_distance_points, 'max_sl_distance_points': risk_cfg.max_sl_distance_points}
+
+    # ── Гейт квоты категории: контекст на один проход (квоты + занятый риск) ──
+    # None — гейт выключен (нет journals/steering_quotas.json или баланса счёта),
+    # тогда входы разрешены как раньше: безопасность важнее строгости.
+    _gate = build_quota_gate(active_strategies, symbol_data, risk_cfg)
     
     # ── Проверка 1: Реальные позиции MT5 (пункт 1) ──
     # Собираем занятые (символ, ключ_стратегии) ИЗ РЕАЛЬНЫХ ПОЗИЦИЙ MT5
@@ -1687,6 +1894,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_side} позиций {entry_dir} на {s['symbol']}")
                     elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
+                    elif not quota_gate_ok(_gate, key, s, symbol_data):
+                        pass  # квота категории занята — причина уже напечатана (один раз)
                         
                     else:
                         tick = mt5.symbol_info_tick(s['symbol'])

@@ -159,7 +159,9 @@ def ensure_schema(con):
         balance        REAL,
         equity         REAL,
         floating_total REAL,     -- Σ(profit+swap) по всем открытым позициям
-        n_positions    INTEGER
+        n_positions    INTEGER,  -- сколько позиций в замере
+        floating_volume REAL     -- Σ volume по открытым позициям в ЭТОМ замере
+                                 -- (знаменатель удельной прибыли ₽/лот по счёту)
     );
     CREATE INDEX IF NOT EXISTS ix_equity_ts ON equity_samples(ts);
     CREATE INDEX IF NOT EXISTS ix_equity_login_ts ON equity_samples(account_login, ts);
@@ -268,6 +270,18 @@ def ensure_schema(con):
     );
     """)
     con.commit()
+
+    # Миграция старых баз: equity_samples.floating_volume появился позже.
+    # Без него нельзя посчитать удельную прибыль (₽/лот) по счёту: нужен объём
+    # открытых позиций В МОМЕНТ пика, а из таблиц пиков он не восстанавливается
+    # (категории пикуют в разное время, объёмы не складываются).
+    try:
+        _cols = {r[1] for r in con.execute("PRAGMA table_info(equity_samples)")}
+        if 'floating_volume' not in _cols:
+            con.execute("ALTER TABLE equity_samples ADD COLUMN floating_volume REAL")
+            con.commit()
+    except Exception:
+        pass  # миграция не должна ронять пайплайн
 
 
 def load_registry():
@@ -678,6 +692,7 @@ def sample_positions(interval=None, path=None, verbose=True):
         # floating (profit+swap) по категориям + суммарный объём
         per_cat = {}
         floating_total = 0.0
+        total_vol = 0.0  # Σ volume по открытым позициям — знаменатель для ₽/лот
         for p in positions:
             try:
                 pl = float(getattr(p, 'profit', 0.0) or 0.0) + float(getattr(p, 'swap', 0.0) or 0.0)
@@ -685,6 +700,7 @@ def sample_positions(interval=None, path=None, verbose=True):
             except Exception:
                 continue  # одна кривая позиция — не роняем весь сэмпл
             floating_total += pl
+            total_vol += vol
             cat = _category_of(getattr(p, 'symbol', '') or '', getattr(p, 'magic', 0), registry)
             slot = per_cat.setdefault(cat, {'float': 0.0, 'vol': 0.0})
             slot['float'] += pl
@@ -727,12 +743,14 @@ def sample_positions(interval=None, path=None, verbose=True):
         # 1) снимок счёта (разрез «1 строка на тик семплера»)
         con.execute(
             "INSERT INTO equity_samples "
-            "(ts, account_login, balance, equity, floating_total, n_positions) "
-            "VALUES (?,?,?,?,?,?)",
+            "(ts, account_login, balance, equity, floating_total, n_positions, "
+            "floating_volume) "
+            "VALUES (?,?,?,?,?,?,?)",
+            # 1 строка на замер: floating счёта + суммарный объём (знаменатель ₽/лот)
             (now_ts, login,
              float(getattr(acc, 'balance', 0.0) or 0.0),
              float(getattr(acc, 'equity', 0.0) or 0.0),
-             floating_total, len(positions)))
+             floating_total, len(positions), total_vol))
 
         # 2) реализованное за день по категориям (для give-back: peak vs realized)
         realized = {}
@@ -776,7 +794,7 @@ def sample_positions(interval=None, path=None, verbose=True):
         con.close()
         if verbose:
             print(f"  [trades_db] sample: позиций {len(positions)}, "
-                  f"floating {floating_total:+,.0f}, категорий {len(per_cat)}, "
+                  f"floating {floating_total:+,.0f} на {total_vol:.2f} лота, категорий {len(per_cat)}, "
                   f"сделок {len(pos_rows)}", flush=True)
         return len(positions)
     except Exception as exc:

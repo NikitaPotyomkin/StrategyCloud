@@ -152,12 +152,12 @@ def backtest(df, window, sharpe_entry, sharpe_exit, sl_points, tp_points, point,
         if position is None:
             entry_dir = check_entry(prev_sharpe, curr_sharpe, sharpe_entry)
             if entry_dir == 'long':
-                entry = curr_close - spread
+                entry = curr_close + spread  # pay ASK (close + spread)
                 _entry_i = i
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
             elif entry_dir == 'short':
-                entry = curr_close + spread
+                entry = curr_close - spread  # receive BID (close - spread)
                 _entry_i = i
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
