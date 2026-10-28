@@ -37,7 +37,7 @@ from wheel import (
     apply_tree_weighting, record_category_id,
 )
 from risk_manager import (
-    calc_metrics, composite_score, distribute_lots, check_integration_budget,
+    calc_metrics, composite_score, distribute_lots, check_integration_budget, lot_ceiling,
     check_daily_loss_limit, check_equity_stop, check_margin_level, realtime_quota_recalc,
     MAX_COMBOS_PER_STRATEGY,
     _sl_money_per_lot, _normalize_volume,
@@ -760,7 +760,7 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
             # rest of the plan sat at 0.01-0.36 - small sl_money per lot + a big
             # category quota. distribute_lots already caps; the wheel rewrites lots
             # after it, so the cap has to be repeated here.
-            _max_lot = float(getattr(risk_cfg, 'max_lot_per_strategy', 0) or 0)
+            _max_lot = lot_ceiling(_m, risk_quota, len(active_strategies))
             if _max_lot > 0 and new_lot > _max_lot:
                 new_lot = _max_lot
             if abs(new_lot - s['lot']) > 1e-9:
@@ -797,11 +797,12 @@ def run_steering_wheel(active_strategies, active, symbol_data, balance,
         # в план (active), чтобы active_state.json/дэшборд показывали реальную
         # перекладку, а не дотюненный tree-weighting лот. После этого active == active_strategies.
         # Tilt may lift a lot 20% above the ceiling - trim before it reaches the plan.
-        _max_lot_sync = float(getattr(risk_cfg, 'max_lot_per_strategy', 0) or 0)
-        if _max_lot_sync > 0:
+        _q_sync = float(risk_quota or 0.0)
+        if _q_sync > 0:
             for _sk, _sv in active_strategies.items():
-                if float(_sv.get('lot') or 0) > _max_lot_sync:
-                    _sv['lot'] = _max_lot_sync
+                _cap_sv = lot_ceiling(_slm.get(_sk, 0.0), _q_sync, len(active_strategies))
+                if _cap_sv > 0 and float(_sv.get('lot') or 0) > _cap_sv:
+                    _sv['lot'] = _cap_sv
         _lot_by_key = {_k: _v.get('lot') for _k, _v in active_strategies.items()}
         for _r in (active or []):
             _rk = strategy_key(_r['symbol'], _r['param_key'],

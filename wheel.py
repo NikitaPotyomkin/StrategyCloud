@@ -610,7 +610,7 @@ def apply_tree_weighting(active, symbol_data, balance, risk_pct,
         return active
     try:
         from daily_report import get_dashboard_data
-        from risk_manager import _sl_money_per_lot
+        from risk_manager import _sl_money_per_lot, lot_ceiling
     except Exception:
         return active
 
@@ -664,8 +664,8 @@ def apply_tree_weighting(active, symbol_data, balance, risk_pct,
             # Ceiling: tree weighting writes lots after distribute_lots, so the cap
             # must live here too (2.02 lots on a cheap-SL category came from this path).
             try:
-                from config import RiskParams as _RP_tree
-                _max_lot = float(getattr(_RP_tree(), 'max_lot_per_strategy', 0) or 0)
+                # cap = (quota / n) * lot_share_of_equal / sl_money  (see risk_manager.lot_ceiling)
+                _max_lot = lot_ceiling(items[i].get('sl_money'), balance * risk_pct, len(active))
             except Exception:
                 _max_lot = 0.0
             r['lot'] = min(float(lots[i]), _max_lot) if _max_lot > 0 else lots[i]

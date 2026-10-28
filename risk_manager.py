@@ -124,6 +124,35 @@ def _sl_money_per_lot(symbol, info, sl_points):
     return 0.0
 
 
+def lot_ceiling(sl_money, quota, n_strategies, share_factor=None):
+    """Lot ceiling for ONE strategy, derived from the plan itself.
+
+    equal_share = quota / n_strategies          # risk if the quota were split evenly
+    money_cap   = equal_share * share_factor    # this strategy may take at most that
+    lot_cap     = money_cap / sl_money
+
+    Scale-free: follows balance, plan width and the symbol's SL money. With the
+    current quota (206 813 RUB), 33-40 strategies and share 0.5 the cap lands at
+    ~0.25% of balance per strategy, which is about one lot on a JPY cross.
+    Returns 0.0 when the ceiling is disabled or the inputs are unusable.
+    """
+    if share_factor is None:
+        try:
+            from config import RiskParams as _RPc
+            share_factor = float(getattr(_RPc(), 'lot_share_of_equal', 0) or 0)
+        except Exception:
+            share_factor = 0.0
+    try:
+        _m = float(sl_money or 0.0)
+        _q = float(quota or 0.0)
+        _n = int(n_strategies or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if share_factor <= 0 or _m <= 0 or _q <= 0 or _n <= 0:
+        return 0.0
+    return (_q / _n) * share_factor / _m
+
+
 def _calc_position_pnl(symbol, lot, entry_price, exit_price, direction, info=None):
     """P&L позиции через order_calc_profit.
 
@@ -411,26 +440,28 @@ def distribute_lots(ranked_results, symbol_data, balance,
                 x['lot'] = max(math.floor(_raw * 100) / 100, min_lot)
 
     # Финальная фильтрация: оставляем только стратегии с lot >= min_lot
-    # --- Ceiling for one strategy (lots), applied after the per-trade money cap ---
+    # --- Ceiling per strategy: a SHARE of the equal split (quota / n), not a lot ---
+    # cap_money = (quota / n_strategies) * lot_share_of_equal; lot_cap = cap_money / sl_money
     # The money cap alone is not a fairness rule: JPY crosses have a cheap SL in
     # rubles per lot, so the cap was spent as 2.02 lots while a EUR strategy got
     # 0.4. A hard lot ceiling makes the plan readable: leader <= max_lot.
     if max_lot_per_strategy is None:
         try:
             from config import RiskParams as _RP3
-            max_lot_per_strategy = float(getattr(_RP3(), 'max_lot_per_strategy', 0) or 0)
+            max_lot_per_strategy = float(getattr(_RP3(), 'lot_share_of_equal', 0) or 0)
         except Exception:
             max_lot_per_strategy = 0.0
     if max_lot_per_strategy and max_lot_per_strategy > 0:
         for x in active:
-            if x['lot'] <= max_lot_per_strategy:
+            _cap = lot_ceiling(x['sl_money'], quota, len(active), max_lot_per_strategy)
+            if _cap <= 0 or x['lot'] <= _cap:
                 continue
             info = symbol_data.get(x['symbol'], {}).get('info')
             if info is not None:
-                _v = _normalize_volume(max_lot_per_strategy, info)
-                x['lot'] = max(min(_v if _v is not None else min_lot, max_lot_per_strategy), min_lot)
+                _v = _normalize_volume(_cap, info)
+                x['lot'] = max(min(_v if _v is not None else min_lot, _cap), min_lot)
             else:
-                x['lot'] = max(min(max_lot_per_strategy, x['lot']), min_lot)
+                x['lot'] = max(min(_cap, x['lot']), min_lot)
 
     active = [x for x in active if x['lot'] >= min_lot]
 

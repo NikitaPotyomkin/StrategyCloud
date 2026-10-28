@@ -408,11 +408,13 @@ class RiskParams:
     # Hard cap for the live plan size (number of strategy slots). Breadth is
     # limited by the quota / min_lot budget: 40 slots is wider than the old 20-23.
     plan_max_strategies: int = 40
-    # Ceiling for ONE strategy in lots. Without it a strategy with a cheap SL in
-    # money terms (JPY crosses) took the whole per-trade risk budget as 2.02 lots,
-    # which reads as a currency bet even though the money risk was capped.
-    # 1.00 = the leader of the plan holds one lot, the rest scale down from it.
-    max_lot_per_strategy: float = 1.0
+    # Ceiling for ONE strategy as a share of the risk quota (not in lots):
+    # lot_cap = quota * max_risk_share_pct / 100 / sl_money_per_lot (per symbol).
+    # equal_share = quota / n_strategies  (risk if the quota were split evenly)
+    # lot_cap     = equal_share * lot_share_of_equal / sl_money_per_lot
+    # 33 strategies of 206 813 RUB -> equal 6 267, cap 3 134 RUB, i.e. ~1.2 lots
+    # on USDJPY (sl_money 2 560 per lot) and ~0.5 on NZD. 0 disables the ceiling.
+    lot_share_of_equal: float = 0.5
     min_score: float = 1.0
     # Значимость вместо жёсткого порога «10 сделок»: t-статистика ожидания
     # на сделку. 2.5 ≈ 98.8% на ОДНУ гипотезу; по 6265 уникальным комбинациям
