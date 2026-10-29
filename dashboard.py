@@ -1314,19 +1314,19 @@ with tab_daily:
             st.caption(f"⚠ tactic_tilt: {_te!r}")
 
         # ── Шапка-сводка ──
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Стратегий в плане", len(df_plan))
         c2.metric("Planned volume", f"{df_plan['lot'].sum():.2f} lots")
         c3.metric("Risk budget", f"{_quota:,.0f} RUB")
-        _used = df_plan['risk ₽'].dropna().sum()
-        _used1k = df_plan['risk 1000п ₽'].dropna()
-        _used1k_sum = float(_used1k.sum()) if len(_used1k) else 0.0
-        _used1k_max = float(_used1k.max()) if len(_used1k) else 0.0
-        c4.metric("Риск 1000 пт, Σ", (f"{_used1k_sum:,.0f} ₽".replace(',', ' ')
-                                     if _used1k_sum > 0 else "—"),
-                  delta=(f"макс на стратегию {_used1k_max:,.0f} ₽".replace(',', ' ')
-                         if _used1k_max > 0 else None),
-                  delta_color="off")
+
+
+
+
+
+
+
+
+
 
         # ── План ↔ Strategy Tree: тот же уровень гранулярности (категория symbol+family) ──
         # Tree считает PnL по реальным закрытым сделкам окна аллокации; план — по стратегиям.
@@ -1364,10 +1364,12 @@ with tab_daily:
             _cvol = float(_ccat.get('volume') or 0.0)
             _ctr = _ccat.get('trades')
             _lot_sum = float(_grp['lot'].sum())
-            _risk_sum = float(_grp['risk ₽'].dropna().sum()) if _grp['risk ₽'].notna().any() else None
+            # Одна колонка риска (на ОДНУ стратегию категории): «Σ risk ₽» требовал SL
+            # и money-per-lot (в части случаев пусто), «Σ риск 1000 пт ₽» — сумма,
+            # которая читалась как бюджет и путала. Осталась средняя по стратегиям.
             _r1k = (_grp['risk 1000п ₽'].dropna()
                     if 'risk 1000п ₽' in _grp.columns else pd.Series(dtype=float))
-            _risk1k_sum = float(_r1k.sum()) if len(_r1k) else None
+
             _risk1k_avg = float(_r1k.mean()) if len(_r1k) else None
             _cat_rows.append({
                 'Категория': _grp['category'].iloc[0],
@@ -1377,9 +1379,9 @@ with tab_daily:
                 'Tree trades': ('—' if _ctr is None else str(int(_ctr))),
                 'Стратегий': len(_grp),
                 'Σ lot': round(_lot_sum, 2),
-                'Σ risk ₽': (round(_risk_sum, 0) if _risk_sum is not None else None),
+
                 'Риск стратегии 1000 пт ₽': (round(_risk1k_avg, 0) if _risk1k_avg is not None else None),
-                'Σ риск 1000 пт ₽': (round(_risk1k_sum, 0) if _risk1k_sum is not None else None),
+
                 '_pnl': _cpnl,
                 '_lot': _lot_sum,
             })
@@ -1431,6 +1433,10 @@ with tab_daily:
                        f"Strategy Tree (окно {ALLOC_DAYS} дн.).")
             st.dataframe(_dfc.drop(columns=['_pnl', '_lot']).sort_values('Σ lot', ascending=False), key='plan_cat_big',
                          use_container_width=True, hide_index=True)
+            st.caption("Риск стратегии 1000 пт ₽ — сколько ₽ теряет ОДНА стратегия "
+                       "категории при ходе цены на 1000 пунктов (lot × money_per_1000_points), "
+                       "усреднено по стратегиям категории. Это не бюджет и не сумма по "
+                       "счёту — только риск одной строки плана.")
 
 
 
@@ -1508,6 +1514,10 @@ with tab_risk:
         with col_r2:
             st.metric("Unrealized P&L", f"{unrealized_pnl:+,.1f} RUB",
                       delta_color="inverse")
+            # Сноска: что именно считает метрика (вопрос «а что это за число?»)
+            st.caption("Σ profit по открытым позициям сейчас — плавающий результат, "
+                       "не реализовано; без swap и комиссии.")
+
         with col_r3:
             st.metric("Риск SL, ₽", f"{max_loss:,.1f} RUB")
         with col_r4:

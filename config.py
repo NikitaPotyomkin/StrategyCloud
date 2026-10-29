@@ -400,7 +400,7 @@ class RiskParams:
     min_sl_distance_points: int = 10
     max_sl_distance_points: int = 5000
 
-    max_risk_pct: float = 0.2
+    max_risk_pct: float = 0.3
     # Кап риска на ОДНУ сделку (доля баланса). Широкий SL + большая квота больше
     # не дают «-20k одной сделкой»: лот режется до balance*pct / sl_money.
     per_trade_risk_pct: float = 0.005

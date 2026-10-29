@@ -691,10 +691,19 @@ def get_dashboard_data(days_back=30, manage_connection=True):
             _eq_cols = {r[1] for r in _eq_con.execute("PRAGMA table_info(equity_samples)")}
             _vol_sel = ("floating_volume" if 'floating_volume' in _eq_cols
                         else "NULL AS floating_volume")
+            # Только ЭТОТ счёт: equity_samples несёт account_login, и без фильтра
+            # в один «максимум по счёту» попадали замеры других логинов (демо,
+            # тестовые прогоны, прежний счёт) — цифра выглядела неправдоподобно.
+            _eq_login = int(getattr(acc, 'login', 0) or 0)
+            _eq_where = "ts >= ?"
+            _eq_params = [_eq_from]
+            if 'account_login' in _eq_cols and _eq_login:
+                _eq_where += " AND (account_login IS NULL OR account_login = ?)"
+                _eq_params.append(_eq_login)
             equity_df = pd.read_sql_query(
                 "SELECT ts, balance, equity, floating_total, n_positions, "
-                f"{_vol_sel} FROM equity_samples WHERE ts >= ? ORDER BY ts",
-                _eq_con, params=(_eq_from,))
+                f"{_vol_sel} FROM equity_samples WHERE {_eq_where} ORDER BY ts",
+                _eq_con, params=tuple(_eq_params))
             _eq_con.close()
             if equity_df is not None and len(equity_df):
                 print(f"  [DASHBOARD] equity_samples: {len(equity_df)} сэмплов "
