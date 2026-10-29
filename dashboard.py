@@ -795,12 +795,39 @@ with tab_overview:
 
         with col_gross:
             st.markdown("### Equity Gross")
-            # Gross = торговый P&L + ВСЕ неторговые движения денег по счёту
-            # (пополнения / выводы: DEAL_TYPE_BALANCE и DEAL_TYPE_CREDIT).
+            # Gross = торговый P&L (от нуля) + пополнения/выводы (без входящего остатка)
+            # Источник операций — balance_ops (пополнения / выводы / charge), без входящего остатка.
             df_g = filter_weekends(data['trades_df']).sort_values('timestamp').reset_index(drop=True)
             df_g['seq'] = list(range(len(df_g)))
-            _cash, _gross_src = [], 'MT5 недоступен'
-            if MT5_AVAILABLE:
+            # Источник внешних денег — cashflow (SQLite: journals/trades.db).
+            # Таблица balance_ops уже ограничена периодом учёта (29.09.2026),
+            # поэтому никаких balance-сделок с 2020 года тут нет.
+            _cash, _gross_src = [], 'cashflow недоступен'; _dep = _wd = 0.0
+            try:
+                import cashflow as _cashflow
+                _cashflow.maybe_sync()   # подтянуть свежие пополнения/выводы (не чаще 1 раза в 5 мин)
+                _cash = [(int(_ts), float(_amt)) for _ts, _amt, _kind, _src, _cmt
+                         in _cashflow.ops_list(limit=1000) if _src not in ('cutoff', 'bootstrap')]
+                _dep = sum(a for _, a in _cash if a > 0)
+                _wd = sum(a for _, a in _cash if a < 0)
+                _gross_src = (f"внешние деньги {_dep + _wd:+,.0f} ₽ "
+                              f"(пополнения {_dep:+,.0f}, выводы {_wd:+,.0f}, "
+                              f"операций {len(_cash)})")
+                _bal_now = None
+                try:
+                    if mt5.terminal_info() is None:
+                        mt5.initialize()
+                    _acc_g = mt5.account_info()
+                    _bal_now = float(_acc_g.balance) if _acc_g else None
+                except Exception:
+                    _bal_now = None
+                # Gross идёт от нуля: уровень депозита в него не входит.
+                _base = 0.0  # график от нуля прибыли: уровень депозита в него не входит
+                # (якорь на баланс не нужен: это график прибыли + операции, а не equity)
+            except Exception as _ce:
+                _gross_src = f"ошибка cashflow: {_ce!r}"
+                _bal_now, _base = None, 0.0
+            if False and MT5_AVAILABLE:  # 2020-путь отключён: источник — cashflow.ops_list()
                 try:
                     _deals = mt5.history_deals_get(datetime(2020, 1, 1),
                                                    datetime.now() + timedelta(hours=6))
@@ -822,7 +849,14 @@ with tab_overview:
                 _gross.append(_cum_cash)
             # Кешфлоу относится к моменту СДЕЛКИ: пополнение «встаёт» на ближайшую
             # сделку окна (у нас нет баров между сделками — ось идёт по сделкам).
-            df_g['gross'] = df_g['profit_net'].cumsum() + pd.Series(_gross, dtype=float)
+            df_g['gross'] = _base + df_g['profit_net'].cumsum() + pd.Series(_gross, dtype=float)
+            if len(df_g):
+                # Точка «сейчас»: пополнение без последующих сделок видно сразу,
+                # иначе событие не к чему привязать (ось X — сделки, не время).
+                df_g = pd.concat([df_g, pd.DataFrame({'seq': [df_g['seq'].iloc[-1] + 1],
+                                                      'gross': [float(df_g['profit_net'].sum()) + _dep + _wd],
+                                                      'timestamp': ['сейчас']})],
+                                 ignore_index=True, sort=False)
             fig_g = go.Figure()
             fig_g.add_trace(go.Scatter(
                 x=df_g['seq'], y=df_g['gross'], customdata=df_g['timestamp'],
@@ -834,7 +868,9 @@ with tab_overview:
             fig_g.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
             st.plotly_chart(plotly_dark_layout(fig_g, 260).update_xaxes(showticklabels=False, title=''),
                             use_container_width=True, key="overview_equity_gross")
-            st.caption(f"Торговый P&L + пополнения/выводы: {_gross_src}")
+            st.caption(f"Gross = торговый P&L (от нуля) + пополнения/выводы по счёту "
+                       f"(cashflow с 29.09.2026). {_gross_src}"
+                       + (f"; баланс счёта {_bal_now:,.0f} ₽" if _bal_now else ""))
 
     # ── Trade scatter ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
@@ -1447,6 +1483,29 @@ with tab_risk:
 
     st.markdown("### Risk Utilization")
     quota = data['quota']
+
+    # ── Risk Ceiling: потолок риска (RiskParams.max_risk_pct) ──────────────
+    # Доля БАЛАНСА, которую разрешено занять СУММАРНЫМ риском по стоп-лоссам
+    # всего плана. Из неё считается квота: quota = balance × pct. Значение
+    # читаем из config.py, а не из active_state.json: план мог быть собран
+    # со старым порогом, и тогда процент на экране врал бы.
+    _risk_cap_pct = None
+    try:
+        from config import RiskParams as _RiskParams
+        _risk_cap_pct = float(getattr(_RiskParams(), 'max_risk_pct', 0.0) or 0.0) * 100.0
+    except Exception:
+        _risk_cap_pct = None
+    st.metric("Risk Ceiling — потолок риска",
+              f"{_risk_cap_pct:.0f}% баланса" if _risk_cap_pct is not None else "—")
+    st.caption(
+        ("Потолок риска: суммарный риск по SL всех стратегий плана не может превышать "
+         f"{_risk_cap_pct:.0f}% баланса — это и есть квота (balance × "
+         f"{_risk_cap_pct / 100:.2f}). Больше — лоты масштабируются вниз, меньше — "
+         "часть квоты просто не используется. Это не дневной лимит убытка и не плечо: "
+         "считается по расстоянию до стоп-лосса, а не по марже.")
+        if _risk_cap_pct is not None else
+        "Потолок риска: конфиг недоступен (RiskParams.max_risk_pct)."
+    )
     positions = None
 
     if MT5_AVAILABLE:

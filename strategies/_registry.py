@@ -448,6 +448,88 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='TSI', grid=[10, 14, 20], min_len=120,
     ),
+    
+    # ── NEW BATCH (25.10): 17 новых стратегий в 6 категориях ──
+    # Mean reversion (4)
+    'mr_zscore': dict(
+        module='mr_zscore_reversion', calc='calc_zscore_range',
+        entry='check_entry', exit='check_exit',
+        label='MR-ZScore', grid=[30, 40, 60], min_len=80,
+    ),
+    'mr_cvd_div': dict(
+        module='mr_cvd_div', calc='calc_cvd',
+        entry='check_entry', exit='check_exit',
+        label='MR-CVDDiv', grid=[30, 50, 80], min_len=100,
+    ),
+    'mr_bb_middle': dict(
+        module='mr_bb_middle', calc='calc_bb_middle_z',
+        entry='check_entry', exit='check_exit',
+        label='MR-BBMid', grid=[20, 40, 60], min_len=70,
+    ),
+    'mr_rsi_sma': dict(
+        module='mr_rsi_sma', calc='calc_rsi_sma_z',
+        entry='check_entry', exit='check_exit',
+        label='MR-RSISMA', grid=['14,50,2.0', '20,50,2.0'], min_len=100,
+    ),
+    # Breakout continuation (3)
+    'bc_adaptive_donchian': dict(
+        module='bc_adaptive_donchian', calc='calc_adaptive_donchian',
+        entry='check_entry', exit='check_exit',
+        label='BC-AdaptDn', grid=['10,20', '10,40'], min_len=160,
+    ),
+    'bc_keltner_squeeze': dict(
+        module='bc_keltner_squeeze', calc='calc_keltner_squeeze',
+        entry='check_entry', exit='check_exit',
+        label='BC-KeltSqz', grid=[14, 20, 30], min_len=240,
+    ),
+    'bc_volume_confirm': dict(
+        module='bc_volume_confirm', calc='calc_volume_breakout',
+        entry='check_entry', exit='check_exit',
+        label='BC-VolConf', grid=['20,60,80', '30,60,80'], min_len=120,
+    ),
+    # Reversal (3)
+    'rev_liquidity_sweep': dict(
+        module='rev_liquidity_sweep', calc='calc_liquidity_sweep',
+        entry='check_entry', exit='check_exit',
+        label='Rev-LiqSwp', grid=[10, 20, 30], min_len=50,
+    ),
+    'rev_swing_failure': dict(
+        module='rev_swing_failure', calc='calc_swing_failure',
+        entry='check_entry', exit='check_exit',
+        label='Rev-SwingF', grid=['10,0.05', '10,0.10'], min_len=40,
+    ),
+    'rev_macd_div': dict(
+        module='rev_macd_div', calc='calc_macd_divergence',
+        entry='check_entry', exit='check_exit',
+        label='Rev-MACDd', grid=['12,26,9', '8,17,9'], min_len=80,
+    ),
+    # Multi-indicator composite (3)
+    'mi_rsi_bb_vol': dict(
+        module='mi_rsi_bb_vol', calc='calc_rsi_bb_vol',
+        entry='check_entry', exit='check_exit',
+        label='MI-RSIBBVol', grid=['14,20,2.0,30', '20,20,2.0,30'], min_len=120,
+    ),
+    'mi_adx_rsi_ma': dict(
+        module='mi_adx_rsi_ma', calc='calc_adx_rsi_ma',
+        entry='check_entry', exit='check_exit',
+        label='MI-ADXRSIMA', grid=['14,14,50', '20,14,50'], min_len=150,
+    ),
+    'mi_stoch_atr_vol': dict(
+        module='mi_stoch_atr_vol', calc='calc_stoch_atr_vol',
+        entry='check_entry', exit='check_exit',
+        label='MI-StochAV', grid=['14,14,30', '20,14,30'], min_len=120,
+    ),
+    # Advanced statistical (2)
+    'advstat_hurst': dict(
+        module='advstat_hurst', calc='calc_hurst_exponent',
+        entry='check_entry', exit='check_exit',
+        label='AS-Hurst', grid=[40, 60, 100], min_len=200,
+    ),
+    'advstat_fractal_dim': dict(
+        module='advstat_fractal_dim', calc='calc_fractal_dimension',
+        entry='check_entry', exit='check_exit',
+        label='AS-FractalD', grid=[14, 20, 30], min_len=120,
+    ),
 }
 
 _MODULE_CACHE = {}
@@ -482,6 +564,17 @@ ENABLED_BATCH = (
     'strema', 'coinflip', 'smoothedma', 'spearman', 'keltbreak', 'atrchan',
     'rsiob', 'stochastic_rsi', 'mfi', 'macdzero', 'rsieema', 'donchadx',
     'insidebar', 'tworsi', 'willstoch',
+    # ── NEW BATCH (25.10): +17 стратегий в 6 категориях ──
+    # Mean reversion (4)
+    'mr_zscore', 'mr_cvd_div', 'mr_bb_middle', 'mr_rsi_sma',
+    # Breakout continuation (3)
+    'bc_adaptive_donchian', 'bc_keltner_squeeze', 'bc_volume_confirm',
+    # Reversal (3)
+    'rev_liquidity_sweep', 'rev_swing_failure', 'rev_macd_div',
+    # Multi-indicator composite (3)
+    'mi_rsi_bb_vol', 'mi_adx_rsi_ma', 'mi_stoch_atr_vol',
+    # Advanced statistical (2)
+    'advstat_hurst', 'advstat_fractal_dim',
 )
 
 

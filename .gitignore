@@ -16,6 +16,7 @@ __pycache__/
 *.pyd
 .Python
 .txt
+*.bak
 checkpoints/
 
 # --- IDE (PyCharm) ---

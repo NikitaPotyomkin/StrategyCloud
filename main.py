@@ -1776,6 +1776,14 @@ if __name__ == '__main__':
 
                     last_balance_refresh = now
 
+                    # Движения средств (пополнения / выводы / charge) -> balance_ops.
+                    # maybe_sync сам держит паузу 5 минут, поэтому звать можно каждый тик.
+                    try:
+                        import cashflow as _cf
+                        _cf.maybe_sync(balance_now=balance)
+                    except Exception as _cfe:
+                        print(f"  [cashflow] ошибка синка: {_cfe!r}")
+
                     # тФАтФА ╨Я╤А╨╛╨▓╨╡╤А╨║╨░ 1: Daily stop-loss тФАтФА
                     if daily_start_balance is not None:
                         dl_ok, dl_pct, dl_reason = check_daily_loss_limit(

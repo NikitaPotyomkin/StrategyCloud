@@ -27,7 +27,8 @@ def int_range(start, stop, step):
 
 # ═══════════════ RANGE-СПЕКИ (источник значений) ═══════════════
 SYMBOLS = ("EURUSDrfd", "GBPUSDrfd", "USDJPYrfd", "USDCHFrfd",
-           "USDCADrfd", "AUDUSDrfd", "NZDUSDrfd")
+           "USDCADrfd", "AUDUSDrfd", "NZDUSDrfd",
+           "XAUUSDrfd", "XAGUSDrfd")   # 29.10.2026: металлы (сетка SL/TP ниже)
 
 K_PERIOD_RANGE = (7, 28, 7)
 SL_POINTS_RANGE = (300, 1200, 450)   # -> [300, 750, 1200] (ровный шаг, без дублей хвоста)
@@ -50,6 +51,11 @@ SL_POINTS_GRID = {
     'USDCADrfd': (400, 1200,  400),   # [400,  800, 1200]  -> 0.29 / 0.57 / 0.86% @1.4012
     'AUDUSDrfd': (200,  650,  225),   # [200,  425,  650]  -> 0.28 / 0.60 / 0.92% @0.7039
     'NZDUSDrfd': (175,  525,  175),   # [175,  350,  525]  -> 0.31 / 0.61 / 0.92% @0.5699
+    # ── Металлы (29.10.2026): та же полоса 0.3/0.6/0.9% от цены, пункты по якорю.
+    #    Спред в % цены: XAU 0.011% (дешевле EURUSD 0.0125%), XAG 0.036% (~3x дороже),
+    #    поэтому у серебра полоса сдвинута вверх: самый узкий SL остаётся >=10 спредов.
+    'XAUUSDrfd': (1200, 3600, 1200),  # [1200, 2400, 3600] -> 0.30 / 0.60 / 0.90% @4016.85; 27/53/80 спредов
+    'XAGUSDrfd': (2000, 5000, 1500),  # [2000, 3500, 5000] -> 0.38 / 0.67 / 0.96% @52.20;   10/18/26 спредов
 }
 TP_POINTS_GRID = SL_POINTS_GRID          # TP из той же сетки (как и раньше: 9 пар SL×TP)
 
@@ -398,7 +404,7 @@ class RiskParams:
     realtime_quota_recalc: bool = True
     quota_recalc_interval_sec: int = 300
     min_sl_distance_points: int = 10
-    max_sl_distance_points: int = 5000
+    max_sl_distance_points: int = 6000   # 5000 -> 6000: верхняя точка сетки XAGUSDrfd = 5000 pt
 
     max_risk_pct: float = 0.3
     # Кап риска на ОДНУ сделку (доля баланса). Широкий SL + большая квота больше

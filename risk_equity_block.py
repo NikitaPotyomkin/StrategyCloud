@@ -1,5 +1,11 @@
 """Максимальная прибыль за день — ДВА графика: абсолютная (₽) и удельная (₽/лот).
 
+На абсолютном графике столбцы идут парой: зелёный — ПИК дня, красный — ДНО дня
+(min(floating_total)). «Максимум» сам по себе отрицательным почти не бывает
+(из ~280 замеров хоть один да выше нуля), поэтому без второй серии график
+всегда зелёный и создаёт ложное впечатление беспроигрышности.
+
+
 Абсолютная: max(equity_samples.floating_total) за день, где floating_total =
 Σ(profit + swap) по ВСЕМ открытым позициям на момент замера.
 
@@ -121,6 +127,10 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
         rows.append({
             'day': day,
             'fl_peak': float(g['fl'].iloc[i]),
+            # Дно дня: минимум floating_total — отрицательная сторона той же
+            # нереализованной прибыли. Без него график «пиков» всегда зелёный.
+            'fl_low': float(g['fl'].min()),
+            'low_time': g['ts_dt'].iloc[int(g['fl'].idxmin())],
             'peak_time': g['ts_dt'].iloc[i],
             'n_samples': int(len(g)),
             'peak_vol': (float(_pvol) if np.isfinite(_pvol) else np.nan),
@@ -145,7 +155,28 @@ def _bars(day: pd.DataFrame, ycol: str, labels: list, customdata, hover: str,
         customdata=customdata, hovertemplate=hover))
     fig.add_hline(y=0, line_color=COL_MUTED, line_width=1)
     fig.update_layout(yaxis_title=title)
-    fig.update_yaxes(range=_y_range(day[ycol], [0.0]))
+    # Дно дня (минимум floating за день) — вторая серия только для абсолютного
+    # графика. Без неё «пик» физически не может быть отрицательным: максимум из
+    # ~280 замеров почти всегда выше нуля, и все столбцы выходят зелёными, хотя
+    # внутри дня счёт проседал. Красный столбец — худший замер дня.
+    _has_low = ('fl_low' in day.columns and ycol == 'fl_peak'
+                and bool(day['fl_low'].notna().any()))
+    if _has_low:
+        fig.add_trace(go.Bar(
+            x=[dt.strftime('%d.%m') for dt in day['day']], y=day['fl_low'],
+            marker_color=[COL_RED_LT if float(v) < 0 else COL_MUTED for v in day['fl_low']], marker_line_width=0,  # красный — дно ушло в минус; серый — дно тоже в плюсе
+            text=[_num(float(v)) for v in day['fl_low']],
+            textposition='outside', cliponaxis=False,
+            textfont=dict(size=10, color=COL_MUTED),
+            customdata=day[['low_time', 'n_samples']].values,
+            hovertemplate=('%{x}: дно дня %{y:,.0f} ₽<br>'
+                           'момент: %{customdata[0]|%H:%M} '
+                           '(%{customdata[1]} замеров)<extra></extra>')))
+        fig.update_layout(barmode='group')
+        fig.update_yaxes(range=_y_range(day['fl_low'],
+                                        list(day['fl_peak']) + [0.0]))
+    else:
+        fig.update_yaxes(range=_y_range(day[ycol], [0.0]))
     st.plotly_chart(_dark(fig, 400), use_container_width=True, key=key)
 
 
@@ -240,7 +271,8 @@ def render(data: dict, days_back: int) -> None:
             "при каком объёме и числе позиций это было. Нижняя — то же самое на "
             "1.00 лот: max(floating / объём) по замерам дня, поэтому дни с разным "
             "объёмом сравнимы между собой. Замер раз в ~5 мин, реальный пик мог "
-            "быть выше; суббота и воскресенье пропущены; последний столбец — "
+            "быть выше; красные столбцы — дно дня (минимум floating за день), "
+            "зелёные — пик; суббота и воскресенье пропущены; последний столбец — "
             "незавершённый день. Блок ничего не закрывает."
             + (f" ₽/лот считается по {_n_per} из {_n_days} дней: в остальных в "
                f"equity_samples не записан объём (floating_volume = NULL)."
@@ -254,7 +286,8 @@ def render(data: dict, days_back: int) -> None:
             "день. Старые сэмплы останутся без объёма (NULL) — задним числом его "
             "не восстановить.")
         st.caption(
-            "Верхний график — абсолютная прибыль: максимум Σ(profit + swap) по "
+            "Верхний график — абсолютная прибыль: зелёный столбец — пик, "
+            "красный — дно (min за день), по "
             "открытым позициям за день. Замер раз в ~5 мин, реальный пик мог быть "
             "чуть выше; суббота и воскресенье пропущены; последний столбец — "
             "незавершённый день. Блок ничего не закрывает.")

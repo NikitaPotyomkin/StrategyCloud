@@ -381,7 +381,7 @@ def _scan():
             _rsyms |= set(_rf.get('syms') or ())
             _rranked += int(_rf.get('ranked') or 0)
             _ractive += int(_rf.get('active') or 0)
-        _score = (sum(_rscore) / len(_rscore)) if _rscore else None
+        _score_mean = (sum(_rscore) / len(_rscore)) if _rscore else None
         _score_max = max(_rscore) if _rscore else None
         _min_score = max(_rmin) if _rmin else None
         # score из family_score (все комбинации) приоритетнее family_status:
@@ -389,7 +389,7 @@ def _scan():
         _fs = [_fscores[k] for k in _rkeys
                if k in _fscores and _fscores[k].get('score') is not None]
         if _fs:
-            _score = sum(x['score'] for x in _fs) / len(_fs)
+            _score_mean = sum(x['score'] for x in _fs) / len(_fs)
             _score_max = max((x['max'] for x in _fs if x['max'] is not None), default=None)
             _fs_min = max((x['min'] for x in _fs if x['min'] is not None), default=None)
             if _fs_min is not None:
@@ -399,8 +399,16 @@ def _scan():
             _score_pos = sum(x['positive'] for x in _fs)
         else:
             _score_src = 'family_status'
+            _score = _score_mean
             _score_combos = None
             _score_pos = None
+        # ── score колонки = МАКСИМУМ по символам (чемпион семейства) ──
+        # План (distribute_lots) берёт ЛУЧШУЮ комбинацию семейства на КОНКРЕТНОМ
+        # символе, а не среднее по всем. Поэтому и в таблице показываем максимум:
+        # иначе строка «в плане» со score 0.35 при пороге 1.0 выглядела как ошибка,
+        # хотя её чемпион на другом символе порог прошёл. Среднее — в подсказке.
+        if _score_max is not None:
+            _score = _score_max
         _score_fresh = bool(_score is not None
                             and _rcov is not None and _rcov >= 99.5)
         # Прозрачная причина пустого score — уходит в подсказку курсором.
@@ -453,8 +461,9 @@ def _scan():
             'rready': _rready,
             'rpart': _rpart,
             'rcov': _rcov,
-            'score': _score,                        # среднее best_score по символам
+            'score': _score,                        # МАКСИМУМ best_score по символам (чемпион)
             'score_max': _score_max,
+            'score_mean': _score_mean,              # среднее по символам (только подсказка)
             'min_score': _min_score,
             'score_fresh': _score_fresh,
             'score_state': _score_state,
@@ -554,8 +563,8 @@ def _score_cell(r: dict) -> str:
     """Колонка «score» — оценка семейства: family_score (все комбинации) → family_status.
 
     Строка таблицы — семейство (модуль), а score в базе считается на пару
-    (symbol, family): показываем среднее best_score по символам семейства,
-    максимум и порог прогона — в подсказке.
+    (symbol, family): показываем МАКСИМУМ best_score по символам (чемпион),
+    именно он решает допуск в план; среднее и порог прогона — в подсказке.
 
     Цвет — соответствие скоринга дате бэктеста:
       зелёный — комбинации семейства посчитаны ПОЛНОСТЬЮ в последнем прогоне
@@ -579,17 +588,23 @@ def _score_cell(r: dict) -> str:
     _kinds = ', '.join(r.get('run_kinds') or []) or '—'
     _min_s = r.get('min_score')
     _min_txt = f"{_min_s:.2f}" if isinstance(_min_s, (int, float)) else '—'
-    _max_s = r.get('score_max')
-    _max_txt = f"{_max_s:.2f}" if isinstance(_max_s, (int, float)) else '—'
+    _mean_s = r.get('score_mean')
+    _mean_txt = f"{_mean_s:.2f}" if isinstance(_mean_s, (int, float)) else '—'
     cov = r.get('rcov')
-    tip = (f"score {sc:.2f} (среднее best_score по {r.get('score_syms', 0)} символам, "
-           f"макс {_max_txt}); порог прогона {_min_txt}; "
+    tip = (f"score {sc:.2f} — лучший из {r.get('score_syms', 0)} символов (чемпион: "
+           f"по нему и допуск в план); среднее по символам {_mean_txt}; порог {_min_txt}; "
            f"прогон {_kinds}; покрытие "
            + (f"{cov:.0f}%" if cov is not None else '—')
            + ("; покрытие полное — бэктест свежий" if r.get('score_fresh')
               else "; покрытие < 100% — часть комбинаций из кэша"))
+    if r.get('plan'):
+        if _state == 'red':
+            tip += '; в плане: да, но score ниже порога (план из другого прогона)'
+        else:
+            tip += '; в плане: да — чемпион семейства прошёл порог'
     if _state == 'red':
-        tip += ('; НИЖЕ ПОРОГА: бэктест есть, но комбинации отфильтрованы — '
+        tip += ('; НИЖЕ ПОРОГА: ни на одном символе лучшая комбинация не дотянула '
+                'до min_score — '
                 + (r.get('score_reason') or 'лучший score ниже min_score'))
     return (f"<td class='mono' style='text-align:center;color:{color};' "
             f"title='{tip}'>{sc:.2f}</td>")
@@ -667,6 +682,30 @@ def _row_html(r: dict) -> str:
     return f"<tr class='{cls}'>{''.join(_cells)}</tr>"
 
 
+def _plan_gates() -> dict:
+    """Пороги отбора в торговый план из config.py (с безопасными дефолтами).
+
+    Значения читаются на лету: если конфиг поменяли, подпись внизу таблицы
+    показывает актуальные пороги, а не зашитые в текст числа.
+    """
+    g = {'min_score': 1.0, 'min_trades': 10, 'min_tstat': 2.5, 'rr': 0.5,
+         'payoff': 0.6, 'min_lot': 0.01, 'plan_max': 40, 'max_per_type': 8}
+    try:
+        from config import RiskParams, BacktestConfig, MIN_TP_SL_RATIO, MIN_PAYOFF
+        _rp, _bt = RiskParams(), BacktestConfig()
+        g['min_score'] = float(getattr(_rp, 'min_score', g['min_score']))
+        g['min_tstat'] = float(getattr(_rp, 'min_tstat', g['min_tstat']))
+        g['min_lot'] = float(getattr(_rp, 'min_lot', g['min_lot']))
+        g['plan_max'] = int(getattr(_rp, 'plan_max_strategies', g['plan_max']))
+        g['max_per_type'] = int(getattr(_rp, 'max_per_type', g['max_per_type']))
+        g['min_trades'] = int(getattr(_bt, 'min_trades_rank', g['min_trades']))
+        g['rr'] = float(MIN_TP_SL_RATIO)
+        g['payoff'] = float(MIN_PAYOFF)
+    except Exception:
+        pass
+    return g
+
+
 def render_roadmap_tab() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
@@ -731,10 +770,10 @@ def render_roadmap_tab() -> None:
         "<th class='left'>Module</th>"
         "<th class='left' title='Signal calc: def calc_... inside the module'>Signal calc</th>"
         "<th title='Strategy Tree type: registry key or native family'>type</th>"
-        "<th title='Score семейства: среднее best_score по ВСЕМ посчитанным "
-        "комбинациям (family_score). Зелёный — выше порога и покрытие полное; "
-        "жёлтый — выше порога, часть комбинаций из кэша; красный — ниже порога "
-        "min_score (посчитано, но отбор не прошло)'>score</th>"
+        "<th title='Score семейства: МАКСИМУМ best_score по посчитанным "
+        "комбинациям (family_score) — чемпион, по нему и допуск в план. "
+        "Зелёный — выше порога и покрытие полное; жёлтый — часть комбинаций "
+        "из кэша; красный — даже лучший символ ниже порога min_score'>score</th>"
         "<th title='Module file exists in strategies/'>Standalone</th>"
         "<th>entry+exit</th>"
         "<th>backtest</th>"
@@ -757,10 +796,10 @@ def render_roadmap_tab() -> None:
     _snap = stat.get('run_snap') or ''
     _n_score = sum(1 for r in shown if r.get('score') is not None)
     _n_red = sum(1 for r in shown if r.get('score_state') == 'red')
-    st.caption(f"score: красным — {_n_red} строк ниже порога min_score (бэктест есть, "
-               f"но комбинации отфильтрованы; показана реальная оценка, а не прочерк). "
-               f"Зелёный — выше порога и покрытие полное, жёлтый — выше порога, "
-               f"но часть комбинаций из кэша.")
+    st.caption(f"score: красным — {_n_red} строк, где ДАЖЕ лучший символ ниже "
+               f"порога min_score (бэктест есть, отбор не прошло). В колонке — максимум "
+               f"по символам (лучшая посчитанная комбинация, до фильтров рэнкинга). Среднее — в подсказке. "
+               f"Зелёный — покрытие полное, жёлтый — часть комбинаций из кэша.")
     _snap_txt = f" от {_snap}" if _snap else " — БД журналов недоступна"
     st.caption(f"Показано {len(shown)} из {stat['files']} файлов. "
                f"Финализировано: family_status{_snap_txt}. "
@@ -772,6 +811,19 @@ def render_roadmap_tab() -> None:
 
                f"Кэш инвентаризации — 2 мин (обновится само после деплоя)."
                )
+
+    _pg = _plan_gates()
+    st.caption(
+        "Что попадает в план: дедуп по param_key → "
+        f"score ≥ {_pg['min_score']:.2f} → сделок ≥ {_pg['min_trades']} → "
+        f"t-стат ≥ {_pg['min_tstat']:.1f} (либо чемпион семейства) → "
+        f"TP ≥ {_pg['rr']:.2f}·SL и payoff ≥ {_pg['payoff']:.2f} → "
+        f"лот ≥ {_pg['min_lot']:.2f} после квоты и капов → "
+        f"слотов ≤ {_pg['plan_max']}, на один тип ≤ {_pg['max_per_type']}. "
+        "score выше порога — необходимое, но не достаточное условие: если тип уже занял "
+        f"{_pg['max_per_type']} слотов, следующие его комбинации в план не попадут, "
+        "каким бы ни был score."
+    )
 
     with st.expander("Что означает каждая колонка", expanded=False):
         st.markdown(
@@ -785,9 +837,9 @@ def render_roadmap_tab() -> None:
 | **backtest** | `def backtest` | Функция прогона для ночной сетки. |
 | **type** | ключ реестра или ключ native-семейства | Имя стратегии в Strategy Tree: `adx native` или `triple_ema реестр`. Именно оно уходит в `type` результата и в категорию `SYMBOL_type`. |
 | ~~Батч~~ | — | Колонка убрана: ключ в `ENABLED_BATCH` виден в подсказке колонки type. |
-| **score** | `trades_db.family_score` → `family_status` (`best_score` последнего рэнкинга) | Оценка семейства: среднее `best_score` по символам, где семейство участвует (в базе score считается на пару symbol+family — это лучшая комбинация семейства на символе). В подсказке: максимум, порог `min_score`, вид прогона, покрытие. **Зелёный** = комбинации семейства посчитаны полностью в последнем прогоне (покрытие ≥ 99.5%) — score и бэктест из одного прогона; **жёлтый** = покрытие < 100%, часть комбинаций взята из кэша (бэктест старше скоринга); **«—»** = комбинаций нет вовсе (семейство не бэктестилось); **красный** = посчитано, но лучшая комбинация ниже порога `min_score` (видно число). Приоритет источников — в строке «score: источник» ниже. |
+| **score** | `trades_db.family_score` → `family_status` (`best_score` последнего рэнкинга) | Оценка семейства: МАКСИМУМ `best_score` по символам, где семейство участвует (в базе score считается на пару symbol+family — это лучшая комбинация семейства на символе; в колонке — максимум по символам, т.е. тот же критерий отбора, по которому план берёт чемпиона). В подсказке: среднее по символам, порог `min_score`, вид прогона, покрытие. **Зелёный** = комбинации семейства посчитаны полностью в последнем прогоне (покрытие ≥ 99.5%) — score и бэктест из одного прогона; **жёлтый** = покрытие < 100%, часть комбинаций взята из кэша (бэктест старше скоринга); **«—»** = комбинаций нет вовсе (семейство не бэктестилось); **красный** = даже лучший символ ниже порога `min_score` (видно число). Приоритет источников — в строке «score: источник» ниже. |
 | **Финализировано** | `trades_db.family_status` (снимок после рэнкинга) | ✓ = модуль есть в снимке последнего прогона; `—` = в рэнкинге не участвовал. Покрытие комбинаций, число символов и `ready_to_trade` — в подсказке. |
-| **score: источник** | `trades_db.family_score` (считается из чекпойнтов) | Лучший `score` среди ВСЕХ посчитанных комбинаций семейства на каждом символе — до дедупа и фильтров рэнкинга. Поэтому оценка есть и у семейства, целиком оказавшегося ниже порога: **красный** = score < `min_score` (посчитано, но отбор не прошло), значение показано числом, а не прочерком. Если таблицы/строк нет — используется `family_status.best_score` (тогда оценка только у прошедших фильтры). |
+| **score: источник** | `trades_db.family_score` (считается из чекпойнтов) | Лучший `score` среди ВСЕХ посчитанных комбинаций семейства на каждом символе — до дедупа и фильтров рэнкинга. В колонке `score` показывается МАКСИМУМ этих значений по символам (чемпион семейства — именно он решает допуск в план), среднее по символам — в подсказке. Поэтому оценка есть и у семейства, целиком оказавшегося ниже порога: **красный** = score < `min_score` (посчитано, но отбор не прошло), значение показано числом, а не прочерком. Если таблицы/строк нет — используется `family_status.best_score` (тогда оценка только у прошедших фильтры). |
 | ~~Комб./симв.~~ | — | Колонка убрана как неинформативная: число заполнялось только у реестра. |
 | ~~Native~~ | — | Колонка убрана: слой показан прямо в type (`native` серым). |
 | ~~Семейство~~ | — | Колонка убрана: имя семейства показано в type. |
