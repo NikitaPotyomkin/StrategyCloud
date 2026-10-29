@@ -262,6 +262,30 @@ def ensure_schema(con):
     );
     CREATE INDEX IF NOT EXISTS ix_family_log_key ON family_status_log(symbol, family, ts);
 
+    -- ── Score ВСЕХ посчитанных комбинаций (до фильтров рэнкинга) ───────────
+    -- family_status.best_score считается по all_results, то есть по комбинациям,
+    -- УЖЕ прошедшим дедуп и фильтры (min_trades / min_score / t-stat). Если все
+    -- комбинации семейства ниже порога, там не остаётся ничего и дэшборд рисует
+    -- «—» вместо честной низкой оценки. Эта таблица заполняется из чекпойнтов
+    -- символов: в них лежат ВСЕ посчитанные комбинации, поэтому score есть у
+    -- каждого семейства — даже отрицательный и даже ниже порога.
+    CREATE TABLE IF NOT EXISTS family_score (
+        symbol         TEXT,     -- GBPUSDrfd
+        family         TEXT,     -- системный тип семейства (stoch, percentile, ...)
+        best_score     REAL,     -- лучший score семейства на символе (может быть < 0)
+        best_param_key TEXT,     -- комбинация, давшая best_score
+        best_n_trades  INTEGER,  -- сделок в лучшей комбинации
+        best_profit    REAL,     -- её профит в симуляции
+        n_combos       INTEGER,  -- сколько комбинаций семейства посчитано
+        n_positive     INTEGER,  -- сколько из них со score > 0
+        mean_score     REAL,     -- средний score по комбинациям семейства
+        min_score      REAL,     -- порог отбора этого прогона (для окраски в дэше)
+        run_kind       TEXT,     -- full / incremental / partial / none
+        snapshot_at    TEXT,     -- время записи
+        PRIMARY KEY (symbol, family)
+    );
+    CREATE INDEX IF NOT EXISTS ix_family_score_best ON family_score(best_score);
+
     CREATE TABLE IF NOT EXISTS ingest_log (
         id         INTEGER PRIMARY KEY CHECK (id = 1),
         last_time  INTEGER,  -- максимальный deal.time после последнего ingest
@@ -929,6 +953,59 @@ def record_family_status(rows, path=None, verbose=True):
     except Exception as exc:
         if verbose:
             print(f"  [trades_db] family_status не записан: {exc!r}", flush=True)
+        return 0
+
+
+def record_family_scores(rows, path=None, verbose=True):
+    """Записать score ВСЕХ семейств по всем символам (источник — чекпойнты).
+
+    В отличие от record_family_status (состояние ПОСЛЕ фильтров рэнкинга), здесь
+    best_score — лучший score среди ВСЕХ посчитанных комбинаций семейства, даже
+    если он ниже порога min_score или отрицательный. Зачем: в Roadmap нужно
+    видеть оценку стратегии всегда, а не только у прошедших отбор.
+
+    rows — список словарей от functions.family_score_rows().
+    Поведение: UPSERT по (symbol, family); ключи, которых нет в новом наборе,
+    остаются (символ мог выпасть из прогона — истории не мешаем).
+    Fail-safe: любая ошибка → 0, ночной цикл не роняется.
+    """
+    if not rows:
+        return 0
+    try:
+        con = connect(path)
+        ensure_schema(con)
+        now = datetime.datetime.now().isoformat(timespec='seconds')
+        payload = []
+        for row in rows:
+            payload.append((
+                row.get('symbol'), row.get('family'),
+                round(float(row.get('best_score') or 0.0), 6),
+                row.get('best_param_key') or '',
+                _safe_int(row.get('best_n_trades'), 0),
+                round(float(row.get('best_profit') or 0.0), 4),
+                _safe_int(row.get('n_combos'), 0),
+                _safe_int(row.get('n_positive'), 0),
+                round(float(row.get('mean_score') or 0.0), 6),
+                round(float(row.get('min_score') or 0.0), 6),
+                row.get('run_kind') or '',
+                now,
+            ))
+        con.executemany(
+            "INSERT OR REPLACE INTO family_score "
+            "(symbol, family, best_score, best_param_key, best_n_trades, best_profit, "
+            "n_combos, n_positive, mean_score, min_score, run_kind, snapshot_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", payload)
+        con.commit()
+        con.close()
+        if verbose:
+            _neg = sum(1 for r in payload if (r[2] or 0) <= 0)
+            print(f"  [trades_db] family_score: {len(payload)} строк "
+                  f"(score всех семейств, из них {_neg} без положительной оценки)",
+                  flush=True)
+        return len(payload)
+    except Exception as exc:
+        if verbose:
+            print(f"  [trades_db] family_score не записан: {exc!r}", flush=True)
         return 0
 
 

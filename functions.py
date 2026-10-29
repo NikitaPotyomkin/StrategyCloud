@@ -293,6 +293,48 @@ def family_status_rows(symbols, all_results, active, active_strategies,
     return rows
 
 
+def family_score_rows(symbols, min_score=0.0, run_kind='none'):
+    """Score каждого семейства на каждом символе — по ВСЕМ посчитанным комбинациям.
+
+    Источник — чекпойнт символа (там лежат ВСЕ комбинации, посчитанные прогоном),
+    а НЕ all_results: в all_results попадают только комбинации, прошедшие
+    дедупликацию и фильтры рэнкинга (min_trades, min_score, t-stat). Поэтому у
+    семейства, целиком оказавшегося ниже порога, в family_status оценки нет вовсе,
+    и дэшборд рисует «—» вместо честного низкого score.
+
+    Возвращает строки для trades_db.record_family_scores():
+      symbol, family, best_score, best_param_key, best_n_trades, best_profit,
+      n_combos, n_positive, mean_score, min_score, run_kind.
+    """
+    out = []
+    _min = float(min_score or 0.0)
+    for sym in list(symbols or []):
+        try:
+            res, _bar, _fams = load_checkpoint(sym)
+        except Exception:
+            res = []
+        by_fam = {}
+        for r in (res or []):
+            by_fam.setdefault(r.get('type') or 'stoch', []).append(r)
+        for fam, lst in by_fam.items():
+            pairs = [(float(x.get('score') or 0.0), x) for x in lst]
+            best_s, best = max(pairs, key=lambda t: t[0])
+            out.append({
+                'symbol': sym,
+                'family': fam,
+                'best_score': round(best_s, 6),
+                'best_param_key': best.get('param_key') or '',
+                'best_n_trades': int(best.get('n_trades') or 0),
+                'best_profit': float(best.get('profit') or 0.0),
+                'n_combos': len(lst),
+                'n_positive': sum(1 for s, _x in pairs if s > 0),
+                'mean_score': round(sum(s for s, _x in pairs) / len(pairs), 6),
+                'min_score': _min,
+                'run_kind': run_kind,
+            })
+    return out
+
+
 # ═══ ЕДИНЫЙ СЧЁТ КОМБИНАЦИЙ ═══
 # Пропускная способность бэктеста (замеры journals/run.log, 4 процесса):
 # ~5.6 комб/с суммарно ≈ 1.4 комб/с на процесс. Используется для оценки времени.

@@ -467,6 +467,12 @@ def _record_family_status(all_results, active, run_kind=None):
             key_fn=strategy_key,
         )
         trades_db.record_family_status(rows)
+        # Score ВСЕХ семейств (включая те, что целиком ниже порога): источник —
+        # чекпойнты символов, а не all_results. Нужен для колонки score в Roadmap:
+        # оценка должна быть видна всегда, даже супер низкая.
+        from functions import family_score_rows as _fs_rows
+        trades_db.record_family_scores(
+            _fs_rows(bt_cfg.symbols, risk_cfg.min_score, run_kind))
     except Exception as exc:
         print(f"  [WARN] family_status: {exc!r}", flush=True)
 
