@@ -189,6 +189,27 @@ def _ref(con, today, cfg):
             'last_day': (meta['last_day'] if meta else None)}
 
 
+def day_locked(path=None, day=None):
+    """Был ли сегодня РЕАЛЬНЫЙ трим — блокировка входов до 00:00 сервера.
+
+    Читает peak_trim (mode='real') за текущие серверные сутки. После трима
+    робот только ведёт остатки 0.01 (статистика + SL/TP), новых входов нет:
+    иначе он тут же набирает объём заново, а удельная дня остаётся высокой.
+    Любая ошибка = False (торговля продолжается — fail-open).
+    """
+    try:
+        import trades_db
+        _day = day or _day_of_ts(int(datetime.datetime.now().timestamp()) + SRV_OFFSET_H * 3600)
+        con = trades_db.connect(path)
+        _ensure_table(con)
+        row = con.execute(
+            "SELECT 1 FROM peak_trim WHERE day = ? AND mode = 'real' LIMIT 1",
+            (_day,)).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
 def _already_trimmed(con, day, login, position_id):
     """Была ли уже РЕАЛЬНАЯ фиксация по этой позиции в этот день."""
     try:

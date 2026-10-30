@@ -1504,7 +1504,32 @@ def quota_gate_ok(ctx, key, s, symbol_data):
     return False
 
 
-_GUARD_ERR_WARNED = False       # ошибку защиты по символу печатаем один раз
+_GUARD_ERR_WARNED = False
+_PT_LOCK_WARNED = False
+
+
+def peak_trim_day_ok(risk_cfg):
+    """День уже зафиксирован пик-тримом → новых входов до 00:00 сервера.
+
+    Смысл: после трима остатки 0.01 продолжают «висеть», удельная дня остаётся
+    высокой, и без замка робот тут же набирает объём заново — следующий проход
+    через 60 с опять режет его до 0.01 (пила из комиссий и спреда). С замком
+    день после трима живёт только на остатках: SL/TP и статистика.
+    Выключение: config.PeakTrimParams.block_entries_after_trim = False.
+    Ошибка чтения = True (торговлю не блокируем).
+    """
+    global _PT_LOCK_WARNED
+    try:
+        from config import PeakTrimParams as _PT
+        if not bool(getattr(_PT(), 'block_entries_after_trim', True)):
+            return True
+        import peak_trim
+        return not peak_trim.day_locked()
+    except Exception as exc:
+        if not _PT_LOCK_WARNED:
+            _PT_LOCK_WARNED = True
+            print(f"  -> [TRIM] замок дня отключён: {exc!r}", flush=True)
+        return True       # ошибку защиты по символу печатаем один раз
 
 
 def symbol_guard_ok(symbol, risk_cfg):
@@ -2051,6 +2076,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_side} позиций {entry_dir} на {s['symbol']}")
                     elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
+                    elif not peak_trim_day_ok(risk_cfg):
+                        pass  # трим уже был сегодня — новых входов до 00:00 сервера
                     elif not symbol_guard_ok(s['symbol'], risk_cfg):
                         pass  # дневной стоп по символу / cooldown после SL — причина напечатана
                     elif not quota_gate_ok(_gate, key, s, symbol_data):
