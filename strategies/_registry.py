@@ -530,6 +530,51 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='AS-FractalD', grid=[14, 20, 30], min_len=120,
     ),
+
+    # ── Догон 30.10.2026: 7 файлов, у которых вход был МЁРТВ ──
+    # У них k двузначный (только ±1), а check_entry требовал prev == 0 —
+    # такого состояния после прогрева не бывает, поэтому ни бэктест, ни live
+    # не входили ни разу. Вход переведён на смену состояния (state_entry).
+    # Стоимость: 19 параметризаций × 3 SL × 3 TP = 171 бэктест на символ.
+    # grid=[34] у klinger и grid=[20] у swing_bos — в их calc период зашит
+    # константой (34 / rolling(20)), другие значения дали бы тот же сигнал.
+    'ma_zerolag': dict(
+        module='ma_zerolag', calc='calc_ma_zerolag',
+        entry='check_entry', exit='check_exit',
+        label='ZeroLag', grid=[10, 16, 22, 30], min_len=120,
+    ),
+    'ma_frama': dict(
+        module='ma_frama_slope', calc='calc_ma_frama_slope',
+        entry='check_entry', exit='check_exit',
+        label='FRAMA', grid=[10, 16, 22, 30], min_len=120,
+    ),
+    'ma_vote': dict(
+        module='ma_multi_cross_vote', calc='calc_ma_multi_cross_vote',
+        entry='check_entry', exit='check_exit',
+        label='MAVote', grid=[5, 8, 10], min_len=240,
+    ),
+    'klinger': dict(
+        module='osc_klinger', calc='calc_osc_klinger',
+        entry='check_entry', exit='check_exit',
+        label='KVO', grid=[34], min_len=120,
+    ),
+    'rect_break': dict(
+        module='pattern_rectangle_break', calc='calc_pattern_rectangle_break',
+        entry='check_entry', exit='check_exit',
+        label='RectBreak', grid=[10, 20, 55], min_len=120,
+    ),
+    'wedge_rise': dict(
+        module='pattern_wedge_rising', calc='calc_pattern_wedge_rising',
+        entry='check_entry', exit='check_exit',
+        label='WedgeRise', grid=[10, 20, 55], min_len=120,
+    ),
+    'swing_bos': dict(
+        module='struct_swing_bos', calc='calc_struct_swing_bos',
+        entry='check_entry', exit='check_exit',
+        label='SwingBOS', grid=[20], min_len=120,
+    ),
+
+
 }
 
 _MODULE_CACHE = {}
@@ -575,6 +620,12 @@ ENABLED_BATCH = (
     'mi_rsi_bb_vol', 'mi_adx_rsi_ma', 'mi_stoch_atr_vol',
     # Advanced statistical (2)
     'advstat_hurst', 'advstat_fractal_dim',
+    # ── Догон 30.10.2026: 7 починенных файлов (был мёртвый вход) ──
+    # +19 параметризаций на символ → +171 бэктест на символ (~+8% к ночи).
+    # Пересчёт инкрементальный: family_fp знает и label, и ключ, поэтому
+    # остальные семейства не трогаются.
+    'ma_zerolag', 'ma_frama', 'ma_vote', 'klinger',
+    'rect_break', 'wedge_rise', 'swing_bos',
 )
 
 

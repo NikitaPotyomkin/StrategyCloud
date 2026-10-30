@@ -48,8 +48,10 @@ COL_MUTED = '#8B949E'
 COL_GREEN_LT = '#3FB950'
 COL_RED_LT = '#F85149'
 COL_PANEL = '#161B22'
-COL_REF = '#D29922'      # горизонталь «75% от лучшего дня окна»
-REF_SHARE = 0.75         # доля пика: сколько было бы взято при закрытии на 3/4 хода
+COL_REF = '#D29922'      # горизонталь «медиана дневных пиков»
+# 30.10.2026: опорная линия на графиках — МЕДИАНА дневных пиков (было 75% от
+# максимума окна). Это ровно то же число, что в метриках «Медиана пика за день»
+# и «Медиана на 1 лот», поэтому линия и лейбл больше не расходятся.
 
 FLOW_CACHE_SEC = 60
 _FLOW_CACHE = {'ts': 0.0, 'df': None}
@@ -370,6 +372,18 @@ def _exit_block(eq: pd.DataFrame) -> None:
             _best['к факту, ₽']))
 
 
+def _ref_level(day: pd.DataFrame, ycol: str) -> float:
+    """Опорный уровень графика: МЕДИАНА дневных пиков по этой же колонке.
+
+    Совпадает с метрикой над графиком: «Медиана пика за день» для
+    'potential_peak' и «Медиана на 1 лот» для 'per_lot' (обе считаются как
+    day[col].median(), NaN-дни отбрасываются одинаково). 30.10.2026 заменила
+    прежний уровень «75% от максимума окна».
+    """
+    vals = pd.to_numeric(day[ycol], errors='coerce').dropna()
+    return float(vals.median()) if len(vals) else float('nan')
+
+
 def _bars(day: pd.DataFrame, ycol: str, labels: list, customdata, hover: str,
           title: str, key: str) -> None:
     colors = [COL_GREEN_LT if (np.isfinite(float(v)) and float(v) >= 0) else COL_RED_LT
@@ -381,22 +395,28 @@ def _bars(day: pd.DataFrame, ycol: str, labels: list, customdata, hover: str,
         textfont=dict(size=11, color=COL_TEXT),
         customdata=customdata, hovertemplate=hover))
     fig.add_hline(y=0, line_color=COL_MUTED, line_width=1)
-    # Горизонтальный пунктир: 75% от ЛУЧШЕГО дня окна (max бара) — один уровень
-    # «сколько брали бы, если выходить на 3/4 максимума»; одинаков для всех баров.
+    # Горизонтальный пунктир: МЕДИАНА дневных пиков окна — один уровень на все
+    # бары, ровно то же число, что в метрике над графиком («Медиана пика за день»
+    # / «Медиана на 1 лот»).
+    _ref_val = _ref_level(day, ycol)
+
+
     fig.add_trace(go.Scatter(
         x=[dt.strftime('%d.%m') for dt in day['day']],
-        y=[REF_SHARE * float(pd.to_numeric(day[ycol], errors='coerce').max())]
-          * len(day),
+        y=[_ref_val] * len(day),
+
+
         mode='lines',
         line=dict(color=COL_REF, width=1.4, dash='dot'),
         marker=dict(size=5, color=COL_REF, symbol='diamond'),
-        hovertemplate=('%{x}: 75% от лучшего дня = %{y:,.0f}'
-                       ' (' + title + ' × 0.75)<extra></extra>')))
+        hovertemplate=('%{x}: медиана дневных пиков = %{y:,.0f}'
+                       ' (' + title + ')<extra></extra>')))
     # подпись уровня у левого края — видно без наведения мыши
-    _ref_val = REF_SHARE * float(pd.to_numeric(day[ycol], errors='coerce').max())
+
+
     if np.isfinite(_ref_val):
         fig.add_annotation(x=0.005, y=_ref_val, xref='paper', yref='y',
-                           text='75% лучшего дня = ' + _num(_ref_val),
+                           text='медиана = ' + _num(_ref_val),
                            showarrow=False, xanchor='left', yanchor='bottom',
                            font=dict(color=COL_REF, size=11))
     fig.update_layout(yaxis_title=title)
@@ -658,7 +678,7 @@ def render(data: dict, days_back: int) -> None:
 
     # ── 1. Абсолютная: максимум потенциальной прибыли за день, ₽ ─────────────
     st.markdown("**Абсолютная — потенциал, ₽** · столбец — пик дня, пунктир — "
-                "75% от лучшего дня окна (горизонталь на все бары)")
+                "медиана дневных пиков (горизонталь на все бары)")
     _bars(day, 'potential_peak',
           [_num(float(v)) + _pct_sfx(p) for v, p
            in zip(day['potential_peak'], day['fill_pct'])],
@@ -675,8 +695,8 @@ def render(data: dict, days_back: int) -> None:
           key='risk_profit_peak_day')
 
     # ── 2. Удельная: максимум потенциальной прибыли на лот за день, ₽/лот ───
-    st.markdown("**Удельная — потенциал на 1 лот, ₽/лот** · пунктир — 75% от "
-                "лучшего дня окна")
+    st.markdown("**Удельная — потенциал на 1 лот, ₽/лот** · пунктир — "
+                "медиана дневных пиков")
     if _n_per:
         _bars(day, 'per_lot',
               [_num(float(v)) + _pct_sfx(p) for v, p

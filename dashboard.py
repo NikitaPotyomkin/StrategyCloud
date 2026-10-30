@@ -2155,13 +2155,17 @@ with tab_risk:
                                'пик прибыли: %{customdata[4]:,.0f} ₽<extra></extra>'),
                 name='макс ₽/лот за день'))
             _peak_pl = float(_per_lot_day.max()) if _per_lot_day.notna().any() else 0.0
-            _lvl_pl = _peak_pl * 0.75
+            # 30.10.2026: опора — МЕДИАНА дневных пиков окна (было 75% от
+            # максимума). То же число, что в метриках Risk-вкладки «Медиана
+            # пика за день» / «Медиана на 1 лот».
+            _lvl_pl = (float(_per_lot_day.median())
+                       if _per_lot_day.notna().any() else 0.0)
             _fig_pkpl.add_hline(y=_lvl_pl, line_dash='dash', line_color=COL_GREEN_LT,
-                                annotation_text=(f"порог 75% = {_lvl_pl:,.0f} ₽/лот (пик окна {_peak_pl:,.0f})".replace(',', ' ')),
+                                annotation_text=(f"медиана = {_lvl_pl:,.0f} ₽/лот (пик окна {_peak_pl:,.0f})".replace(',', ' ')),
                                 annotation_position='top left')
             _fig_pkpl.add_hline(y=0, line_color=COL_MUTED, line_width=1)
             _fig_pkpl.update_layout(xaxis_title='', yaxis_title='₽ на лот (пик дня)')
-            # Ось — явно (точки + линия 75% + нуль), чтобы порог не уезжал за край.
+            # Ось — явно (точки + линия медианы + нуль), чтобы уровень не уезжал за край.
             _fig_pkpl.update_yaxes(range=_pk_y_range(_per_lot_day, [_lvl_pl, 0.0]))
 
             _fig_pkabs = go.Figure()
@@ -2176,14 +2180,15 @@ with tab_risk:
             _abs_vals = _pk_abs['peak_float']
             _abs_vals = _abs_vals.where(np.isfinite(_abs_vals))
             _peak_abs = float(_abs_vals.max()) if _abs_vals.notna().any() else 0.0
-            # 75% от пика ОКНА (тот же порог, что на графике выше)
-            _lvl_abs = _peak_abs * 0.75
+            # МЕДИАНА дневных пиков окна — тот же опорный уровень, что на графике выше
+            _lvl_abs = (float(_abs_vals.median())
+                        if _abs_vals.notna().any() else 0.0)
             _fig_pkabs.add_hline(y=_lvl_abs, line_dash='dash', line_color=COL_GREEN_LT,
-                                 annotation_text=(f"порог 75% = {_lvl_abs:,.0f} ₽ (пик окна {_peak_abs:,.0f})".replace(',', ' ')),
+                                 annotation_text=(f"медиана = {_lvl_abs:,.0f} ₽ (пик окна {_peak_abs:,.0f})".replace(',', ' ')),
                                  annotation_position='top left')
             _fig_pkabs.add_hline(y=0, line_color=COL_MUTED, line_width=1)
             _fig_pkabs.update_layout(xaxis_title='', yaxis_title='₽ (пик дня)')
-            # Ось — явно (точки + линия 75% + нуль), чтобы порог не уезжал за край.
+            # Ось — явно (точки + линия медианы + нуль), чтобы уровень не уезжал за край.
             _fig_pkabs.update_yaxes(range=_pk_y_range(_abs_vals, [_lvl_abs, 0.0]))
 
             _col_pl, _col_abs = st.columns(2)

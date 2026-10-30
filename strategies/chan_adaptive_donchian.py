@@ -14,20 +14,31 @@ def calc_chan_adaptive_donchian(df, period=20):
     vol = df['close'].diff().abs().rolling(period).sum()
     er = change / vol.replace(0, np.nan)
     
-    adaptive_period = (20 / er).round().clip(5, 60).astype(int)
+    # NaN на прогреве (первые `period` баров) и при нулевой волатильности:
+    # astype(int) на NaN падал ValueError → нейтральное значение = period.
+    adaptive_period = (20 / er).fillna(period).round().clip(5, 60).astype(int)
     
     k = np.zeros(len(df))
     for i in range(period, len(df)):
-        p = adaptive_period.iloc[i]
-        high_n = df['high'].iloc[i-p+1:i+1].max()
-        low_n = df['low'].iloc[i-p+1:i+1].min()
+        p = int(adaptive_period.iloc[i])
+        # Окно Donchian — СТРОГО до бара i (i-p … i-1). С текущим баром в окне
+        # high_n >= close всегда, условие close > high_n недостижимо и стратегия
+        # не входила ни разу. Отрицательный старт iloc завернул бы выборку в
+        # конец ряда (заглядывание вперёд) — такие бары пропускаем.
+        lo_i = i - p
+        if lo_i < 0:
+            continue
+        high_n = df['high'].iloc[lo_i:i].max()
+        low_n = df['low'].iloc[lo_i:i].min()
         
-        high_val = high_n.iloc[i] if hasattr(high_n, 'iloc') else high_n
-        low_val = low_n.iloc[i] if hasattr(low_n, 'iloc') else low_n
+        # high_n / low_n — уже скаляры, алиасы high_val/low_val не нужны
+
+
+
         
-        if df['close'].iloc[i] > high_val:
+        if df['close'].iloc[i] > high_n:
             k[i] = 1
-        elif df['close'].iloc[i] < low_val:
+        elif df['close'].iloc[i] < low_n:
             k[i] = -1
     
     df = df.copy()

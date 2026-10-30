@@ -24,7 +24,14 @@ def calc_osc_klinger(df, period=34):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # k здесь двузначный (только ±1): нулевого состояния после прогрева нет,
+    # поэтому prev == 0 не наступает никогда и стратегия не входила вовсе.
+    # Вход по СМЕНЕ состояния — как в _bt_core.state_entry / живом движке.
+    if curr == 1 and prev != 1:
+        return 'long'
+    if curr == -1 and prev != -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):
@@ -53,7 +60,11 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
         sl_price = df['close'].iloc[i] - sl * point
         tp_price = df['close'].iloc[i] + tp * point
         
-        if prev_k == 0 and curr_k == 1:
+        # Ветки ниже — по check_entry (смена состояния), чтобы локальный
+        # бэктест и live считали одинаково.
+        entry_dir = check_entry(prev_k, curr_k)
+
+        if entry_dir == 'long':
             for j in range(i+1, min(i+50, len(df))):
                 if df['low'].iloc[j] <= sl_price:
                     profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
@@ -66,7 +77,7 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
                     trade_profits.append(tp_price - df['close'].iloc[i])
                     break
                     
-        elif prev_k == 0 and curr_k == -1:
+        elif entry_dir == 'short':
             sl_price = df['close'].iloc[i] + sl * point
             tp_price = df['close'].iloc[i] - tp * point
             for j in range(i+1, min(i+50, len(df))):

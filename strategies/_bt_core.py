@@ -129,14 +129,30 @@ def numpy_loop_enabled():
     return bool(NUMPY_LOOP)
 
 
+def _open_array(df):
+    """Open-цены как numpy-массив длиной n+1 (последний элемент — NaN).
+
+    NaN-сентинел означает «следующего бара нет»: сигнал последнего бара
+    исполнять не по чему, и вход там пропускается (проверка np.isfinite в
+    петле). Если колонки open нет — фолбэк на close (прежняя модель входа).
+    """
+    col = df['open'] if 'open' in df.columns else df['close']
+    return np.append(col.to_numpy(dtype=float), np.nan)
+
+
 def run_backtest(df, calc_fn, check_entry, check_exit, param_key,
                  sl_points, tp_points, point, tick_value, tick_size,
                  sim_lot=0.01, spread_points=0):
     """Симуляция на H1 с учётом спреда. Возвращает (profit, n_trades, trade_profits).
 
     calc_fn(df, param_key) обязан положить сигнал в колонку 'k'.
-    Модель спреда: вход по ask/bid (close ± spread), и на каждом выходе
-    результат уменьшается на один спред (round-trip: ask-вход, bid-выход).
+    check_entry(prev, curr) обязан вернуть 'long' / 'short' / None — как
+    state_entry ниже; булев контракт файлов (True/False) здесь не работает.
+    Модель спреда: вход по ask/bid (open следующего бара ± spread), а на
+    выходе результат уменьшается на один спред (ask-вход, bid-выход).
+    Модель входа (30.10.2026): сигнал бара i исполняется по open бара i+1.
+    Прежний вход по close[i] того же бара давал систематический оптимизм —
+    цена закрытия сигнального бара уже известна в момент «входа».
     """
     df = calc_fn(df, param_key)
     sl_dist = sl_points * point
@@ -157,6 +173,7 @@ def _simulate_arrays(df, check_entry, check_exit, sl_dist, tp_dist, spread,
     _simulate_iloc. Это условие паритета по профитам сделок (1e-6).
     """
     k_arr = df['k'].to_numpy()
+    open_arr = _open_array(df)
     high_arr = df['high'].to_numpy(dtype=float)
     low_arr = df['low'].to_numpy(dtype=float)
     close_arr = df['close'].to_numpy(dtype=float)
@@ -213,14 +230,14 @@ def _simulate_arrays(df, check_entry, check_exit, sl_dist, tp_dist, spread,
 
         if position is None:
             entry_dir = _entry_fn(prev_k, curr_k)
-            if entry_dir == 'long':
-                entry = close + spread
-                _entry_i = i
+            if entry_dir == 'long' and np.isfinite(open_arr[i + 1]):
+                entry = open_arr[i + 1] + spread
+                _entry_i = i + 1      # сделка принадлежит бару входа, а не сигнала
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
-            elif entry_dir == 'short':
-                entry = close - spread
-                _entry_i = i
+            elif entry_dir == 'short' and np.isfinite(open_arr[i + 1]):
+                entry = open_arr[i + 1] - spread
+                _entry_i = i + 1      # сделка принадлежит бару входа, а не сигнала
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 
@@ -238,6 +255,8 @@ def _simulate_iloc(df, check_entry, check_exit, sl_dist, tp_dist, spread,
     n_trades = 0
     position = None
     trade_profits = TradeList()
+
+    open_arr = _open_array(df)
 
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i - 1]
@@ -288,14 +307,14 @@ def _simulate_iloc(df, check_entry, check_exit, sl_dist, tp_dist, spread,
 
         if position is None:
             entry_dir = check_entry(prev_k, curr_k)
-            if entry_dir == 'long':
-                entry = close + spread
-                _entry_i = i
+            if entry_dir == 'long' and np.isfinite(open_arr[i + 1]):
+                entry = open_arr[i + 1] + spread
+                _entry_i = i + 1      # сделка принадлежит бару входа, а не сигнала
                 position = {'direction': 'long', 'entry': entry,
                             'sl': entry - sl_dist, 'tp': entry + tp_dist}
-            elif entry_dir == 'short':
-                entry = close - spread
-                _entry_i = i
+            elif entry_dir == 'short' and np.isfinite(open_arr[i + 1]):
+                entry = open_arr[i + 1] - spread
+                _entry_i = i + 1      # сделка принадлежит бару входа, а не сигнала
                 position = {'direction': 'short', 'entry': entry,
                             'sl': entry + sl_dist, 'tp': entry - tp_dist}
 

@@ -16,12 +16,15 @@ def calc_ma_multi_cross_vote(df, period=5):
     ma50 = df['close'].rolling(period*10).mean()
     ma100 = df['close'].rolling(period*20).mean()
     
-    votes = 0
-    if df['close'] > ma5: votes += 1
-    if df['close'] > ma10: votes += 1
-    if df['close'] > ma20: votes += 1
-    if df['close'] > ma50: votes += 1
-    if df['close'] > ma100: votes += 1
+    # БЫЛО: votes = 0 и `if df['close'] > ma5: votes += 1` — сравнение Series в
+    # if бросало ValueError ("truth value of a Series is ambiguous"), то есть
+    # calc падал на первом же вызове. Считаем голоса векторно.
+    votes = np.zeros(len(df), dtype=int)
+    votes += (df['close'] > ma5).to_numpy(dtype=int)
+    votes += (df['close'] > ma10).to_numpy(dtype=int)
+    votes += (df['close'] > ma20).to_numpy(dtype=int)
+    votes += (df['close'] > ma50).to_numpy(dtype=int)
+    votes += (df['close'] > ma100).to_numpy(dtype=int)
     
     k = np.zeros(len(df))
     k[votes >= 3] = 1
@@ -33,7 +36,14 @@ def calc_ma_multi_cross_vote(df, period=5):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # k здесь двузначный (только ±1): нулевого состояния после прогрева нет,
+    # поэтому prev == 0 не наступает никогда и стратегия не входила вовсе.
+    # Вход по СМЕНЕ состояния — как в _bt_core.state_entry / живом движке.
+    if curr == 1 and prev != 1:
+        return 'long'
+    if curr == -1 and prev != -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):
@@ -62,7 +72,11 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
         sl_price = df['close'].iloc[i] - sl * point
         tp_price = df['close'].iloc[i] + tp * point
         
-        if prev_k == 0 and curr_k == 1:
+        # Ветки ниже — по check_entry (смена состояния), чтобы локальный
+        # бэктест и live считали одинаково.
+        entry_dir = check_entry(prev_k, curr_k)
+
+        if entry_dir == 'long':
             for j in range(i+1, min(i+50, len(df))):
                 if df['low'].iloc[j] <= sl_price:
                     profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
@@ -75,7 +89,7 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
                     trade_profits.append(tp_price - df['close'].iloc[i])
                     break
                     
-        elif prev_k == 0 and curr_k == -1:
+        elif entry_dir == 'short':
             sl_price = df['close'].iloc[i] + sl * point
             tp_price = df['close'].iloc[i] - tp * point
             for j in range(i+1, min(i+50, len(df))):
