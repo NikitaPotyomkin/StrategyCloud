@@ -330,8 +330,15 @@ def _day_start_ts(day_str):
 def _daily_per_lot(con, login, from_day):
     """Удельная прибыль по дням: {day: ₽/лот}.
 
-    Считается РОВНО как график Risk: per_lot дня = max по замерам дня
-    (потенциал дня / суммарный объём книги), только замеры с объёмом > 0.
+    Считается РОВНО как график Risk (risk_equity_block._daily): per_lot дня =
+    max по замерам дня от (потенциал дня / ПЛАНОВЫЙ объём дня), где плановый
+    объём = максимум объёма книги за сутки (только замеры с объёмом > 0).
+    Почему плановый, а не «объём этого замера»: после трима книга падает до
+    0.01 × N, потенциал дня остаётся — на объёме замера удельная задирается в
+    plan_vol/остаток раз (×10-20), и медиана следующих дней уезжает вверх.
+    Удельная за день = пик потенциала дня / plan_vol дня.
+
+
     Потенциал дня = equity − balance_на_начало_суток − внешние деньги
     (то есть реализованное за день + текущий floating). Выходные пропускаем.
     """
@@ -367,7 +374,7 @@ def _daily_per_lot(con, login, from_day):
             continue  # пропускаем невалидные timestamp
         d = days.get(day)
         if d is None:
-            d = {'bal0': bal, 'ext': 0.0, 'best': None}
+            d = {'bal0': bal, 'ext': 0.0, 'pot': None, 'vol': 0.0}
             days[day] = d
         _fl = flows.get(day)
         if _fl:
@@ -379,19 +386,23 @@ def _daily_per_lot(con, login, from_day):
             d['ext'] = _ext
         if not (vol > 0):
             continue                 # без объёма удельную не посчитать
-        _per = (bal + fl - d['bal0'] - d['ext']) / vol
-        if d['best'] is None or _per > d['best']:
-            d['best'] = _per
+        # Копим пик потенциала дня и максимум объёма книги: удельная считается
+        # в конце цикла как pot / plan_vol — знаменатель ОДИН на день, поэтому
+        # резка/закрытие позиций не задирает ₽/лот.
+        d['vol'] = max(float(d['vol']), vol)
+        _pot = bal + fl - d['bal0'] - d['ext']
+        if d['pot'] is None or _pot > d['pot']:
+            d['pot'] = _pot
     out = {}
     for day, d in days.items():
-        if d['best'] is None:
+        if d['pot'] is None or not (float(d['vol']) > 0):
             continue
         try:
             if datetime.date.fromisoformat(day).weekday() >= 5:
                 continue             # выходные в графике не участвуют
         except ValueError:
             continue
-        out[day] = float(d['best'])
+        out[day] = float(d['pot']) / float(d['vol'])
     return out
 
 
