@@ -404,8 +404,37 @@ def _daily_ref(con, today, cfg, login):
             'last_day': max(vals)}
 
 
-def _today_per_lot(con, acc, positions, today, login):
-    """Текущая удельная прибыль дня: потенциал дня / суммарный объём книги.
+def _plan_volume(con, today, login, cur_vol):
+    """Плановый объём книги на день (лот) — максимум суммарного объёма за сутки.
+
+    Берём максимум из equity_samples.floating_volume по замерам сегодняшнего дня
+    и текущей суммы объёмов открытых позиций. Знаменатель удельной НЕ должен
+    уменьшаться, когда пара сделок закрылась: потенциал дня (реализованное +
+    floating) тогда делится на остаток книги, ₽/лот задирается и получается
+    ложный трим. Поэтому считаем по плановому объёму, а уход текущего объёма
+    от плана проверяем допуском cfg.volume_tolerance_pct.
+    """
+    best = float(cur_vol or 0.0)
+    try:
+        row = con.execute(
+            "SELECT MAX(floating_volume) AS mv FROM equity_samples "
+            "WHERE ts >= ? AND (account_login IS NULL OR account_login = ?)",
+            (_day_start_ts(today), int(login))).fetchone()
+        if row is not None and row['mv'] is not None:
+            best = max(best, float(row['mv']))
+    except Exception:
+        pass
+    return best
+
+
+def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
+    """Текущая удельная прибыль дня: потенциал дня / ПЛАНОВЫЙ объём книги.
+
+    Плановый объём дня (_plan_volume) — максимум объёма книги за сутки: он не
+    уменьшается, когда пара сделок закрылась, поэтому удельная не задирается.
+    Допуск tolerance — насколько текущий объём может уйти от плана (±20%);
+    vol_dev/in_tol возвращаем, чтобы лог и дэш показали уход объёма от плана.
+    День считается по серверному времени (UTC+3), как и дни эталона.
 
     balance на начало суток — из первого замера equity_samples за сегодня;
     если замеров нет — текущий balance (тогда потенциал = только floating).
@@ -432,8 +461,16 @@ def _today_per_lot(con, acc, positions, today, login):
     for p in positions:
         vol += float(getattr(p, 'volume', 0.0) or 0.0)
     potential = float(getattr(acc, 'equity', 0.0) or 0.0) - bal0 - ext
-    return {'potential': potential, 'vol': vol, 'balance_start': bal0,
-            'ext': ext, 'per_lot': (potential / vol if vol > 0 else None)}
+    # Знаменатель удельной — ПЛАНОВЫЙ объём дня, не остаток книги: иначе
+    # закрытие пары сделок уменьшает объём, ₽/лот растёт и трим врёт.
+    plan_vol = _plan_volume(con, today, login, vol)
+    denom = plan_vol if plan_vol > 0 else vol
+    vol_dev = ((vol - plan_vol) / plan_vol) if plan_vol > 0 else 0.0
+    return {'potential': potential, 'vol': vol, 'plan_vol': plan_vol,
+            'vol_dev': vol_dev, 'in_tol': abs(vol_dev) <= float(tolerance),
+            'balance_start': bal0,
+            'ext': ext, 'per_lot': (potential / denom if denom > 0 else None),
+            'per_lot_now': (potential / vol if vol > 0 else None)}
 
 
 def _log_band(today, band):
@@ -497,14 +534,27 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                           f"{_space(cfg.min_ref_per_lot)}) — правило не оцениваем",
                           flush=True)
                 return 0
-            cur = _today_per_lot(con, acc, positions, today, login)
+            # Объём в правиле — ПЛАНОВЫЙ объём дня (максимум книги за сутки),
+            # допуск отклонения текущего объёма от плана — volume_tolerance_pct.
+            _tol = float(getattr(cfg, 'volume_tolerance_pct', 0.20))
+            cur = _today_per_lot(con, acc, positions, today, login, _tol)
             _per_now = cur.get('per_lot')
-            if _per_now is None or cur.get('vol', 0) <= 0:
+            if _per_now is None or float(cur.get('plan_vol') or 0) <= 0:
                 if verbose:
-                    print("  [TRIM] объём книги 0 — удельную дня не считаем", flush=True)
+                    print("  [TRIM] плановый объём дня 0 — удельную дня не считаем", flush=True)
                 return 0
             _acct_ratio = float(_per_now) / ref_val
             _acct_hit = _acct_ratio >= float(cfg.pct)
+            # Объём ушёл от планового больше допуска (закрылась пачка сделок или
+            # книга разрослась): удельную всё равно считаем по плановому объёму,
+            # но пишем предупреждение — одна строка на ступень отклонения.
+            if not bool(cur.get('in_tol', True)) and _log_band(
+                    today, abs(float(cur.get('vol_dev') or 0.0))):
+                print(f"  [TRIM] объём вне допуска: книга {float(cur.get('vol') or 0):.2f} лот "
+                      f"vs плановых {float(cur.get('plan_vol') or 0):.2f} лот "
+                      f"({float(cur.get('vol_dev') or 0) * 100:+.0f}%, допуск "
+                      f"±{_tol * 100:.0f}%) — удельную считаем по плановому объёму",
+                      flush=True)
 
             # СУММАРНАЯ картина
             if verbose:
@@ -520,6 +570,10 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                       flush=True)
                 print(f"  [TRIM]   Удельная: {_space(total_per_lot)} ₽/лот",
                       flush=True)
+                print(f"  [TRIM]   Объём: {float(cur.get('vol') or 0):.2f} из плановых "
+                      f"{float(cur.get('plan_vol') or 0):.2f} лот "
+                      f"({float(cur.get('vol_dev') or 0) * 100:+.0f}%, "
+                      f"допуск ±{_tol * 100:.0f}%)", flush=True)
                 print(f"  [TRIM]   Эталон: {_space(ref_val)} ₽/лот",
                       flush=True)
                 print(f"  [TRIM]   Выполнение: {_acct_ratio * 100:.0f}% {'→ РЕЖЕМ' if _acct_hit else ''}",

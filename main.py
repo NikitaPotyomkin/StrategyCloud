@@ -1257,9 +1257,11 @@ if __name__ == '__main__':
     last_quota_recalc = datetime.now()
     last_equity_sample = datetime.min          # сэмплер floating → trades_db (daily_peak/equity_samples)
     last_roadmap_refresh = datetime.min        # инвентаризация Roadmap → trades_db (roadmap_rows)
+    last_trim_check = datetime.min             # проверка пик-трима (свой интервал, не сэмплер)
     last_trades_ingest = datetime.min          # добор сделок в trades_db (deals) в течение дня
     EQUITY_SAMPLE_INTERVAL_SEC = 300           # свой интервал сэмплинга, независим от poll_interval
     ROADMAP_REFRESH_SEC = 1800                 # инвентаризация Roadmap в SQL (roadmap_build.ROADMAP_REFRESH_SEC)
+    PEAK_TRIM_CHECK_SEC = 60                   # проверка пик-трима — своя частота, независима от сэмплера
     # Добор сделок в trades_db (deals): закрытия пишутся сразу (strategy_engine._record_close →
     # trades_db.record_position), но страховочный ingest нужен и днём, а не только в 3:00.
     TRADES_DB_INGEST_INTERVAL_SEC = 900        # 15 мин
@@ -1302,11 +1304,26 @@ if __name__ == '__main__':
                     # (enabled=True). Fail-safe: ошибка не роняет ни сэмплер, ни цикл.
                     try:
                         import peak_trim
-                        peak_trim.scan_and_trim()
+                        # peak_trim.scan_and_trim() перенесён в свой блок ниже:
+                        # частота проверки 60 с (PEAK_TRIM_CHECK_SEC), а не 300 с сэмплера
                     except Exception as _trim_err:
                         print(f"  [WARN] peak_trim: {_trim_err!r}", flush=True)
                 except Exception as _smp_err:
                     print(f"  [WARN] trades_db.sample: {_smp_err!r}", flush=True)
+
+            # ── Пик-трим: проверка правила раз в PEAK_TRIM_CHECK_SEC (60 с) ─────
+            # Отдельно от сэмплера нарочно: сэмплер пишет equity_samples раз в
+            # 300 с (от него зависит метрика ₽/лот и её не трогаем), а саму
+            # проверку гоняем чаще — текущая удельная считается по ЖИВОМУ equity
+            # и текущим позициям, поэтому пик между замерами не проспим.
+            # Fail-safe: ошибка не роняет цикл.
+            if (now - last_trim_check).total_seconds() >= PEAK_TRIM_CHECK_SEC:
+                last_trim_check = now
+                try:
+                    import peak_trim
+                    peak_trim.scan_and_trim(verbose=False)   # тихо: печатаются только резки
+                except Exception as _trim_err:
+                    print(f"  [WARN] peak_trim: {_trim_err!r}", flush=True)
 
             # ── Инвентаризация Roadmap → SQL (roadmap_rows) ────────────────────
             # Вкладка Roadmap больше НЕ читает 100+ файлов strategies/ при рендере:

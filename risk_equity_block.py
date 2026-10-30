@@ -232,6 +232,14 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
         _mm = g[(g['vol'] > 0) & np.isfinite(g['vol'])]
         if len(_mm):
             _per_close = float(_mm['potential_profit'].iloc[-1] / _mm['vol'].iloc[-1])
+        # Плановый объём дня = максимум объёма книги за сутки: закрытие пары
+        # сделок не должно уменьшать знаменатель удельной (иначе ₽/лот задирается
+        # и правило трима видит ложный пик). vol_close — объём на последнем замере.
+        _v = g.loc[np.isfinite(g['vol']) & (g['vol'] > 0), 'vol']
+        plan_vol = float(_v.max()) if len(_v) else np.nan
+        vol_close = float(_mm['vol'].iloc[-1]) if len(_mm) else np.nan
+        per_plan = (float(_mm['potential_profit'].iloc[-1]) / plan_vol
+                    if (len(_mm) and plan_vol == plan_vol and plan_vol > 0) else np.nan)
         # пик ≤ 0 — процент не считается: делить не на что (день полностью в минусе)
         _fill = (_close / _peak * 100.0) if _peak > 0 else np.nan
         _per_fill = (_per_close / per_lot * 100.0) if (np.isfinite(per_lot)
@@ -252,6 +260,9 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
             'ext_flow': float(g['ext'].iloc[-1]),
             'potential_close': _close,
             'per_close': _per_close,
+            'plan_vol': plan_vol,
+            'vol_close': vol_close,
+            'per_plan': per_plan,
             'fill_pct': _fill,
             'per_fill_pct': _per_fill,
         })
@@ -459,10 +470,90 @@ def trim_banner(data: dict, ref_day: float = None) -> None:
                     else "за всю историю (с 29.09.2026)")
         st.error("❗ ПРАВИЛО ПИК-ТРИМА АКТИВНО — реальные закрытия включены: "
                  "все позиции счёта режутся до {:.2f} лот, когда удельный потенциал "
-                 "дня дошёл до {:.0f}% пика ₽/лот {}{} Остаток остаётся до "
+                 "дня дошёл до {:.0f}% пика ₽/лот {}{} (удельную считаем по "
+                 "плановому объёму дня, допуск отклонения ±{:.0f}%). Остаток остаётся до "
                  "своего TP/SL. Выключение: config.PeakTrimParams.enabled = False."
                  .format(_pt.keep_volume, _pt.pct * 100.0, _win_txt,
-                         _ref_txt))
+                         _ref_txt,
+                         float(getattr(_pt, 'volume_tolerance_pct', 0.20)) * 100.0))
+
+def trim_live(day) -> None:
+    """«check peak live»: где мы СЕЙЧАС относительно исторического максимума ₽/лот.
+
+    Показывает ровно то, что видит правило пик-трима (peak_trim.scan_and_trim):
+      • текущая удельная дня = потенциал дня / ПЛАНОВЫЙ объём книги (максимум
+        объёма за сутки): закрытие пары сделок знаменатель не уменьшает;
+      • эталон = максимум удельной по дням ДО сегодняшнего (без подглядывания);
+      • сколько ₽/лот осталось до порога pct и сколько это в деньгах при текущем
+        объёме книги.
+    Данные — из equity_samples (equity_df), как и сам график: дэш файлы не читает
+    и в MT5 за позициями не ходит.
+    """
+    _pt = None
+    try:
+        from config import PeakTrimParams as _PeakTrim
+        _pt = _PeakTrim()
+    except Exception:
+        _pt = None
+    if _pt is None or not bool(getattr(_pt, 'enabled', False)):
+        return
+    try:
+        if day is None or getattr(day, 'empty', True):
+            return
+        _d = day.dropna(subset=['per_lot']).copy()
+        if _d.empty:
+            return
+        _today = _d['day'].max()
+        _cur = _d[_d['day'] == _today].iloc[0]
+        _prev = _d[_d['day'] < _today]
+        _ref = float(_prev['per_lot'].max()) if len(_prev) else float(_cur['per_lot'])
+        # Удельная по ПЛАНОВОМУ объёму дня (per_plan) — ровно то, что считает
+        # правило: закрытие пары сделок не задирает ₽/лот на остатке книги.
+        _per_now = _cur.get('per_plan')
+        if _per_now is None or pd.isna(_per_now):
+            _per_now = _cur.get('per_close')
+        if _per_now is None or pd.isna(_per_now):
+            _per_now = _cur.get('per_lot')          # нет «последнего замера» — берём пик
+        _per_now = float(_per_now)
+        if not pd.notna(_per_now) or not (_ref > 0):
+            return
+        _pct = float(getattr(_pt, 'pct', 0.99))
+        _thr = _pct * _ref
+        _ratio = _per_now / _ref
+        _pot = float(_cur.get('potential_close') or 0.0)
+        # Знаменатель правила — плановый объём дня (max книги за сутки), деньги
+        # до порога считаем по нему же; уход текущего объёма от плана показываем.
+        _plan = _cur.get('plan_vol')
+        _plan = float(_plan) if (_plan is not None and pd.notna(_plan)) else float('nan')
+        _vnow = _cur.get('vol_close')
+        _vnow = float(_vnow) if (_vnow is not None and pd.notna(_vnow)) else float('nan')
+        _tol = float(getattr(_pt, 'volume_tolerance_pct', 0.20))
+        _vol = _plan if (np.isfinite(_plan) and _plan > 0) else (
+            (_pot / _per_now) if _per_now else float('nan'))
+        _vtxt = ''
+        if np.isfinite(_plan) and _plan > 0 and np.isfinite(_vnow):
+            _dev = (_vnow - _plan) / _plan
+            _vtxt = (f" · объём {_vnow:.2f} из плановых {_plan:.2f} лот "
+                     f"({_dev * 100:+.0f}%, "
+                     + ("в допуске" if abs(_dev) <= _tol else "ВНЕ допуска")
+                     + f" ±{_tol * 100:.0f}%)")
+        _left = _thr - _per_now
+        _head = (f"check peak · последний замер {_today}: {_num(_per_now)} ₽/лот = "
+                 f"{_ratio * 100:.0f}% эталона {_num(_ref)} ₽/лот "
+                 f"(максимум по дням ДО сегодня)")
+        if _left > 0:
+            _body = (f" · до порога {_pct * 100:.0f}% ({_num(_thr)} ₽/лот) "
+                     f"осталось {_num(_left)} ₽/лот")
+            _tail = (f" — при текущем объёме {_vol:.2f} лот это ≈ {_num(_left * _vol)} ₽"
+                     if pd.notna(_vol) and _vol > 0 else "")
+        else:
+            _body = f" · порог {_pct * 100:.0f}% ({_num(_thr)} ₽/лот) ПРОЙДЕН"
+            _tail = f" — режем все позиции до {float(getattr(_pt, 'keep_volume', 0.01)):.2f} лот"
+        st.caption(_head + _body + _tail + _vtxt)
+        st.progress(max(0.0, min(1.0, float(_ratio))))
+    except Exception as exc:
+        st.caption(f"check peak live: не удалось посчитать ({exc!r})")
+
 
 def render(data: dict, days_back: int) -> None:
     d = data.get('equity_df') if isinstance(data, dict) else None
@@ -506,12 +597,13 @@ def render(data: dict, days_back: int) -> None:
                 if ref_day is None and len(_vals):
                     _ref_txt = " · эталон ≈ {} ₽/лот (сделки ≥ {:.2f} лот)".format(
                         _num(float(_vals.max())), float(_pt.min_ref_volume))
-            st.error("❗ ПРАВИЛО ПИК-ТРИМА АКТИВНО — реальные закрытия включены: "
+            if False: st.error("устаревший баннер (per-position) выключен, актуальный — trim_banner "
                      "позиция режется до {:.2f} лот, когда удельная прибыль доходит "
                      "до {:.0f}% пика ₽/лот за {} дн.{} Остаток остаётся в рынке до "
                      "своего TP/SL. Выключение: config.PeakTrimParams.enabled = False."
                      .format(_pt.keep_volume, _pt.pct * 100.0, _pt.lookback_days,
-                             _ref_txt))
+                             _ref_txt,
+                         float(getattr(_pt, 'volume_tolerance_pct', 0.20)) * 100.0))
     except Exception:
         pass
 
@@ -525,6 +617,7 @@ def render(data: dict, days_back: int) -> None:
 
     st.markdown("### Максимальная потенциальная прибыль за день")
     trim_banner(data, float(day['per_lot'].max()))
+    trim_live(day)
     c1, c2 = st.columns(2)
     with c1:
         st.metric("Медиана пика за день",
