@@ -80,29 +80,30 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
     in_pos = False
     entry_price = 0.0
     
-    sl_dist = sl_points * spread_points if spread_points > 0 else sl_points * point
-    tp_dist = tp_points * spread_points if spread_points > 0 else tp_points * point
-    
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
+
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
-        close = df['close'].iloc[i]
-        
+        high = df['high'].iloc[i]
+        low = df['low'].iloc[i]
+
         if not in_pos:
-            if check_entry(prev_k, curr_k):
-                entry_price = close
+            if prev_k == 0 and curr_k == 1:
+                entry_price = df['close'].iloc[i]
                 in_pos = True
         else:
-            if close - entry_price <= -sl_dist:
+            if low - entry_price <= -sl_dist:
                 profit = -sl_dist * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
-            elif close - entry_price >= tp_dist:
+            elif high - entry_price >= tp_dist:
                 profit = tp_dist * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
             elif check_exit(prev_k, curr_k, 'long'):
-                profit = (close - entry_price) * tick_value * sim_lot
+                profit = (df['close'].iloc[i] - entry_price) * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
     

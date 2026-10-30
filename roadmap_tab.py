@@ -304,9 +304,52 @@ def _sl_tp_counts():
 _CALC_RE = re.compile(r"^def\s+(calc_\w+)\s*\(", re.M)
 
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False, ttl=30)
+def _scan_sql():
+    """Таблица Roadmap ИЗ SQL (roadmap_rows): файлы strategies/ дэш не читает.
+
+    Сборку делает roadmap_build.refresh() — торговый цикл (main.py, раз в
+    ROADMAP_REFRESH_SEC) либо кнопка «↻ Пересчитать» ниже. Здесь только чтение
+    двух таблиц, поэтому вкладка рисуется мгновенно.
+    """
+    try:
+        import roadmap_store
+        _rows, _stat, _saved = roadmap_store.load()
+    except Exception:
+        return [], {}
+    if _rows:
+        _stat = dict(_stat or {})
+        _stat['saved_at'] = _saved
+        _stat['source'] = 'sql'
+    return _rows, _stat
 def _scan():
-    """Полная инвентаризация: список строк + сводка. Кэш 2 мин (файлы меняются деплоем)."""
+    """Таблица Roadmap ИЗ SQL (roadmap_rows). Файлы strategies/ дэш больше не читает.
+
+    Сборку делает roadmap_build.refresh() — торговый цикл (main.py, раз в
+    ROADMAP_REFRESH_SEC) либо кнопка «↻ Пересчитать». Здесь остаётся только чтение
+    двух таблиц, поэтому вкладка рисуется мгновенно и не грузит дэш.
+    """
+    try:
+        import roadmap_store
+        rows, stat, saved_at = roadmap_store.load()
+    except Exception:
+        return [], {}
+    if rows:
+        stat = dict(stat or {})
+        stat['saved_at'] = saved_at
+        stat['source'] = 'sql'
+    return rows, stat
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+# ЛЕГАСИ: старый скан файлов (переехал в roadmap_scan.py) — дэш его не вызывает.
+    # ЖИВОЙ скан переехал в roadmap_scan.py (без streamlit) — его вызывает
+    # roadmap_build.refresh(). Эта копия оставлена только как историческая
+    # справка: дэш её не вызывает, править не нужно.
+def _scan():
+    """ЛЕГАСИ: полная инвентаризация по файлам. Дэш её НЕ вызывает: живой скан —
+    roadmap_scan.scan() через roadmap_build.refresh(), а вкладка читает SQL
+    (_scan_sql). Оставлено как историческая справка."""
     registry, enabled = _load_registry()
     mod2keys = {}
     for key, ent in registry.items():
@@ -709,9 +752,31 @@ def _plan_gates() -> dict:
 def render_roadmap_tab() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
-    rows, stat = _scan()
+    _hc1, _hc2 = st.columns([5, 1])
+    with _hc2:
+        if st.button("↻ Пересчитать", key='rdm_refresh', use_container_width=True,
+                     help='Пересобрать таблицу из файлов strategies/ и записать в SQL '
+                          '(та же операция, что roadmap_build.refresh() в цикле)'):
+            try:
+                import roadmap_build
+                _n = roadmap_build.refresh(verbose=False)
+                st.session_state['rdm_refresh_msg'] = f'пересобрано строк: {_n}'
+            except Exception as _exc:
+                st.session_state['rdm_refresh_msg'] = f'ошибка пересчёта: {_exc!r}'
+            _scan_sql.clear()
+            st.rerun()
+    rows, stat = _scan_sql()
+    with _hc1:
+        if stat.get('saved_at'):
+            st.caption(f"таблица из SQL (`roadmap_rows`): {stat['saved_at']}"
+                       + (f" · {st.session_state['rdm_refresh_msg']}"
+                          if st.session_state.get('rdm_refresh_msg') else ''))
+        elif not rows:
+            st.caption("таблица в SQL ещё не собрана")
     if not rows:
-        st.warning(f"Папка strategies/ недоступна или пуста: `{STRAT_DIR}`")
+        st.warning("Таблица Roadmap ещё не собрана в SQL (`roadmap_rows`). Нажми "
+                   "«↻ Пересчитать» вверху вкладки или запусти `python roadmap_build.py`. "
+                   "Дэш файлы strategies/ больше не читает.")
         return  # не st.stop(): Roadmap рендерится раньше Backtest — stop убил бы и его
 
     st.markdown(_stats_html(stat), unsafe_allow_html=True)

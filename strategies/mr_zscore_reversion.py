@@ -47,15 +47,12 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
     if len(df) < min_len:
         return 0, 0, []
     
-    capital = 10000.0
     trades = []
     in_pos = False
     entry_price = 0.0
-    sl_hit = False
-    tp_hit = False
     
-    sl_dist = sl_points * spread_points if spread_points > 0 else sl_points * point
-    tp_dist = tp_points * spread_points if spread_points > 0 else tp_points * point
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
     
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
@@ -64,21 +61,21 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
         low = df['low'].iloc[i]
         close = df['close'].iloc[i]
         
+        # Бинарный сигнал k: 0 если k <= 0, 1 если k > 0
+        prev_k_bin = 0 if prev_k <= 0 else 1
+        curr_k_bin = 0 if curr_k <= 0 else 1
+        
         if not in_pos:
-            if check_entry(prev_k, curr_k):
+            if prev_k_bin == 0 and curr_k_bin == 1 and check_entry(prev_k, curr_k):
                 entry_price = close
                 in_pos = True
-                sl_hit = False
-                tp_hit = False
         else:
-            # Проверяем SL/TP по истории бара
-            if close - entry_price <= -sl_dist:
-                sl_hit = True
+            # Проверяем SL/TP по high/low бара
+            if low - entry_price <= -sl_dist:
                 profit = -sl_dist * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
-            elif close - entry_price >= tp_dist:
-                tp_hit = True
+            elif high - entry_price >= tp_dist:
                 profit = tp_dist * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False

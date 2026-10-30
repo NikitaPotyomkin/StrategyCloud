@@ -22,9 +22,12 @@ def calc_chan_adaptive_donchian(df, period=20):
         high_n = df['high'].iloc[i-p+1:i+1].max()
         low_n = df['low'].iloc[i-p+1:i+1].min()
         
-        if df['close'].iloc[i] > high_n.iloc[i] if hasattr(high_n, 'iloc') else high_n:
+        high_val = high_n.iloc[i] if hasattr(high_n, 'iloc') else high_n
+        low_val = low_n.iloc[i] if hasattr(low_n, 'iloc') else low_n
+        
+        if df['close'].iloc[i] > high_val:
             k[i] = 1
-        elif df['close'].iloc[i] < low_n.iloc[i] if hasattr(low_n, 'iloc') else low_n:
+        elif df['close'].iloc[i] < low_val:
             k[i] = -1
     
     df = df.copy()
@@ -52,41 +55,41 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     n_trades = 0
     trade_profits = []
     
+    sl = sl_points[0]
+    tp = tp_points[0]
+    
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
         
-        for sl in sl_points:
-            for tp in tp_points:
-                sl_price = df['close'].iloc[i] - sl * spread_points * point
-                tp_price = df['close'].iloc[i] + tp * spread_points * point
-                
-                if prev_k == 0 and curr_k == 1:
-                    for j in range(i+1, min(i+50, len(df))):
-                        if df['low'].iloc[j] <= sl_price:
-                            profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(sl_price - df['close'].iloc[i])
-                            break
-                        elif df['high'].iloc[j] >= tp_price:
-                            profit += (tp_price - df['close'].iloc[i]) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(tp_price - df['close'].iloc[i])
-                            break
-                            
-                elif prev_k == 0 and curr_k == -1:
-                    sl_price = df['close'].iloc[i] + sl * spread_points * point
-                    tp_price = df['close'].iloc[i] - tp * spread_points * point
-                    for j in range(i+1, min(i+50, len(df))):
-                        if df['high'].iloc[j] >= sl_price:
-                            profit += (df['close'].iloc[i] - sl_price) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(df['close'].iloc[i] - sl_price)
-                            break
-                        elif df['low'].iloc[j] <= tp_price:
-                            profit += (df['close'].iloc[i] - tp_price) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(df['close'].iloc[i] - tp_price)
-                            break
+        if prev_k == 0 and curr_k == 1:
+            sl_price = df['close'].iloc[i] - sl * point
+            tp_price = df['close'].iloc[i] + tp * point
+            for j in range(i+1, min(i+50, len(df))):
+                if df['low'].iloc[j] <= sl_price:
+                    profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(sl_price - df['close'].iloc[i])
+                    break
+                elif df['high'].iloc[j] >= tp_price:
+                    profit += (tp_price - df['close'].iloc[i]) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(tp_price - df['close'].iloc[i])
+                    break
+                    
+        elif prev_k == 0 and curr_k == -1:
+            sl_price = df['close'].iloc[i] + sl * point
+            tp_price = df['close'].iloc[i] - tp * point
+            for j in range(i+1, min(i+50, len(df))):
+                if df['high'].iloc[j] >= sl_price:
+                    profit += (df['close'].iloc[i] - sl_price) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(df['close'].iloc[i] - sl_price)
+                    break
+                elif df['low'].iloc[j] <= tp_price:
+                    profit += (df['close'].iloc[i] - tp_price) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(df['close'].iloc[i] - tp_price)
+                    break
     
     return (profit, n_trades, trade_profits)

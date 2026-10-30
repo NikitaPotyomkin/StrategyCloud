@@ -62,8 +62,15 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     """
     df = calc_volreg_parkinson_ratio(df, int(param_key))
     
-    trades = []
-    position = None  # ('long'|'short', entry_price, sl, tp)
+    profit = 0
+    n_trades = 0
+    trade_profits = []
+    
+    # SL/TP в пунктах (не в спредах)
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
+    
+    position = None  # ('long'|'short', entry_price)
     
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
@@ -76,58 +83,39 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
         if position is None:
             if check_entry(prev_k, curr_k):
                 entry = close
-                # SL/TP в спредах символа
-                for sl in sl_points:
-                    for tp in tp_points:
-                        sl_pts = sl * spread_points
-                        tp_pts = tp * spread_points
-                        trades.append(('long', entry, sl_pts, tp_pts))
-                        trades.append(('short', entry, sl_pts, tp_pts))
+                position = ('long' if curr_k == 1 else 'short', entry)
         else:
-            direction, entry, sl_pts, tp_pts = position
-            
-            # SL/TP проверка по high/low (SL ДО TP)
-            sl_hit = False
-            tp_hit = False
+            direction, entry = position
             
             if direction == 'long':
-                sl_price = entry - sl_pts * point * tick_value / tick_value
-                tp_price = entry + tp_pts * point * tick_value / tick_value
+                sl_price = entry - sl_dist
+                tp_price = entry + tp_dist
                 if low <= sl_price:
-                    sl_hit = True
-                    exit_price = sl_price
+                    pnl = (sl_price - entry) * sim_lot * tick_value
+                    profit += pnl
+                    n_trades += 1
+                    trade_profits.append(pnl)
+                    position = None
                 elif high >= tp_price:
-                    tp_hit = True
-                    exit_price = tp_price
-                else:
-                    continue
+                    pnl = (tp_price - entry) * sim_lot * tick_value
+                    profit += pnl
+                    n_trades += 1
+                    trade_profits.append(pnl)
+                    position = None
             else:
-                sl_price = entry + sl_pts * point
-                tp_price = entry - tp_pts * point
+                sl_price = entry + sl_dist
+                tp_price = entry - tp_dist
                 if high >= sl_price:
-                    sl_hit = True
-                    exit_price = sl_price
+                    pnl = (entry - sl_price) * sim_lot * tick_value
+                    profit += pnl
+                    n_trades += 1
+                    trade_profits.append(pnl)
+                    position = None
                 elif low <= tp_price:
-                    tp_hit = True
-                    exit_price = tp_price
-                else:
-                    continue
-            
-            pnl = (exit_price - entry) * sim_lot * tick_value
-            if direction == 'short':
-                pnl = -pnl
-            trades.append((direction, entry, sl_pts, tp_pts, pnl))
-            position = None
-    
-    # Закрыть позицию по close
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-    
-    for t in trades:
-        if len(t) == 5:  # с pnl
-            profit += t[4]
-            n_trades += 1
-            trade_profits.append(t[4])
+                    pnl = (entry - tp_price) * sim_lot * tick_value
+                    profit += pnl
+                    n_trades += 1
+                    trade_profits.append(pnl)
+                    position = None
     
     return (profit, n_trades, trade_profits)

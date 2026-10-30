@@ -48,41 +48,46 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     n_trades = 0
     trade_profits = []
     
+    # SL/TP в пунктах (не в спредах)
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
+    
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
         
-        for sl in sl_points:
-            for tp in tp_points:
-                sl_price = df['close'].iloc[i] - sl * spread_points * point
-                tp_price = df['close'].iloc[i] + tp * spread_points * point
-                
-                if prev_k == 0 and curr_k == 1:
-                    for j in range(i+1, min(i+50, len(df))):
-                        if df['low'].iloc[j] <= sl_price:
-                            profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(sl_price - df['close'].iloc[i])
-                            break
-                        elif df['high'].iloc[j] >= tp_price:
-                            profit += (tp_price - df['close'].iloc[i]) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(tp_price - df['close'].iloc[i])
-                            break
-                            
-                elif prev_k == 0 and curr_k == -1:
-                    sl_price = df['close'].iloc[i] + sl * spread_points * point
-                    tp_price = df['close'].iloc[i] - tp * spread_points * point
-                    for j in range(i+1, min(i+50, len(df))):
-                        if df['high'].iloc[j] >= sl_price:
-                            profit += (df['close'].iloc[i] - sl_price) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(df['close'].iloc[i] - sl_price)
-                            break
-                        elif df['low'].iloc[j] <= tp_price:
-                            profit += (df['close'].iloc[i] - tp_price) * sim_lot * tick_value
-                            n_trades += 1
-                            trade_profits.append(df['close'].iloc[i] - tp_price)
-                            break
+        if prev_k == 0 and curr_k == 1:
+            # Long: пробой вверх
+            entry_price = df['close'].iloc[i]
+            sl_price = entry_price - sl_dist
+            tp_price = entry_price + tp_dist
+            for j in range(i+1, min(i+50, len(df))):
+                if df['low'].iloc[j] <= sl_price:
+                    profit += (sl_price - entry_price) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(sl_price - entry_price)
+                    break
+                elif df['high'].iloc[j] >= tp_price:
+                    profit += (tp_price - entry_price) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(tp_price - entry_price)
+                    break
+                        
+        elif prev_k == 0 and curr_k == -1:
+            # Short: пробой вниз
+            entry_price = df['close'].iloc[i]
+            sl_price = entry_price + sl_dist
+            tp_price = entry_price - tp_dist
+            for j in range(i+1, min(i+50, len(df))):
+                if df['high'].iloc[j] >= sl_price:
+                    profit += (entry_price - sl_price) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(entry_price - sl_price)
+                    break
+                elif df['low'].iloc[j] <= tp_price:
+                    profit += (entry_price - tp_price) * sim_lot * tick_value
+                    n_trades += 1
+                    trade_profits.append(entry_price - tp_price)
+                    break
     
     return (profit, n_trades, trade_profits)

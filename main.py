@@ -1256,8 +1256,10 @@ if __name__ == '__main__':
     last_balance_refresh = datetime.now()
     last_quota_recalc = datetime.now()
     last_equity_sample = datetime.min          # сэмплер floating → trades_db (daily_peak/equity_samples)
+    last_roadmap_refresh = datetime.min        # инвентаризация Roadmap → trades_db (roadmap_rows)
     last_trades_ingest = datetime.min          # добор сделок в trades_db (deals) в течение дня
     EQUITY_SAMPLE_INTERVAL_SEC = 300           # свой интервал сэмплинга, независим от poll_interval
+    ROADMAP_REFRESH_SEC = 1800                 # инвентаризация Roadmap в SQL (roadmap_build.ROADMAP_REFRESH_SEC)
     # Добор сделок в trades_db (deals): закрытия пишутся сразу (strategy_engine._record_close →
     # trades_db.record_position), но страховочный ingest нужен и днём, а не только в 3:00.
     TRADES_DB_INGEST_INTERVAL_SEC = 900        # 15 мин
@@ -1305,6 +1307,19 @@ if __name__ == '__main__':
                         print(f"  [WARN] peak_trim: {_trim_err!r}", flush=True)
                 except Exception as _smp_err:
                     print(f"  [WARN] trades_db.sample: {_smp_err!r}", flush=True)
+
+            # ── Инвентаризация Roadmap → SQL (roadmap_rows) ────────────────────
+            # Вкладка Roadmap больше НЕ читает 100+ файлов strategies/ при рендере:
+            # дэш только читает таблицу из trades.db. Сборку делаем здесь, раз в
+            # 30 мин (roadmap_build.ROADMAP_REFRESH_SEC), чтобы после деплоя таблица
+            # не отставала. Fail-safe: ошибка не роняет цикл.
+            if (now - last_roadmap_refresh).total_seconds() >= ROADMAP_REFRESH_SEC:
+                last_roadmap_refresh = now
+                try:
+                    import roadmap_build
+                    roadmap_build.refresh(verbose=False)
+                except Exception as _rdm_err:
+                    print(f"  [WARN] roadmap_build: {_rdm_err!r}", flush=True)
 
             # тФАтФА ╨Ф╨╛╨▒╨╛╤А ╤Б╨┤╨╡╨╗╨╛╨║ ╨▓ trades_db (deals) тАФ ╨▓ ╨д╨Ю╨Э╨Х, ╤Ж╨╕╨║╨╗ ╨╜╨╡ ╨▒╨╗╨╛╨║╨╕╤А╤Г╨╡╤В╤Б╤П тФАтФА
             # Закрытия и так пишутся сразу (_record_close → trades_db.record_position),

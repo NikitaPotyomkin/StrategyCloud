@@ -600,6 +600,18 @@ if data_alloc is None:
     data_alloc = data  # страховка: если окно аллокации не загрузилось, не падаем
 
 # ── Табы ──
+# ── Флаг пик-трима: НАД вкладками, чтобы был виден на любой странице ─────────
+# Если строки нет на экране — значит Streamlit запущен из другой папки.
+try:
+    import importlib as _il
+    import config as _cfg_mod
+    _il.reload(_cfg_mod)          # флаг читаем из файла, а не из кэша процесса
+    import risk_equity_block as _reb
+    _il.reload(_reb)
+    pass  # баннер пик-трима рисуется внутри risk_equity_block.render()
+except Exception as _trim_banner_err:
+    st.caption(f"trim_banner: {_trim_banner_err!r}")
+
 tab_overview, tab_tree, tab_finstatement, tab_daily, tab_risk, tab_strategies, tab_steering, tab_backtest, tab_roadmap = st.tabs([
     "Overview",
     "Strategy Tree",
@@ -1477,6 +1489,13 @@ with tab_daily:
 
 
 with tab_risk:
+    # ── Флаг пик-трима — САМОЕ НАЧАЛО вкладки Risk, чтобы был виден сразу ────
+    import importlib as _il
+    import config as _cfg_mod
+    _il.reload(_cfg_mod)                 # флаг читаем из файла, а не из кэша
+    import risk_equity_block as _reb
+    _il.reload(_reb)
+    # баннер пик-трима вынесен НАД вкладками — виден на любой странице
     if not data:
         st.warning("No data.")
         st.stop()
@@ -2069,6 +2088,8 @@ with tab_risk:
     # Никаких закрытий/фиксаций по пику здесь нет — собираем статистику.
     import importlib
     import risk_equity_block
+    import config as _cfg_mod
+    importlib.reload(_cfg_mod)            # флаг пик-трима читаем из файла, не из кэша
     importlib.reload(risk_equity_block)   # правки видны на Rerun без перезапуска
     risk_equity_block.render(data, days_back)
     _pkdf = None                          # старое: data.get('pos_peaks_df')

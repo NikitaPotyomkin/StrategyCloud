@@ -67,39 +67,45 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
     entry_price = 0.0
     direction = 0  # 1 = long, -1 = short
     
-    sl_dist = sl_points * spread_points if spread_points > 0 else sl_points * point
-    tp_dist = tp_points * spread_points if spread_points > 0 else tp_points * point
-    
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
+
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
         close = df['close'].iloc[i]
-        
+        high = df['high'].iloc[i]
+        low = df['low'].iloc[i]
+
         if not in_pos:
-            if check_entry(prev_k, curr_k):
+            if prev_k == 0 and curr_k == 1:
                 entry_price = close
-                direction = 1 if curr_k > 0 else -1
+                direction = 1
+                in_pos = True
+            elif prev_k == 0 and curr_k == -1:
+                entry_price = close
+                direction = -1
                 in_pos = True
         else:
             if direction > 0:
-                if close - entry_price <= -sl_dist:
+                if low <= entry_price - sl_dist:
                     profit = -sl_dist * tick_value * sim_lot
                     trades.append(profit)
                     in_pos = False
-                elif close - entry_price >= tp_dist:
+                elif high >= entry_price + tp_dist:
                     profit = tp_dist * tick_value * sim_lot
                     trades.append(profit)
                     in_pos = False
             else:
-                if entry_price - close <= -sl_dist:
+                if high >= entry_price + sl_dist:
                     profit = -sl_dist * tick_value * sim_lot
                     trades.append(profit)
                     in_pos = False
-                elif entry_price - close >= tp_dist:
+                elif low <= entry_price - tp_dist:
                     profit = tp_dist * tick_value * sim_lot
                     trades.append(profit)
                     in_pos = False
-            
+
             if check_exit(prev_k, curr_k, direction):
                 if direction > 0:
                     profit = (close - entry_price) * tick_value * sim_lot

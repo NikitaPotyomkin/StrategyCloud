@@ -5,7 +5,9 @@ FD < 0.7 — сильный тренд (следовать)
 FD > 1.3 — шум (не торговать)
 0.7 < FD < 1.0 — слабый тренд (осторожно)
 
-H1 OHLC только. SL/TP в спредах символа.
+H1 OHLC только. SL/TP в пунктах символа (sl_points * point).
+Спред в этой стратегии не моделируется — как и раньше; для сравнения семейств
+это надо помнить (у большинства стратегий проекта spread_points учитывается).
 """
 import numpy as np
 import pandas as pd
@@ -59,7 +61,11 @@ def calc_fractal_dimension(df, period=20):
         
         fd_vals.append(fd)
     
-    df['k'] = np.array(fd_vals)
+    # ВАЖНО: pct_change().dropna() короче df ровно на одну строку (первая),
+    # поэтому len(fd_vals) = len(df) - 1. Прямое df['k'] = np.array(fd_vals)
+    # падало с "Length of values (1456) does not match length of index (1457)"
+    # и семейство выпадало из чекпойнта без журналов сделок.
+    df['k'] = np.concatenate(([1.0], np.asarray(fd_vals, dtype=float)))
     
     return df
 
@@ -84,33 +90,45 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
     if len(df) < min_len:
         return 0, 0, []
     
+    # Деньги за 1 пункт цены. tick_size на брокерах металлов = 0.0001 (серебро),
+    # поэтому без деления на tick_size прибыль завышалась в 10 000 раз.
+    _ts = float(tick_size) if tick_size else float(point)
+    if _ts <= 0:
+        return 0, 0, []
+    
     trades = []
     in_pos = False
     entry_price = 0.0
     
-    sl_dist = sl_points * spread_points if spread_points > 0 else sl_points * point
-    tp_dist = tp_points * spread_points if spread_points > 0 else tp_points * point
+    # SL/TP в пунктах ЦЕНЫ. Раньше при spread_points > 0 подставлялся он сам,
+    # из-за чего sl_dist = sl_points * spread_points (десятки тысяч пунктов) —
+    # стопы не срабатывали никогда.
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
     
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
         close = df['close'].iloc[i]
-        
+        high = df['high'].iloc[i]
+        low = df['low'].iloc[i]
+
         if not in_pos:
-            if check_entry(prev_k, curr_k):
-                entry_price = close
-                in_pos = True
+            if prev_k == 0 and curr_k == 1:
+                if check_entry(prev_k, curr_k):
+                    entry_price = close
+                    in_pos = True
         else:
-            if close - entry_price <= -sl_dist:
-                profit = -sl_dist * tick_value * sim_lot
+            if low - entry_price <= -sl_dist:
+                profit = -(sl_dist / _ts) * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
-            elif close - entry_price >= tp_dist:
-                profit = tp_dist * tick_value * sim_lot
+            elif high - entry_price >= tp_dist:
+                profit = (tp_dist / _ts) * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
             elif check_exit(prev_k, curr_k, 'long'):
-                profit = (close - entry_price) * tick_value * sim_lot
+                profit = ((close - entry_price) / _ts) * tick_value * sim_lot
                 trades.append(profit)
                 in_pos = False
     
