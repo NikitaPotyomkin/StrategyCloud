@@ -1334,22 +1334,81 @@ def _open_positions_risk(active_strategies, symbol_data, cache):
     return list(out.items())
 
 
+def _open_symbols_risk(symbol_data, cache):
+    """{symbol: ₽ риска} по РЕАЛЬНЫМ позициям MT5: лот × SL самой позиции.
+
+    Нужен для ГРУППОВОЙ квоты (металлы XAU+XAG): категорийный гейт считает риск
+    по паре «символ + семейство», а коррелированные инструменты надо ограничивать
+    суммой по группе — две «разные» сделки по золоту и серебру = один двойной риск.
+    Только свой пул magic [770000..869999]: ручные и чужие сделки группу не расходуют.
+    """
+    out = {}
+    try:
+        positions = mt5.positions_get() or ()
+    except Exception:
+        positions = ()
+    for p in positions:
+        try:
+            magic = int(getattr(p, 'magic', 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (QUOTA_MAGIC_MIN <= magic <= QUOTA_MAGIC_MAX):
+            continue
+        symbol = str(getattr(p, 'symbol', '') or '')
+        if not symbol:
+            continue
+        info = symbol_data.get(symbol, {}).get('info')
+        point = getattr(info, 'point', 0) or 0
+        try:
+            sl_price = float(getattr(p, 'sl', 0) or 0)
+            price_open = float(getattr(p, 'price_open', 0) or 0)
+            vol = float(getattr(p, 'volume', 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        sl_points = (abs(price_open - sl_price) / point) if (point > 0 and sl_price > 0) else 0.0
+        if sl_points <= 0 or vol <= 0:
+            continue   # без SL риск позиции неизвестен — группу не расходует
+        out[symbol] = out.get(symbol, 0.0) + vol * _risk_per_lot_cached(
+            symbol, sl_points, symbol_data, cache)
+    return out
+
+
+def _group_quota_on(risk_cfg):
+    """Включена ли групповая квота коррелированных символов (металлы XAU+XAG).
+
+    Отдельно от quota_gate_enabled нарочно: сумма металлов должна ограничиваться,
+    даже если файла journals/steering_quotas.json нет вовсе — тогда категорийный
+    гейт выключен, а групповой лимит остаётся.
+    """
+    if not getattr(risk_cfg, 'group_quota_enabled', False):
+        return False
+    if float(getattr(risk_cfg, 'group_quota_share', 0.0) or 0.0) <= 0:
+        return False
+    return bool(tuple(getattr(risk_cfg, 'group_quota_symbols', ()) or ()))
+
+
 def build_quota_gate(active_strategies, symbol_data, risk_cfg):
     """Контекст гейта квоты: квоты, занятый риск по категориям, риск-квота счёта.
 
-    None — гейт выключен (нет файла квот или баланса): входить разрешено.
+    None — гейт выключен (нет файла квот и групповой квоты, или нет баланса):
+    входить разрешено. групповая квота считается внутри этого же контекста
+    (used_sym/group_syms/group_quota), поэтому работает и без файла квот.
     """
-    if not getattr(risk_cfg, 'quota_gate_enabled', True):
+    if not getattr(risk_cfg, 'quota_gate_enabled', True) and not _group_quota_on(risk_cfg):
         return None
     quotas = load_steering_quotas()
-    if not quotas:
+    if not quotas and not _group_quota_on(risk_cfg):
         return None
     acc = mt5.account_info()
     if acc is None or not getattr(acc, 'balance', 0):
         return None
     ctx = {'quotas': quotas,
            'risk_quota': float(acc.balance) * float(risk_cfg.max_risk_pct),
-           'used': {}, 'used_all': 0.0, 'slm': {}}
+           'used': {}, 'used_all': 0.0, 'slm': {},
+           'used_sym': {},
+           'group_syms': tuple(getattr(risk_cfg, 'group_quota_symbols', ()) or ()),
+           'group_quota': (float(getattr(risk_cfg, 'group_quota_share', 0.0) or 0.0)
+                           if getattr(risk_cfg, 'group_quota_enabled', False) else 0.0)}
     for sid, risk in _open_positions_risk(active_strategies, symbol_data, ctx['slm']):
         if risk <= 0:
             continue
@@ -1361,6 +1420,10 @@ def build_quota_gate(active_strategies, symbol_data, risk_cfg):
         # (аккумуляция выполнена выше — этот блок больше не нужен)
         # ctx['used'][sid] = ... — уже посчитано выше
         # ctx['used_all'] += risk — уже посчитано выше
+
+    # Риск по СИМВОЛАМ — для ГРУППОВОЙ квоты металлов (XAU+XAG идут одним пакетом):
+    # отдельный проход, чтобы не менять формат _open_positions_risk (категории).
+    ctx['used_sym'] = _open_symbols_risk(symbol_data, ctx['slm'])
     return ctx
 
 
@@ -1379,11 +1442,34 @@ def quota_gate_check(ctx, key, s, symbol_data):
     """
     if ctx is None:
         return True, ''
+    # ── Групповая квота коррелированных символов (металлы XAU+XAG) ──────────
+    # Проверяем ДО категорийных правил: категории может не быть в файле квот,
+    # а группу ограничиваем всегда. Риск новой сделки считаем здесь же, чтобы
+    # не зависеть от порядка проверок.
+    sym = str(s.get('symbol') or '')
+    _gq = float(ctx.get('group_quota') or 0.0)
+    if _gq > 0 and sym and sym in ctx.get('group_syms', ()):
+        _g_new = float(s.get('lot') or 0.0) * _risk_per_lot_cached(
+            s.get('symbol'), s.get('sl_points'), symbol_data, ctx['slm'])
+        _g_allowed = float(ctx['risk_quota']) * _gq
+        # Сумма риска по ВСЕЙ группе (золото + серебро), а не по одному символу
+        _g_used = sum(float(ctx['used_sym'].get(_sym, 0.0))
+                      for _sym in ctx.get('group_syms', ()))
+        if _g_allowed > 0 and (_g_used + _g_new) > _g_allowed:
+            return False, (f'групповая квота металлов занята: риск {_g_used:,.0f} + '
+                           f'{_g_new:,.0f} > {_g_allowed:,.0f} ₽ '
+                           f'(доля {_gq:.0%} риск-квоты по {"+".join(ctx.get("group_syms", ()))})')
     sid = _sid_of(s)
     if not sid:
         return True, ''
     q = ctx['quotas'].get(sid)
     if q is None:
+        # Категория вне штурвала — но групповую квоту всё равно расходуем,
+        # иначе второй вход того же прохода её не увидит.
+        if _gq > 0 and sym and sym in ctx.get('group_syms', ()):
+            ctx['used_sym'][sym] = float(ctx['used_sym'].get(sym, 0.0)) + (
+                float(s.get('lot') or 0.0) * _risk_per_lot_cached(
+                    s.get('symbol'), s.get('sl_points'), symbol_data, ctx['slm']))
         return True, ''
     if q <= 0:
         return False, f'квота категории {sid} = 0'
@@ -1397,6 +1483,10 @@ def quota_gate_check(ctx, key, s, symbol_data):
     if ctx['risk_quota'] > 0 and ctx['used_all'] >= ctx['risk_quota']:
         return False, (f'риск-квота счёта занята: {ctx["used_all"]:,.0f} ≥ '
                        f'{ctx["risk_quota"]:,.0f} ₽')
+    # Резерв: группу расходует та же сделка, что и категорию — следующий вход
+    # в том же проходе увидит и занятый риск группы.
+    if _gq > 0 and sym and sym in ctx.get('group_syms', ()):
+        ctx['used_sym'][sym] = float(ctx['used_sym'].get(sym, 0.0)) + new_risk
     ctx['used'][sid] = used + new_risk
     ctx['used_all'] += new_risk
     return True, ''
@@ -1412,6 +1502,31 @@ def quota_gate_ok(ctx, key, s, symbol_data):
         _QUOTA_BLOCKED_WARNED.add(key)
         print(f"  -> [{key}] Пропущен вход: {why}", flush=True)
     return False
+
+
+_GUARD_ERR_WARNED = False       # ошибку защиты по символу печатаем один раз
+
+
+def symbol_guard_ok(symbol, risk_cfg):
+    """Защита на уровне СИМВОЛА: дневной стоп по деньгам + cooldown после SL.
+
+    Правила и параметры — config.RiskParams (symbol_day_loss_pct,
+    symbol_sl_cooldown_min), реализация — symbol_guard.py. В отличие от гейта
+    квоты это тормоз против «долблю один символ весь день»: металлы 30.10
+    дали 8 входов и 4 стопа по XAGUSDrfd подряд.
+
+    Fail-safe: любая ошибка истории/конфига = вход РАЗРЕШЁН (защита не должна
+    молча гасить торговлю), но пишем предупреждение один раз.
+    """
+    global _GUARD_ERR_WARNED
+    try:
+        import symbol_guard
+        return symbol_guard.ok(symbol, risk_cfg)
+    except Exception as exc:
+        if not _GUARD_ERR_WARNED:
+            _GUARD_ERR_WARNED = True
+            print(f"  -> [GUARD] защита по символу отключена: {exc!r}", flush=True)
+        return True
 
 
 # ═══ ПРОВЕРКА СИГНАЛОВ ═══
@@ -1936,6 +2051,8 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_side} позиций {entry_dir} на {s['symbol']}")
                     elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
+                    elif not symbol_guard_ok(s['symbol'], risk_cfg):
+                        pass  # дневной стоп по символу / cooldown после SL — причина напечатана
                     elif not quota_gate_ok(_gate, key, s, symbol_data):
                         pass  # квота категории занята — причина уже напечатана (один раз)
                         

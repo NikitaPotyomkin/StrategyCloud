@@ -444,7 +444,7 @@ def trim_banner(data: dict, ref_day: float = None) -> None:
     except Exception:
         _pt = None
     if _pt is not None and bool(getattr(_pt, 'enabled', False)):
-        _ref_txt = (" · удельный максимум из графика ≈ {} ₽/лот".format(_num(ref_day)) if (ref_day is not None and ref_day == ref_day and ref_day > 0) else '')
+        _ref_txt = (" · медиана ₽/лот из графика ≈ {} ₽/лот".format(_num(ref_day)) if (ref_day is not None and ref_day == ref_day and ref_day > 0) else '')
         try:
             _pp = data.get('pos_peaks_df') if isinstance(data, dict) else None
             if (_pp is not None and not getattr(_pp, 'empty', True)
@@ -464,13 +464,13 @@ def trim_banner(data: dict, ref_day: float = None) -> None:
                     _ref_txt = " · эталон ≈ {} ₽/лот (сделки ≥ {:.2f} лот)".format(
                         _num(float(_vals.max())), float(_pt.min_ref_volume))
         except Exception:
-            _ref_txt = (" · удельный максимум из графика ≈ {} ₽/лот".format(_num(ref_day)) if (ref_day is not None and ref_day == ref_day and ref_day > 0) else '')
+            _ref_txt = (" · медиана ₽/лот из графика ≈ {} ₽/лот".format(_num(ref_day)) if (ref_day is not None and ref_day == ref_day and ref_day > 0) else '')
         _wd = int(getattr(_pt, 'lookback_days', 0) or 0)
         _win_txt = (f"за {_wd} дн." if _wd > 0
                     else "за всю историю (с 29.09.2026)")
         st.error("❗ ПРАВИЛО ПИК-ТРИМА АКТИВНО — реальные закрытия включены: "
                  "все позиции счёта режутся до {:.2f} лот, когда удельный потенциал "
-                 "дня дошёл до {:.0f}% пика ₽/лот {}{} (удельную считаем по "
+                 "дня дошёл до {:.0f}% медианы ₽/лот {}{} (удельную считаем по "
                  "плановому объёму дня, допуск отклонения ±{:.0f}%). Остаток остаётся до "
                  "своего TP/SL. Выключение: config.PeakTrimParams.enabled = False."
                  .format(_pt.keep_volume, _pt.pct * 100.0, _win_txt,
@@ -506,7 +506,12 @@ def trim_live(day) -> None:
         _today = _d['day'].max()
         _cur = _d[_d['day'] == _today].iloc[0]
         _prev = _d[_d['day'] < _today]
-        _ref = float(_prev['per_lot'].max()) if len(_prev) else float(_cur['per_lot'])
+        # Эталон правила = агрегат cfg.ref_quantile по дням ДО сегодня. С 30.10
+        # это МЕДИАНА дневных пиков — ровно число из лейбла «Медиана на 1 лот».
+        _q = float(getattr(_pt, 'ref_quantile', 0.5) or 0.5)
+        _ref = float(_prev['per_lot'].quantile(_q)) if len(_prev) else float(_cur['per_lot'])
+        _ref_word = ('медиана' if abs(_q - 0.5) < 1e-9 else
+                     ('максимум' if abs(_q - 1.0) < 1e-9 else f'p{_q * 100:.0f}'))
         # Удельная по ПЛАНОВОМУ объёму дня (per_plan) — ровно то, что считает
         # правило: закрытие пары сделок не задирает ₽/лот на остатке книги.
         _per_now = _cur.get('per_plan')
@@ -517,7 +522,7 @@ def trim_live(day) -> None:
         _per_now = float(_per_now)
         if not pd.notna(_per_now) or not (_ref > 0):
             return
-        _pct = float(getattr(_pt, 'pct', 0.99))
+        _pct = float(getattr(_pt, 'pct', 1.00))
         _thr = _pct * _ref
         _ratio = _per_now / _ref
         _pot = float(_cur.get('potential_close') or 0.0)
@@ -540,7 +545,7 @@ def trim_live(day) -> None:
         _left = _thr - _per_now
         _head = (f"check peak · последний замер {_today}: {_num(_per_now)} ₽/лот = "
                  f"{_ratio * 100:.0f}% эталона {_num(_ref)} ₽/лот "
-                 f"(максимум по дням ДО сегодня)")
+                 f"({_ref_word} по дням ДО сегодня)")
         if _left > 0:
             _body = (f" · до порога {_pct * 100:.0f}% ({_num(_thr)} ₽/лот) "
                      f"осталось {_num(_left)} ₽/лот")
@@ -579,7 +584,7 @@ def render(data: dict, days_back: int) -> None:
         from config import PeakTrimParams as _PeakTrim
         _pt = _PeakTrim()
         if False:  # старый блок-дубль отключён: баннер показан в начале render()
-            _ref_txt = (" · удельный максимум из графика ≈ {} ₽/лот".format(_num(ref_day)) if (ref_day is not None and ref_day == ref_day and ref_day > 0) else '')
+            _ref_txt = (" · медиана ₽/лот из графика ≈ {} ₽/лот".format(_num(ref_day)) if (ref_day is not None and ref_day == ref_day and ref_day > 0) else '')
             _pp = data.get('pos_peaks_df') if isinstance(data, dict) else None
             if (_pp is not None and not getattr(_pp, 'empty', True)
                     and 'peak_per_lot' in _pp.columns):
@@ -616,7 +621,7 @@ def render(data: dict, days_back: int) -> None:
     _n_per = int(len(_per))
 
     st.markdown("### Максимальная потенциальная прибыль за день")
-    trim_banner(data, float(day['per_lot'].max()))
+    trim_banner(data, float(day['per_lot'].median()))
     trim_live(day)
     c1, c2 = st.columns(2)
     with c1:

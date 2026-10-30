@@ -144,6 +144,16 @@ def _win_label(cfg):
     return f"{d} дн." if d > 0 else "вся история"
 
 
+def _ref_label(cfg):
+    """Эталон словами: «медиана дневных пиков» (0.50) / «максимум дневного пика»."""
+    q = float(getattr(cfg, 'ref_quantile', 0.5) or 0.5)
+    if abs(q - 0.5) < 1e-9:
+        return "медиана дневных пиков"
+    if abs(q - 1.0) < 1e-9:
+        return "максимум дневного пика"
+    return f"p{q * 100:.0f} дневных пиков"
+
+
 def _ref(con, today, cfg):
     """ЛЕГАСИ (30.10): поэлементный эталон — прибыль ОДНОЙ сделки ₽/лот.
 
@@ -386,10 +396,13 @@ def _daily_per_lot(con, login, from_day):
 
 
 def _daily_ref(con, today, cfg, login):
-    """Эталон ₽/лот — МАКСИМУМ удельной прибыли ДНЯ за историю до сегодняшнего.
+    """Эталон ₽/лот — агрегат удельной прибыли ДНЯ за историю до сегодняшнего.
 
     Окно: cfg.lookback_days дней до сегодня; 0 — вся история с начала работы
     робота (реально с 16.10 — с первого замера equity_samples).
+    Агрегат задаёт cfg.ref_quantile: 0.50 — МЕДИАНА дневных пиков ₽/лот (то же
+    число, что лейбл дэша «Медиана на 1 лот»; действующий режим с 30.10),
+    1.00 — максимум дня (прежний режим «99% пика»).
     """
     from_day = _window_start(today, cfg.lookback_days)
     series = _daily_per_lot(con, login, from_day)
@@ -530,7 +543,7 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
             ref_val = float(ref['ref'])
             if ref_val < float(cfg.min_ref_per_lot):
                 if verbose:
-                    print(f"  [TRIM] эталон p{cfg.ref_quantile * 100:.0f} слишком мал ({_space(ref_val)} ₽/лот < "
+                    print(f"  [TRIM] эталон ({_ref_label(cfg)}) слишком мал ({_space(ref_val)} ₽/лот < "
                           f"{_space(cfg.min_ref_per_lot)}) — правило не оцениваем",
                           flush=True)
                 return 0
@@ -574,7 +587,7 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                       f"{float(cur.get('plan_vol') or 0):.2f} лот "
                       f"({float(cur.get('vol_dev') or 0) * 100:+.0f}%, "
                       f"допуск ±{_tol * 100:.0f}%)", flush=True)
-                print(f"  [TRIM]   Эталон: {_space(ref_val)} ₽/лот",
+                print(f"  [TRIM]   Эталон: {_space(ref_val)} ₽/лот ({_ref_label(cfg)})",
                       flush=True)
                 print(f"  [TRIM]   Выполнение: {_acct_ratio * 100:.0f}% {'→ РЕЖЕМ' if _acct_hit else ''}",
                       flush=True)
@@ -771,7 +784,7 @@ def main():
     )
     print(f"  [TRIM] режим: {'REAL' if cfg.enabled else 'ОЦЕНКА (без закрытий)'} | "
           f"порог {cfg.pct:.0%} | оставляем {cfg.keep_volume:.2f} лот | "
-          f"эталон p{cfg.ref_quantile * 100:.0f} по всем сделкам | "
+          f"эталон {_ref_label(cfg)} | "
           f"окно {_win_label(cfg)}", flush=True)
     if args.eval or not args.live:
         evaluate(cfg=cfg, path=args.db)
