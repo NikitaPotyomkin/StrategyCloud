@@ -1329,7 +1329,10 @@ def _open_positions_risk(active_strategies, symbol_data, cache):
         sl_points = (abs(float(p.price_open) - sl_price) / point) if (point > 0 and sl_price > 0) else 0.0
         if sl_points <= 0 or float(p.volume) <= 0:
             continue   # без SL риск позиции неизвестен — квоту не расходует
-        risk = float(p.volume) * _risk_per_lot_cached(symbol, sl_points, symbol_data, cache)
+        # Объём — ИЗНАЧАЛЬНЫЙ (до пик-трима): остаток 0.01 иначе освобождает
+        # бюджет, и робот тут же входит в ту же категорию заново.
+        _vol = _effective_volume(p, symbol, cache)
+        risk = _vol * _risk_per_lot_cached(symbol, sl_points, symbol_data, cache)
         out[sid] = out.get(sid, 0.0) + risk
     return list(out.items())
 
@@ -1368,7 +1371,8 @@ def _open_symbols_risk(symbol_data, cache):
         sl_points = (abs(price_open - sl_price) / point) if (point > 0 and sl_price > 0) else 0.0
         if sl_points <= 0 or vol <= 0:
             continue   # без SL риск позиции неизвестен — группу не расходует
-        out[symbol] = out.get(symbol, 0.0) + vol * _risk_per_lot_cached(
+        _vol = _effective_volume(p, symbol, cache)   # изначальный объём до трима
+        out[symbol] = out.get(symbol, 0.0) + _vol * _risk_per_lot_cached(
             symbol, sl_points, symbol_data, cache)
     return out
 
@@ -1505,31 +1509,50 @@ def quota_gate_ok(ctx, key, s, symbol_data):
 
 
 _GUARD_ERR_WARNED = False
-_PT_LOCK_WARNED = False
+_TRIM_VOL_WARNED = set()   # по какому тикету уже сказали про изначальный объём
 
 
-def peak_trim_day_ok(risk_cfg):
-    """День уже зафиксирован пик-тримом → новых входов до 00:00 сервера.
+def _trimmed_volumes(cache):
+    """Изначальные объёмы срезанных позиций (peak_trim) — раз на проход."""
 
-    Смысл: после трима остатки 0.01 продолжают «висеть», удельная дня остаётся
-    высокой, и без замка робот тут же набирает объём заново — следующий проход
-    через 60 с опять режет его до 0.01 (пила из комиссий и спреда). С замком
-    день после трима живёт только на остатках: SL/TP и статистика.
-    Выключение: config.PeakTrimParams.block_entries_after_trim = False.
-    Ошибка чтения = True (торговлю не блокируем).
+    key = '__trim_volumes__'
+    if key not in cache:
+        try:
+            import peak_trim
+            cache[key] = peak_trim.trimmed_volumes()
+        except Exception:
+            cache[key] = {}
+    return cache[key]
+
+
+def _effective_volume(p, symbol, cache):
+    """Объём для квот — ИЗНАЧАЛЬНЫЙ, если позицию уже резали.
+
+    После РЕАЛЬНОГО пик-трима в MT5 остаётся keep_volume (0.01), и риск
+    позиции падает в volume_before/0.01 раз: свободный бюджет тут же выдаётся,
+    робот входит в ту же категорию заново, и следующий проход через 60 с
+    снова её режет (пила из спреда). SL остатка при частичном закрытии не
+    меняется, поэтому занятую квоту считаем по объёму ДО трима: бюджет
+    освобождается сам, когда позицию закроет SL/TP — тикет уходит из MT5.
     """
-    global _PT_LOCK_WARNED
+    vol = float(getattr(p, 'volume', 0.0) or 0.0)
     try:
-        from config import PeakTrimParams as _PT
-        if not bool(getattr(_PT(), 'block_entries_after_trim', True)):
-            return True
+        tid = int(getattr(p, 'ticket', 0) or 0)
+    except (TypeError, ValueError):
+        return vol
+    if tid <= 0:
+        return vol
+    try:
         import peak_trim
-        return not peak_trim.day_locked()
-    except Exception as exc:
-        if not _PT_LOCK_WARNED:
-            _PT_LOCK_WARNED = True
-            print(f"  -> [TRIM] замок дня отключён: {exc!r}", flush=True)
-        return True       # ошибку защиты по символу печатаем один раз
+        eff = peak_trim.effective_volume(tid, vol, _trimmed_volumes(cache))
+    except Exception:
+        return vol
+    if eff > vol + 1e-9 and tid not in _TRIM_VOL_WARNED:
+        _TRIM_VOL_WARNED.add(tid)
+        print(f"  -> [TRIM] {symbol} #{tid}: квоту держит изначальный объём "
+              f"{eff:.2f} лот (остаток {vol:.2f}) — освободится при закрытии",
+              flush=True)
+    return eff
 
 
 def symbol_guard_ok(symbol, risk_cfg):
@@ -2076,8 +2099,9 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_side} позиций {entry_dir} на {s['symbol']}")
                     elif s['symbol'] in occupied_by_symbol and len(occupied_by_symbol[s['symbol']]) >= risk_cfg.max_per_symbol:
                         print(f"  -> [{key}] Пропущен вход: {risk_cfg.max_per_symbol} позиций на {s['symbol']}")
-                    elif not peak_trim_day_ok(risk_cfg):
-                        pass  # трим уже был сегодня — новых входов до 00:00 сервера
+                    # (30.10.2026) замка дня после трима НЕТ: занятый бюджет
+                    # держат изначальные объёмы срезанных позиций (см. _effective_volume)
+                    # (остатки 0.01 живут до SL/TP и квоту больше не освобождают)
                     elif not symbol_guard_ok(s['symbol'], risk_cfg):
                         pass  # дневной стоп по символу / cooldown после SL — причина напечатана
                     elif not quota_gate_ok(_gate, key, s, symbol_data):

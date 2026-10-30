@@ -189,25 +189,69 @@ def _ref(con, today, cfg):
             'last_day': (meta['last_day'] if meta else None)}
 
 
-def day_locked(path=None, day=None):
-    """Был ли сегодня РЕАЛЬНЫЙ трим — блокировка входов до 00:00 сервера.
+# Кэш «изначальных объёмов» срезанных позиций: гейт входа зовётся на каждом
+# проходе проверки сигналов, поэтому БД читаем не чаще, чем раз в _TRIM_VOL_TTL.
+_TRIM_VOL_CACHE = {'ts': -1e12, 'path': None, 'data': {}}
+_TRIM_VOL_TTL = 30.0
 
-    Читает peak_trim (mode='real') за текущие серверные сутки. После трима
-    робот только ведёт остатки 0.01 (статистика + SL/TP), новых входов нет:
-    иначе он тут же набирает объём заново, а удельная дня остаётся высокой.
-    Любая ошибка = False (торговля продолжается — fail-open).
+
+def trimmed_volumes(path=None, ttl=None):
+    """{position_id: последняя РЕАЛЬНАЯ резка} — для расчёта квот и плана.
+
+    Зачем: после трима в MT5 остаётся keep_volume (0.01), и риск позиции падает
+    в volume_before/0.01 раз — свободный бюджет тут же выдаётся (категория,
+    группа, счёт), робот набирает объём заново и следующий проход через 60 с
+    режет его снова. Поэтому квоты считаем по ИЗНАЧАЛЬНОМУ объёму, пока позиция
+    торгует: бюджет освободится сам, когда её закроет SL/TP (тикет ушёл из MT5).
+    Возвращает {position_id: {'volume_before', 'volume_left', 'symbol', 'magic',
+    'day', 'ts'}}. Любая ошибка/нет БД = {} (квоты по живым объёмам).
     """
     try:
         import trades_db
-        _day = day or _day_of_ts(int(datetime.datetime.now().timestamp()) + SRV_OFFSET_H * 3600)
+        _ttl = _TRIM_VOL_TTL if ttl is None else float(ttl)
+        _now = datetime.datetime.now().timestamp()
+        if (_TRIM_VOL_CACHE['path'] == path
+                and (_now - float(_TRIM_VOL_CACHE['ts'])) < _ttl):
+            return _TRIM_VOL_CACHE['data']
         con = trades_db.connect(path)
         _ensure_table(con)
-        row = con.execute(
-            "SELECT 1 FROM peak_trim WHERE day = ? AND mode = 'real' LIMIT 1",
-            (_day,)).fetchone()
-        return row is not None
+        rows = con.execute(
+            "SELECT ts, day, position_id, symbol, magic, volume_before, "
+            "volume_left FROM peak_trim WHERE mode = 'real' ORDER BY ts").fetchall()
+        out = {}
+        for r in rows:
+            try:
+                pid = int(r['position_id'] or 0)
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0:
+                continue
+            out[pid] = {'volume_before': float(r['volume_before'] or 0.0),
+                        'volume_left': float(r['volume_left'] or 0.0),
+                        'symbol': str(r['symbol'] or ''),
+                        'magic': int(r['magic'] or 0),
+                        'day': str(r['day'] or ''),
+                        'ts': int(r['ts'] or 0)}
+        _TRIM_VOL_CACHE.update({'ts': _now, 'path': path, 'data': out})
+        return out
     except Exception:
-        return False
+        return {}
+
+
+def effective_volume(position_id, volume, trimmed=None):
+    """Объём для расчёта квот: ИЗНАЧАЛЬНЫЙ (до трима), если позицию уже резали.
+
+    SL остатка при частичном закрытии не меняется, поэтому
+    effective_volume × риск_на_лот воспроизводит риск позиции ДО трима.
+    """
+    try:
+        t = (trimmed or {}).get(int(position_id or 0))
+        vol = float(volume or 0.0)
+        if not t:
+            return vol
+        return max(vol, float(t.get('volume_before') or 0.0))
+    except (TypeError, ValueError):
+        return float(volume or 0.0)
 
 
 def _already_trimmed(con, day, login, position_id):
