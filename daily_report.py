@@ -701,7 +701,7 @@ def get_dashboard_data(days_back=30, manage_connection=True):
                 _eq_where += " AND (account_login IS NULL OR account_login = ?)"
                 _eq_params.append(_eq_login)
             equity_df = pd.read_sql_query(
-                "SELECT ts, balance, equity, floating_total, n_positions, "
+                "SELECT ts, account_login, balance, equity, floating_total, n_positions, "
                 f"{_vol_sel} FROM equity_samples WHERE {_eq_where} ORDER BY ts",
                 _eq_con, params=tuple(_eq_params))
             _eq_con.close()

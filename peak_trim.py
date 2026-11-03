@@ -392,6 +392,62 @@ def _day_start_ts(day_str):
     return (_d - datetime.date(1970, 1, 1)).days * 86400 - SRV_OFFSET_H * 3600
 
 
+def _realized_by_day(from_day, login):
+    """Реализованный P&L сделок по серверным дням: {день: [(ts, cum_net), ...]}.
+
+    Потенциал дня = реализованный P&L сделок этого дня + плавающая открытых
+    позиций. Пополнений и выводов в формуле нет: это не сделки. Берутся только
+    торговые сделки deal_type IN (0,1), поэтому балансовые операции (пополнение,
+    снятие, кредит) в расчёт попасть не могут.
+    net = profit + commission + swap + fee — комиссии и свопы тоже деньги счёта.
+    deals.time — серверное время «под видом UTC»: ts = time − SRV_OFFSET_H.
+    Список отсортирован по времени, второе поле — накопленная сумма за день.
+    """
+    out = {}
+    try:
+        _con = trades_db.connect(readonly=True)
+        _srv0 = _day_start_ts(from_day) + SRV_OFFSET_H * 3600
+        where = "deal_type IN (0, 1) AND time >= ?"
+        params = [_srv0]
+        if login:
+            where += " AND account_login = ?"
+            params.append(int(login))
+        rows = _con.execute(
+            "SELECT time, profit, commission, swap, fee FROM deals "
+            f"WHERE {where} ORDER BY time", tuple(params)).fetchall()
+        _con.close()
+    except Exception:
+        return out
+    run = {}
+    for r in rows:
+        try:
+            _ts = int(r['time']) - SRV_OFFSET_H * 3600
+            _net = (float(r['profit'] or 0.0) + float(r['commission'] or 0.0)
+                    + float(r['swap'] or 0.0) + float(r['fee'] or 0.0))
+        except (TypeError, ValueError):
+            continue
+        day = _day_of_ts(_ts)
+        if day is None:
+            continue
+        run[day] = run.get(day, 0.0) + _net
+        out.setdefault(day, []).append((_ts, run[day]))
+    return out
+
+
+def _realized_at(series, day, ts):
+    """Реализованный P&L сделок дня к моменту ts (истинный epoch), ₽."""
+    pts = (series or {}).get(day)
+    if not pts:
+        return 0.0
+    ts = int(ts)
+    val = 0.0
+    for _ts, _cum in pts:
+        if _ts > ts:
+            break
+        val = _cum
+    return val
+
+
 def _daily_per_lot(con, login, from_day):
     """Удельная прибыль по дням: {day: ₽/лот}.
 
@@ -404,7 +460,9 @@ def _daily_per_lot(con, login, from_day):
     Удельная за день = пик потенциала дня / plan_vol дня.
 
 
-    Потенциал дня = equity − balance_на_начало_суток − внешние деньги
+    Потенциал дня = реализованный P&L сделок этого дня (по времени закрытия) плюс
+    плавающая открытых позиций; пополнений и выводов в формуле нет — это не сделки.
+    Выходные дни пропускаем.
     (то есть реализованное за день + текущий floating). Выходные пропускаем.
     """
     try:
@@ -424,7 +482,7 @@ def _daily_per_lot(con, login, from_day):
             f"WHERE {where} ORDER BY ts", tuple(params)).fetchall()
     except Exception:
         return {}
-    flows = _flows_map()
+    realized = _realized_by_day(from_day, login)
     days = {}
     for r in rows:
         try:
@@ -439,23 +497,23 @@ def _daily_per_lot(con, login, from_day):
             continue  # пропускаем невалидные timestamp
         d = days.get(day)
         if d is None:
-            d = {'bal0': bal, 'ext': 0.0, 'pot': None, 'vol': 0.0}
+            d = {'pot': None, 'vol': 0.0}
             days[day] = d
-        _fl = flows.get(day)
-        if _fl:
-            _ext = 0.0
-            for _ts, _amt in _fl:
-                if _ts > ts:
-                    break
-                _ext += _amt
-            d['ext'] = _ext
+        # Реализованный P&L сделок этого дня к моменту ts: только деньги сделок,
+        _real = _realized_at(realized, day, ts)
+        # пополнений и выводов здесь нет — это не сделки (deal_type IN (0,1)).
+        # Баланс на 00:00 и внешние деньги в формуле не участвуют:
+        # потенциал = реализованное по сделкам + плавающая открытых позиций.
+        # Знак потенциала — знак торгового дня; выходные ниже пропускаем.
+        # (Так ушёл фиктивный пик 02.11: вывод денег «прибавлялся» к потенциалу,
+        #  потому что вычитался из equity со знаком минус.) Выходные — ниже.
         if not (vol > 0):
             continue                 # без объёма удельную не посчитать
         # Копим пик потенциала дня и максимум объёма книги: удельная считается
         # в конце цикла как pot / plan_vol — знаменатель ОДИН на день, поэтому
         # резка/закрытие позиций не задирает ₽/лот.
         d['vol'] = max(float(d['vol']), vol)
-        _pot = bal + fl - d['bal0'] - d['ext']
+        _pot = _real + fl
         if d['pot'] is None or _pot > d['pot']:
             d['pot'] = _pot
     out = {}
@@ -525,31 +583,31 @@ def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
     vol_dev/in_tol возвращаем, чтобы лог и дэш показали уход объёма от плана.
     День считается по серверному времени (UTC+3), как и дни эталона.
 
-    balance на начало суток — из первого замера equity_samples за сегодня;
-    если замеров нет — текущий balance (тогда потенциал = только floating).
+    Потенциал дня = реализованный P&L сделок сегодняшних суток по времени
+    закрытия плюс плавающая открытых позиций. Пополнений и выводов в формуле
+    нет: это не сделки (deal_type IN (0,1)). См. _realized_by_day.
     """
-    bal0 = None
-    try:
-        row = con.execute(
-            "SELECT balance FROM equity_samples WHERE ts >= ? "
-            "AND (account_login IS NULL OR account_login = ?) ORDER BY ts LIMIT 1",
-            (_day_start_ts(today), int(login))).fetchone()
-        if row is not None and row['balance'] is not None:
-            bal0 = float(row['balance'])
-    except Exception:
-        bal0 = None
-    if bal0 is None:
-        bal0 = float(getattr(acc, 'balance', 0.0) or 0.0)
-    _now = int(datetime.datetime.now().timestamp())
-    ext = 0.0
-    for _ts, _amt in _flows_map().get(today, ()):
-        if _ts > _now:
-            break
-        ext += _amt
+    # Баланс на счету на начало суток больше не нужен: потенциал не от баланса.
+    _real = _realized_at(_realized_by_day(today, login), today, _now)
+    # Плавающая — «живьём» из счёта: equity минус balance.
+    _floating = (float(getattr(acc, 'equity', 0.0) or 0.0)
+                 - float(getattr(acc, 'balance', 0.0) or 0.0))
     vol = 0.0
     for p in positions:
         vol += float(getattr(p, 'volume', 0.0) or 0.0)
-    potential = float(getattr(acc, 'equity', 0.0) or 0.0) - bal0 - ext
+    potential = _real + _floating
+    # Прежняя формула: equity − баланс_на_00:00 − ext, где ext — накопленные
+    # пополнения/выводы дня. При выводе ext < 0 «минус на минус» прибавлял
+    # сумму к потенциалу — отсюда фиктивные пики 02.11.2026 (195 000 ₽).
+    # Теперь: potential = реализованные сделки дня + floating открытых позиций.
+    # Сделки — из trades_db (deal_type IN (0,1)):     # Сделки — из trades_db (deal_type IN (0,1)), пополнение сделкой не является.
+    # Если ингест сделок отстал, останется только плавающая — это честнее,
+    # чем подмешивать баланс счёта и внешние деньги.
+    # Ниже — знаменатель удельной (плановый объём дня), код не менялся.
+    # Та же формула — в risk_equity_block._daily (оба графика вкладки Risk).
+    # Проверка: python peak_trim.py --live печатает текущий P&L и порог.
+    # Ключи balance_start / ext из возвращаемого словаря убраны (03.11.2026):
+    # potential и per_lot остались теми же ключами — трим читает их как раньше.
     # Знаменатель удельной — ПЛАНОВЫЙ объём дня, не остаток книги: иначе
     # закрытие пары сделок уменьшает объём, ₽/лот растёт и трим врёт.
     plan_vol = _plan_volume(con, today, login, vol)
@@ -557,8 +615,8 @@ def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
     vol_dev = ((vol - plan_vol) / plan_vol) if plan_vol > 0 else 0.0
     return {'potential': potential, 'vol': vol, 'plan_vol': plan_vol,
             'vol_dev': vol_dev, 'in_tol': abs(vol_dev) <= float(tolerance),
-            'balance_start': bal0,
-            'ext': ext, 'per_lot': (potential / denom if denom > 0 else None),
+            'realized': _real,
+            'floating': _floating, 'per_lot': (potential / denom if denom > 0 else None),
             'per_lot_now': (potential / vol if vol > 0 else None)}
 
 

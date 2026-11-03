@@ -2,11 +2,16 @@
 
 Столбец дня — ПИК потенциальной прибыли за сутки:
 
-    потенциал = equity_текущий − balance_начала_суток − внешние_деньги_к_моменту
+    потенциал(t) = Σ P&L сделок, закрытых в этот день к моменту t
+                 + плавающий P&L открытых позиций в момент t
 
-То есть реализованное за день + текущий floating, минус пополнения/выводы,
-случившиеся в этот день. Поэтому депозит на 100 000 ₽ не превращается в
-«прибыль дня», а закрытые убытки остаются в минусе — пик может быть < 0.
+Только сделки и открытые позиции: пополнений и выводов в формуле нет физически
+(это не сделки): депозит на 100 000 ₽ не может стать «прибылью дня»,
+а закрытые убытки остаются в минусе — пик дня бывает и < 0.
+P&L сделки = profit + commission + swap + fee; балансовые операции
+(DEAL_TYPE_BALANCE и пр.) отфильтрованы — берём только deal_type IN (0,1).
+Формула не использует ни equity, ни баланс начала суток: только сделки и
+открытые позиции; знак пика — знак торговли дня (убыточный день красный).
 
 Абсолютная: max(потенциала) за день по всем замерам equity_samples.
 
@@ -20,8 +25,12 @@
             категориям.
 
 Почему не эквити: equity = balance + floating, поэтому пополнение на 200 000 ₽
-навсегда сдвигает уровень и дни до/после депозита несравнимы. Обе величины
-выше от депозита не зависят.
+навсегда сдвигает уровень и дни до/после депозита несравнимы. Сделочный
+потенциал от депозита не зависит вообще: это деньги, заработанные/потерянные
+сделками, а не перенесённый на счёт капитал.
+Обе величины считаются из сделок: ни пополнение, ни вывод в формулу не входят.
+
+Пик дня не может превысить сумму P&L сделок дня плюс лучший floating.
 
 Выходные (сб/вс) в график не попадают: рынок закрыт, а сэмплер продолжает писать
 тот же пятничный floating — иначе суббота с воскресеньем дублировали пятницу.
@@ -59,6 +68,87 @@ COL_REF = '#D29922'      # горизонталь «медиана дневны�
 
 FLOW_CACHE_SEC = 60
 _FLOW_CACHE = {'ts': 0.0, 'df': None}
+
+DEAL_CACHE_SEC = 60
+_DEAL_CACHE = {'key': None, 'ts': 0.0, 'df': None}
+
+
+def _deals_df(since_ts=None, login=None) -> pd.DataFrame:
+    """Торговые сделки счёта для реализованного P&L дня: ts, ts_dt, day, net.
+
+    Потенциал дня считается из САМИХ СДЕЛОК — пополнений и выводов в формуле
+    нет вообще (это не сделки), поэтому и вычитать из потенциала нечего.
+    net = profit + commission + swap + fee: комиссии и свопы тоже деньги счёта.
+
+    Балансовые операции (DEAL_TYPE_BALANCE, CREDIT, BONUS и пр.) в deals тоже
+    попадают, но profit у них равен сумме пополнения — поэтому берём только
+    торговые сделки: deal_type IN (0,1) (BUY/SELL).
+
+    deals.time — серверное время «под видом UTC», поэтому:
+      • ts (истинный epoch) = time − SRV_OFFSET_H ч — так его сравниваем с
+        equity_samples.ts;
+      • day — серверная дата (ts + SRV_OFFSET_H ч), одна граница суток с
+        замерами equity_samples.
+    """
+    now = time.time()
+    key = (int(since_ts or 0), int(login or 0))
+    if (_DEAL_CACHE['df'] is not None and _DEAL_CACHE['key'] == key
+            and (now - _DEAL_CACHE['ts']) < DEAL_CACHE_SEC):
+        return _DEAL_CACHE['df']
+
+    empty = pd.DataFrame(columns=['ts', 'ts_dt', 'day', 'net'])
+    df = empty
+    try:
+        import trades_db
+        where = ["deal_type IN (0, 1)"]
+        params = []
+        if since_ts:
+            # нижняя граница в серверной шкале (deals.time — серверное время)
+            where.append("time >= ?")
+            params.append(int(since_ts) + SRV_OFFSET_H * 3600)
+        if login:
+            where.append("account_login = ?")
+            params.append(int(login))
+        con = trades_db.connect(readonly=True)
+        df = pd.read_sql_query(
+            "SELECT time, profit, commission, swap, fee FROM deals WHERE "
+            + " AND ".join(where) + " ORDER BY time", con, params=tuple(params))
+        con.close()
+        if df is not None and len(df):
+            for _c in ('profit', 'commission', 'swap', 'fee'):
+                df[_c] = pd.to_numeric(df.get(_c), errors='coerce').fillna(0.0)
+            df['net'] = df['profit'] + df['commission'] + df['swap'] + df['fee']
+            df['ts'] = (pd.to_numeric(df['time'], errors='coerce').fillna(0)
+                        .astype('int64') - SRV_OFFSET_H * 3600)
+            df['ts_dt'] = (pd.to_datetime(df['ts'], unit='s', utc=True)
+                           + pd.Timedelta(hours=SRV_OFFSET_H))
+            df['day'] = df['ts_dt'].dt.date
+            df = df[['ts', 'ts_dt', 'day', 'net']].sort_values('ts').reset_index(drop=True)
+        else:
+            df = empty
+    except Exception:
+        df = empty
+    _DEAL_CACHE.update({'key': key, 'ts': now, 'df': df})
+    return df
+
+
+def _realized_cum(deals: pd.DataFrame, day, ts_values) -> np.ndarray:
+    """Реализованный P&L сделок этого дня, накопленный к каждому замеру, ₽.
+
+    Включает комиссии и свопы (net по сделке). Именно эта величина вместе с
+    плавающей даёт потенциал дня; баланс счёта и внешние деньги не участвуют.
+    """
+    ts_values = np.asarray(ts_values, dtype=np.int64)
+    out = np.zeros(len(ts_values), dtype=float)
+    if deals is None or getattr(deals, 'empty', True) or day is None:
+        return out
+    _d = deals[deals['day'] == day]
+    if _d.empty:
+        return out
+    _dt = _d['ts'].to_numpy(dtype=np.int64)
+    _cum = np.cumsum(_d['net'].to_numpy(dtype=float))
+    _idx = np.searchsorted(_dt, ts_values, side='right') - 1
+    return np.where(_idx >= 0, _cum[np.clip(_idx, 0, len(_cum) - 1)], 0.0)
 
 
 def _dark(fig, height: int):
@@ -153,20 +243,92 @@ def _pct_sfx(p) -> str:
     return f" ({_p:.0f}%)"
 
 
-def _daily(eq: pd.DataFrame) -> pd.DataFrame:
-    """Строка на день: пик потенциальной прибыли от начала суток (₽ и ₽/лот).
+SLOPE_PCT_45DEG = 0.01     # конвенция масштаба: 1% баланса в день = 45°
 
-    Потенциальная прибыль = equity_текущий − balance_начала_суток − внешние деньги
-    = реализованное за день + текущий floating, без пополнений и выводов.
+
+def _cum_ext(flows: pd.DataFrame, ts) -> np.ndarray:
+    """Накопленные внешние деньги (пополнения − выводы) к каждому моменту ts."""
+    ts = np.asarray(ts, dtype=np.int64)
+    if flows is None or getattr(flows, 'empty', True):
+        return np.zeros(len(ts), dtype=float)
+    _ft = flows['ts_true'].to_numpy(dtype=np.int64)
+    _fcum = np.cumsum(flows['amount'].to_numpy(dtype=float))
+    _fi = np.searchsorted(_ft, ts, side='right') - 1
+    return np.where(_fi >= 0, _fcum[np.clip(_fi, 0, len(_fcum) - 1)], 0.0)
+
+
+def _bal_series(eq: pd.DataFrame, flows: pd.DataFrame) -> pd.DataFrame:
+    """Кривая БАЛАНСА без внешних денег: ts_dt, day, bal_adj.
+
+    Баланс, а не equity: плавающая не должна двигать наклон, а пополнение/вывод
+    не должны давать «рост» — поэтому вычитаем накопленные внешние деньги.
+    """
+    df = eq.copy()
+    df['ts_dt'] = (pd.to_datetime(df['ts'], unit='s', utc=True)
+                   + pd.Timedelta(hours=SRV_OFFSET_H))
+    df['day'] = df['ts_dt'].dt.date
+    df['bal'] = pd.to_numeric(df.get('balance'), errors='coerce')
+    df = df[np.isfinite(df['bal'])].sort_values('ts_dt').reset_index(drop=True)
+    if df.empty:
+        return df
+    df['bal_adj'] = df['bal'] - _cum_ext(flows, df['ts'].to_numpy(dtype=np.int64))
+    return df
+
+
+def _fit_angle(sub: pd.DataFrame) -> tuple:
+    """Прямая МНК через кривую баланса окна: (угол в градусах, ₽/день).
+
+    X — дни от первого замера окна, Y — баланс без внешних денег. Наклон ₽/день
+    нормируем на средний баланс окна и на конвенцию 1% в день = 45°: иначе
+    градусы зависят от длины окна и размера депозита и несопоставимы день ко дню.
+    Знак сохраняется: минус — кривая идёт вниз.
+    """
+    if sub is None or len(sub) < 3:
+        return float('nan'), float('nan')
+    x = ((sub['ts_dt'] - sub['ts_dt'].iloc[0]).dt.total_seconds()
+         .to_numpy(dtype=float) / 86400.0)
+    y = sub['bal_adj'].to_numpy(dtype=float)
+    _den = float(((x - x.mean()) ** 2).sum())
+    if _den <= 0:
+        return float('nan'), float('nan')
+    slope_day = float(((x - x.mean()) * (y - y.mean())).sum() / _den)   # ₽/день
+    base = float(np.nanmean(y))
+    if not np.isfinite(base) or base <= 0:
+        return float('nan'), slope_day
+    return float(np.degrees(np.arctan((slope_day / base) / SLOPE_PCT_45DEG))), slope_day
+
+
+def _week_mean_angle(bal: pd.DataFrame, n_days: int = 5) -> float:
+    """Средний угол за последние n_days РАБОЧИХ дней (угол считается внутри дня)."""
+    if bal is None or bal.empty:
+        return float('nan')
+    _days = sorted(d for d in bal['day'].unique() if d.weekday() < 5)
+    vals = []
+    for d in _days[-int(n_days):]:
+        g = bal[bal['day'] == d]
+        if len(g) < 3:
+            continue
+        a, _ = _fit_angle(g)
+        if np.isfinite(a):
+            vals.append(a)
+    return float(np.mean(vals)) if vals else float('nan')
+
+
+def _daily(eq: pd.DataFrame) -> pd.DataFrame:
+    """Строка на день: пик потенциальной прибыли за сутки (₽ и ₽/лот).
+
+    potential(t) = Σ P&L сделок дня к моменту t + floating(t). Ни баланса
+    начала суток, ни внешних денег нет: пополнение/вывод — не сделка.
     Это то, что было бы заработано, если бы ты закрыл всё в этот момент.
     """
     df = eq.copy()
     df['ts_dt'] = (pd.to_datetime(df['ts'], unit='s', utc=True)
                    + pd.Timedelta(hours=SRV_OFFSET_H))
     df['day'] = df['ts_dt'].dt.date
+    df['floating'] = pd.to_numeric(df.get('floating_total', 0), errors='coerce')
     df['equity'] = pd.to_numeric(df.get('balance', 0), errors='coerce') + \
-                   pd.to_numeric(df.get('floating_total', 0), errors='coerce')
-    df = df[np.isfinite(df['equity']) & np.isfinite(df['floating_total'])]
+                   df['floating']
+    df = df[np.isfinite(df['equity']) & np.isfinite(df['floating'])]
     if df.empty:
         return df
     _vol_src = (df['floating_volume'] if 'floating_volume' in df.columns
@@ -177,12 +339,12 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
     df['npos'] = pd.to_numeric(_npos_src, errors='coerce')
     df = df.sort_values('ts_dt')
 
-    # Найти balance на начало каждого дня (первая запись за день)
-    balance_start = df.groupby('day').first()[['balance']].rename(
-        columns={'balance': 'balance_start'})
-    balance_start['day'] = balance_start.index
+    # Сделки этого счёта: P&L дня = реализованный по сделкам + текущий floating
+    _lg = (pd.to_numeric(df.get('account_login'), errors='coerce').dropna()
+           if 'account_login' in df.columns else pd.Series(dtype=float))
+    _login = int(_lg.iloc[0]) if len(_lg) else None
 
-    flows = _flows_df()
+    deals = _deals_df(int(df['ts'].min()) - 86400, _login)
 
     rows = []
     for day, g in df.groupby('day', sort=True):
@@ -191,22 +353,32 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
             continue
         g = g.reset_index(drop=True)
 
-        # Внешние деньги, уже пришедшие к моменту замера (накопительно за сутки).
-        g['ext'] = 0.0
-        if not flows.empty:
-            _f = flows[flows['day'] == day]
-            if len(_f):
-                _ft = _f['ts_true'].to_numpy(dtype=np.int64)
-                _fcum = np.cumsum(_f['amount'].to_numpy(dtype=float))
-                _fidx = np.searchsorted(_ft, g['ts'].to_numpy(dtype=np.int64),
-                                        side='right') - 1
-                g['ext'] = np.where(_fidx >= 0,
-                                    _fcum[np.clip(_fidx, 0, len(_fcum) - 1)], 0.0)
+        # Реализованное по сделкам дня, накопленное к каждому замеру, ₽:
+        if deals is None or deals.empty:
+            g['real'] = 0.0
+        else:
+            _d = deals[deals['day'] == day]
+            if _d.empty:
+                g['real'] = 0.0
+            else:
+                _ts = g['ts'].to_numpy(dtype=np.int64)
+                g['real'] = _realized_cum(deals, day, _ts)
+        g['potential_profit'] = g['real'] + g['floating']
+        # Пополнений и выводов в формуле нет: это не сделки, их просто нет среди
+        # слагаемых. Раньше вычитались «внешние деньги дня» (ext): при выводе
+        # ext < 0, и минус на минус ПРИБАВЛЯЛ сумму к потенциалу —
+        # 02.11.2026 это дало фиктивные 195 000 ₽ пика и завышенный ₽/лот.
+        # Теперь: closed-P&L сделок дня (real) + floating открытых позиций.
+        # Баланс на начало суток и equity счёта не участвуют вовсе.
+        # Нет сделок за день — real = 0, пик останется из открытых позиций.
+        # Знак потенциала — знак торговли дня (красный столбец — убыток).
+        # Пик дня = max(potential_profit) по замерам суток (шаг ~5 минут).
 
-        # Потенциальная прибыль от начала дня: equity - balance_начала_дня - внешние
-        b_start = float(balance_start.loc[balance_start['day'] == day,
-                                          'balance_start'].iloc[0])
-        g['potential_profit'] = g['equity'] - b_start - g['ext']
+
+        # Объём (лот) и знаменатель ₽/лот ниже считаются как раньше:
+        # plan_vol = максимум объёма книги за сутки — трим не задирает ₽/лот.
+        # Тот же знаменатель использует правило трима (peak_trim), поэтому
+        # медиана в лейбле, линия на графике и порог трима совпадают.
 
         # Пик: максимальная потенциальная прибыль за день
         i = int(g['potential_profit'].idxmax())
@@ -268,8 +440,8 @@ def _daily(eq: pd.DataFrame) -> pd.DataFrame:
             'per_time': per_ts,
             'per_fl': per_fl,
             'per_vol': per_vol,
-            'balance_start': b_start,
-            'ext_flow': float(g['ext'].iloc[-1]),
+            'real_peak': float(g['real'].iloc[i]),
+            'float_peak': float(g['floating'].iloc[i]),
             'potential_close': _close,
             'per_close': _per_close,
             'plan_vol': plan_vol,
@@ -289,34 +461,49 @@ def _potential_series(eq: pd.DataFrame) -> list:
     """
     df = eq.copy()
     df['ts'] = pd.to_numeric(df['ts'], errors='coerce')
+    df['floating'] = pd.to_numeric(df.get('floating_total', 0), errors='coerce')
     df['equity'] = pd.to_numeric(df.get('balance', 0), errors='coerce') + \
-                   pd.to_numeric(df.get('floating_total', 0), errors='coerce')
-    df = df[np.isfinite(df['equity']) & np.isfinite(df['floating_total'])]
+                   df['floating']
+    df = df[np.isfinite(df['equity']) & np.isfinite(df['floating'])]
     if df.empty:
         return []
     df['ts_dt'] = (pd.to_datetime(df['ts'], unit='s', utc=True)
                    + pd.Timedelta(hours=SRV_OFFSET_H))
     df['day'] = df['ts_dt'].dt.date
     df = df.sort_values('ts_dt')
-    b0 = pd.to_numeric(df.groupby('day')['balance'].first(), errors='coerce')
-    flows = _flows_df()
+    # Сделки: потенциал дня = реализованный P&L сделок + floating (без balance)
+    _lg = (pd.to_numeric(df.get('account_login'), errors='coerce').dropna()
+           if 'account_login' in df.columns else pd.Series(dtype=float))
+    _login = int(_lg.iloc[0]) if len(_lg) else None
+    deals = _deals_df(int(df['ts'].min()) - 86400, _login)
 
     out = []
     for day, g in df.groupby('day', sort=True):
         if day.weekday() >= 5:
             continue
         g = g.reset_index(drop=True)
-        ext = np.zeros(len(g), dtype=float)
-        if not flows.empty:
-            _f = flows[flows['day'] == day]
-            if len(_f):
-                _ft = _f['ts_true'].to_numpy(dtype=np.int64)
-                _fcum = np.cumsum(_f['amount'].to_numpy(dtype=float))
-                _fidx = np.searchsorted(_ft, g['ts'].to_numpy(dtype=np.int64),
-                                        side='right') - 1
-                ext = np.where(_fidx >= 0,
-                               _fcum[np.clip(_fidx, 0, len(_fcum) - 1)], 0.0)
-        pot = g['equity'].to_numpy(dtype=float) - float(b0.loc[day]) - ext
+        # Потенциал дня = реализованный P&L сделок этого дня к моменту замера
+        # плюс плавающий P&L открытых позиций. Пополнения и выводы в формулу
+        # не входят: это не сделки, их просто нет среди слагаемых.
+        # Реализованное копится по сделкам дня: закрыл позицию — деньги уже
+        # в сумме, а её floating из equity_samples исчез сам. Так и выходит
+        # «потенциал = то, что было бы, если закрыть всё прямо сейчас».
+        # Ни balance_начала_суток, ни вычета внешних денег здесь больше нет:
+        # формула 03.11.2026 перестроена на сделки (было equity − bal0 − ext).
+        # реализованное к замеру + плавающая = потенциал дня:
+        if deals is None or deals.empty:
+            real = np.zeros(len(g), dtype=float)
+        else:
+            _d = deals[deals['day'] == day]
+            if _d.empty:
+                real = np.zeros(len(g), dtype=float)
+            else:
+                _ts = g['ts'].to_numpy(dtype=np.int64)
+                real = _realized_cum(deals, day, _ts)
+        pot = real + g['floating'].to_numpy(dtype=float)
+        # Ряд целиком нужен _exit_block: порог ищется по замерам дня.
+        # Пустые сделки дают real = 0 — день не выпадает из ретроспективы.
+        # Выходные отброшены выше, иначе сб/вс дублировали бы пятницу.
         out.append((day, pot))
     return out
 
@@ -452,15 +639,30 @@ def _ctx_line(vol, npos) -> str:
     return (' · ' + ' · '.join(parts)) if parts else ''
 
 
-def _ext_line(v) -> str:
-    """Поправка «внешние деньги дня: +100 000 ₽» — только если они были."""
+def _mix_line(real, floating) -> str:
+    """Состав пика дня: сколько дали сделки, сколько — плавающая, ₽."""
     try:
-        _v = float(v)
+        _r, _f = float(real), float(floating)
     except (TypeError, ValueError):
         return ''
-    if not np.isfinite(_v) or abs(_v) < 0.5:
+    if not (np.isfinite(_r) and np.isfinite(_f)):
         return ''
-    return f" · внешние деньги дня: {_num(_v)} ₽ (вычтены)"
+    return f" · в пике: реализовано {_num(_r)} ₽ + плавающая {_num(_f)} ₽"
+    # 03.11.2026: подпись « · внешние деньги дня: -99 115 ₽ (вычтены)» удалена.
+    # Причина: внешние деньги больше не участвуют в потенциале дня вообще.
+    # При выводе (ext < 0) минус на минус ПРИБАВЛЯЛ сумму к потенциалу, поэтому
+    # 02.11.2026 пик показал фиктивные 195 000 ₽ и завышенный ₽/лот.
+    # Потенциал считается только из сделок: P&L закрытых сегодня + floating.
+    # Подпись теперь другая — _mix_line: «в пике: реализовано X + плавающая Y».
+    # Тот же отказ от ext — в _daily и _potential_series (там же комментарии).
+    # (справка: раньше здесь была функция _ext_line(v) → str, см. историю git)
+    # (справка: подпись « · внешние деньги дня: X ₽ (вычтены)» была строкой
+    #  в удалённой функции _ext_line — см. комментарии выше.)
+
+
+
+
+
 
 
 def trim_banner(data: dict, ref_day: float = None) -> None:
@@ -653,7 +855,7 @@ def render(data: dict, days_back: int) -> None:
     st.markdown("### Максимальная потенциальная прибыль за день")
     trim_banner(data, float(day['per_lot'].median()))
     trim_live(day)
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         st.metric("Медиана пика за день",
                   f"{_num(float(day['potential_peak'].median()))} ₽"
@@ -661,10 +863,10 @@ def render(data: dict, days_back: int) -> None:
                   delta_color="off")
         st.caption(f"медиана за {_n_days} торговых дней · лучший день: "
                    f"{_pk['day'].strftime('%d.%m')} "
-                   f"в {_pk['peak_time'].strftime('%H:%M')} "
-                   f"(баланс начала дня: {_num(float(_pk['balance_start']))} ₽)"
+                   f"в {_pk['peak_time'].strftime('%H:%M')}"
                    + _ctx_line(_pk.get('peak_vol'), _pk.get('peak_npos'))
-                   + _ext_line(_pk.get('ext_flow'))
+                   + _mix_line(_pk.get('real_peak'), _pk.get('float_peak'))
+                   + f" · замеров за день: {int(_pk['n_samples'])}"
                    + f" · к концу дня {_num(float(_pk['potential_close']))} ₽"
                    + _pct_sfx(_pk.get('fill_pct')) + " от пика")
     with c2:
@@ -684,6 +886,42 @@ def render(data: dict, days_back: int) -> None:
             st.metric("Медиана на 1 лот", "—", delta_color="off")
             st.caption("нет данных об объёме за окно")
 
+    # ── Наклон кривой БАЛАНСА за окно ползунка, в градусах ────────────────────
+    # Прямая МНК через баланс (без плавающей, пополнений и выводов). Масштаб
+    # угла фиксирован: 1% баланса в день = 45°, иначе градусы зависят от длины
+    # окна и размера депозита. В дельте — разница со средним углом за последние
+    # 5 рабочих дней (угол каждого дня считается внутри дня).
+    with c3:
+        try:
+            _bal = _bal_series(d, _flows_df())
+            _ang = _rub = _wk = float('nan')
+            if _bal is not None and not _bal.empty:
+                _cut = _bal['ts_dt'].max() - pd.Timedelta(days=max(1, int(days_back)))
+                _ang, _rub = _fit_angle(_bal[_bal['ts_dt'] >= _cut])
+                _wk = _week_mean_angle(_bal)
+            _d_ang = (_ang - _wk) if (np.isfinite(_ang) and np.isfinite(_wk)) else float('nan')
+            if np.isfinite(_ang):
+                st.metric("Наклон баланса", f"{_ang:+.1f}°",
+                          delta=(f"{_d_ang:+.1f}° к средней за неделю"
+                                 if np.isfinite(_d_ang) else None),
+                          delta_color="normal",
+                          help="Прямая МНК через кривую БАЛАНСА (плавающая, пополнения "
+                               "и выводы не участвуют) за окно ползунка. Масштаб угла: "
+                               "1% баланса в день = 45°, знак = направление кривой. "
+                               "Дельта — к среднему углу за последние 5 рабочих дней.")
+                st.caption(
+                    f"прямая МНК · {int(days_back)} дн. · "
+                    + (f"{'+' if _rub >= 0 else '−'}{_num(abs(_rub))} ₽/день"
+                       if np.isfinite(_rub) else "₽/день —")
+                    + " · средняя за неделю "
+                    + (f"{_wk:+.1f}°" if np.isfinite(_wk) else "—"))
+            else:
+                st.metric("Наклон баланса", "—", delta_color="off")
+                st.caption("мало замеров в окне для прямой")
+        except Exception as _sl_err:
+            st.metric("Наклон баланса", "—", delta_color="off")
+            st.caption(f"наклон не посчитан: {_sl_err!r}")
+
     _exit_block(d)
 
     # ── 1. Абсолютная: максимум потенциальной прибыли за день, ₽ ─────────────
@@ -692,14 +930,15 @@ def render(data: dict, days_back: int) -> None:
     _bars(day, 'potential_peak',
           [_num(float(v)) + _pct_sfx(p) for v, p
            in zip(day['potential_peak'], day['fill_pct'])],
-          day[['peak_time', 'n_samples', 'peak_vol', 'peak_npos', 'ext_flow',
-               'potential_close', 'fill_pct']].values,
+          day[['peak_time', 'n_samples', 'peak_vol', 'peak_npos', 'real_peak',
+               'float_peak', 'potential_close', 'fill_pct']].values,
           hover=('%{x}: потенциал %{y:,.0f} ₽<br>'
                  'момент: %{customdata[0]|%H:%M} (%{customdata[1]} замеров)<br>'
                  'объём: %{customdata[2]:.2f} лот · позиций: %{customdata[3]:.0f}<br>'
-                 'внешние деньги дня (вычтены): %{customdata[4]:,.0f} ₽<br>'
-                 'к концу дня: %{customdata[5]:,.0f} ₽ '
-                 '(%{customdata[6]:.0f}% от пика)'
+                 'реализовано к моменту: %{customdata[4]:,.0f} ₽ · '
+                 'плавающая: %{customdata[5]:,.0f} ₽<br>'
+                 'к концу дня: %{customdata[6]:,.0f} ₽ '
+                 '(%{customdata[7]:.0f}% от пика)'
                  '<extra></extra>'),
           title='максимальный потенциал за день, ₽',
           key='risk_profit_peak_day')
@@ -722,8 +961,8 @@ def render(data: dict, days_back: int) -> None:
               title='максимальный потенциал на лот за день, ₽/лот',
               key='risk_profit_peak_per_lot')
         st.caption(
-            "Потенциал = equity_текущий − balance_начала_суток − пополнения/выводы "
-            "этого дня. Верхняя цифра — сколько рублей было бы заработано, если бы "
+            "Потенциал = P&L сделок, закрытых в этот день к t, + floating открытых "
+            "позиций в момент t; пополнений и выводов нет. Верхняя цифра — если бы "
             "ты закрыл всё в лучший момент дня по всему счёту; в подписи видно, при "
             "каком объёме и числе позиций это было. Нижняя — то же самое на "
             "1.00 лот: пик потенциала дня / плановый объём дня (максимум книги "
@@ -747,8 +986,9 @@ def render(data: dict, days_back: int) -> None:
             "день. Старые сэмплы останутся без объёма (NULL) — задним числом его "
             "не восстановить.")
         st.caption(
-            "Верхний график — абсолютный потенциал: equity_текущий минус баланс "
-            "начала суток и минус пополнения/выводы этого дня, по открытым "
-            "позициям за день. Замер раз в ~5 мин, реальный пик мог быть "
+            "Верхний график — абсолютный потенциал: P&L сделок дня плюс плавающая "
+            "открытых позиций; пополнения и выводы не участвуют. "
+            "Убыточный день виден по знаку столбца, процент — от пика. "
+            "Реальный пик мог быть "
             "чуть выше; суббота и воскресенье пропущены; последний столбец — "
             "незавершённый день. Блок ничего не закрывает.")
