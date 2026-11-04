@@ -818,8 +818,21 @@ with tab_overview:
             try:
                 import cashflow as _cashflow
                 _cashflow.maybe_sync()   # подтянуть свежие пополнения/выводы (не чаще 1 раза в 5 мин)
+                # Счёт: в balance_ops лежат операции нескольких логинов (демо/тесты).
+                _cf_login = None
+                try:
+                    if mt5.terminal_info() is None:
+                        mt5.initialize()
+                    _acc_cf = mt5.account_info()
+                    _cf_login = int(_acc_cf.login) if _acc_cf else None
+                except Exception:
+                    _cf_login = None
+                # Только реальные движения из истории сделок. 'reconcile' — синтетика
+                # сверки баланса: она дублировала каждое пополнение (отсюда фиктивные
+                # 668 941 ₽ пополнений / 461 903 ₽ выводов — исправлено 05.11.2026).
                 _cash = [(int(_ts), float(_amt)) for _ts, _amt, _kind, _src, _cmt
-                         in _cashflow.ops_list(limit=1000) if _src not in ('cutoff', 'bootstrap')]
+                         in _cashflow.ops_list(limit=5000, account_login=_cf_login,
+                                               sources=('deals',))]
                 _dep = sum(a for _, a in _cash if a > 0)
                 _wd = sum(a for _, a in _cash if a < 0)
                 _gross_src = (f"внешние деньги {_dep + _wd:+,.0f} ₽ "
@@ -935,6 +948,19 @@ with tab_overview:
 # ═══════════════════════════════════════════════════════════════
 with tab_finstatement:
     st.markdown("### Daily P&L by month")
+    # одна строка таблицы = одна ЗАКРЫТАЯ позиция (trades_df сгруппирован по
+    # position_id), дата — её последнее закрытие. Открытые позиции в FinStatement
+    # не попадают вовсе: у них ещё нет результата. PnL — net по закрытиям.
+    # «Trades» = сколько позиций ЗАКРЫТО в этот день (не открыто!)
+    # Частичные закрытия (трим) суммируются в строку своей позиции и отдельными
+    # «сделками» не считаются. Открытые позиции — только в Overview.
+    # PnL, RUB — net по закрытиям: профит + своп + комиссия + сбор.
+    st.caption("**Trades** — число **закрытых** позиций за день: одна строка "
+               "таблицы = одна позиция, дата — её последнее закрытие; частичные "
+               "закрытия (в т.ч. трим) входят в эту же строку и отдельными "
+               "сделками не считаются. **Открытые позиции в таблицу не входят** — "
+               "у них ещё нет результата (плавающий P&L — во вкладке Overview). "
+               "**PnL, RUB** — net по закрытиям: профит + своп + комиссия + сбор.")
     try:
         # Окно берём ШИРЕ слайдера: от FUND_START_DATE до сегодня (в днях).
         _fs_start = datetime.strptime(str(FUND_START_DATE), '%Y-%m-%d').date()
@@ -962,9 +988,9 @@ with tab_finstatement:
             _by = _cal.merge(_by, on='date', how='left')
             _by['pnl'] = _by['pnl'].fillna(0.0).round(0).astype(int)
             _by['trades'] = _by['trades'].fillna(0).astype(int)
-            # Порядок строго по дате — cum считается хронологически, как и раньше.
+            # Порядок строго по дате — дни идут хронологически, как и раньше.
             _by = _by.sort_values('date').reset_index(drop=True)
-            _by['cum'] = _by['pnl'].cumsum()
+            # Накопительного итога (cum) в таблице нет с 05.11.2026 — он есть в Overview.
             _by['wd'] = [_RU_WEEKDAYS[d.weekday()] for d in _by['date']]
             _by['ym'] = [(d.year, d.month) for d in _by['date']]
 
@@ -990,8 +1016,9 @@ with tab_finstatement:
                 _mtitle = f"{_RU_MONTHS_NOM[_m - 1]} {_y}"
 
                 # Итог по месяцу — прямо в заголовке раскрывашки: внутри только дни,
-                # и без строки-итога «сколько за месяц» не видно (cum не суммируем —
-                # он накопительный). _mpnl/_mtr до этого считались и не использовались.
+                # и без строки-итога «сколько за месяц» не видно. _mpnl/_mtr раньше
+                # считались и не использовались.
+                # он накопительный, а в таблице его больше нет (05.11.2026).
                 _mlabel = (f"{_mtitle} — {_mpnl:+,} ₽ · {_mtr} сд."
                            + ("" if _mtr else " (сделок нет)"))
                 _col = next(_fs_grid)
@@ -1002,12 +1029,12 @@ with tab_finstatement:
                         'weekday': list(_g['wd']),
                         'PnL': [f"{int(v):,}" for v in _g['pnl']],
                         'trades': _g['trades'],
-                        'cum': [f"{int(v):,}" for v in _g['cum']],
+                        # cum (накопительный итог) убран 05.11.2026 — он есть в Overview
                     }).set_index('#').rename(columns={
                         'day': 'Date', 'weekday': 'WD', 'PnL': 'PnL, RUB',
-                        'trades': 'Trades', 'cum': 'Cum, RUB'})
+                        'trades': 'Trades'})
                     # ── Подытог по неделям (ISO-неделя, по дате сделки) ──
-                    # cum НЕ суммируем — он накопительный (это же и в дневных строках).
+                    # Колонок в дневной таблице четыре: дата, день недели, PnL, сделки.
                     # Неделя ISO: месяц на границе может содержать неполные недели — так и надо.
                     _wk = _g.copy()
                     _wk['iso'] = [d.isocalendar()[1] for d in _wk['date']]
@@ -1039,16 +1066,16 @@ with tab_finstatement:
                     )
                     # ── Итог по месяцу — нижней строкой той же таблицы ──
                     # Вставляем <tfoot> внутрь .fs-tbl: цифры встают ровно под столбцами
-                    # PnL/Trades, а не «плавают» отдельной таблицей. cum НЕ суммируем — он
-                    # накопительный, поэтому в итоговой строке его нет. colspan=2 — метка
+                    # PnL/Trades, а не «плавают» отдельной таблицей. colspan=2 — метка
                     # под колонками Date+WD (индекс '#' в to_html отброшен).
+                    # Пустая ячейка справа не нужна: колонки cum в таблице больше нет.
                     _mfoot = (
                         "<tfoot><tr class='fs-tot'>"
                         "<td colspan='2' style='text-align:left;color:#8B949E;font-weight:600;'>"
                         "Итого за месяц</td>"
                         f"<td style='text-align:right;font-weight:700;color:#C9D1D9;'>{_mpnl:,}</td>"
                         f"<td style='text-align:right;font-weight:700;color:#C9D1D9;'>{_mtr}</td>"
-                        "<td style='text-align:right;'></td>"
+                        # (пустой столбец cum убран — ячеек ровно 4: Date, WD, PnL, Trades)
                         "</tr></tfoot>"
                     )
                     # Таблица дней — свой HTML, а не st.dataframe: у грида мелкий шрифт

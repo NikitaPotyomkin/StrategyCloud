@@ -575,6 +575,249 @@ REGISTRY = {
     ),
 
 
+    # ═══════════ БАТЧ 4 (05.11.2026): 45 стратегий-кандидатов ═══════════
+    # Написаны 29–30.10, но в реестр не попали: в Roadmap у них не было
+    # колонки «Финализировано» (модуль не участвовал в ночном рэнкинге).
+    # Все 45 — единый контракт: calc_<name>(df, period), check_entry,
+    # check_exit, backtest. Сетка по 3 значения, 3 SL × 3 TP → 27 бэктестов
+    # на стратегию на символ (45 × 27 = 1215 на символ, ×7 символов ≈ 8500
+    # за ночь к прежним ~15 000). Если ночное окно перестанет влезать —
+    # резать здесь, а не в цикле бэктеста (см. комментарий к ENABLED_BATCH).
+    # Каналы (4)
+    'chan_adaptive_donchian': dict(
+        module='chan_adaptive_donchian', calc='calc_chan_adaptive_donchian',
+        entry='check_entry', exit='check_exit',
+        label='ch_ad', grid=[10, 20, 55], min_len=150,
+    ),
+    'chan_donchian_pct_squeeze': dict(
+        module='chan_donchian_pct_squeeze', calc='calc_chan_donchian_pct_squeeze',
+        entry='check_entry', exit='check_exit',
+        label='ch_sq', grid=[20, 34, 55], min_len=150,
+    ),
+    'chan_median_band': dict(
+        module='chan_median_band', calc='calc_chan_median_band',
+        entry='check_entry', exit='check_exit',
+        label='ch_med', grid=[20, 50, 100], min_len=150,
+    ),
+    'chan_regression_band_z': dict(
+        module='chan_regression_band_z', calc='calc_chan_regression_band_z',
+        entry='check_entry', exit='check_exit',
+        label='ch_reg', grid=[50, 100], min_len=260,
+    ),
+    # Волатильность / режим волатильности (10)
+    'volreg_bbw_pct_low': dict(
+        module='volreg_bbw_pct_low', calc='calc_volreg_bbw_pct_low',
+        entry='check_entry', exit='check_exit',
+        label='vr_bbw', grid=[20, 50, 100], min_len=150,
+    ),
+    'volreg_choppiness': dict(
+        module='volreg_choppiness', calc='calc_volreg_choppiness',
+        entry='check_entry', exit='check_exit',
+        label='vr_chop', grid=[14, 20, 28], min_len=150,
+    ),
+    'volreg_gk_zscore': dict(
+        module='volreg_gk_zscore', calc='calc_volreg_gk_zscore',
+        entry='check_entry', exit='check_exit',
+        label='vr_gk', grid=[20, 50, 100], min_len=150,
+    ),
+    'volreg_nr7_break': dict(
+        module='volreg_nr7_break', calc='calc_volreg_nr7_break',
+        entry='check_entry', exit='check_exit',
+        label='vr_nr7', grid=[7, 14, 21], min_len=120,
+    ),
+    'volreg_parkinson_ratio': dict(
+        module='volreg_parkinson_ratio', calc='calc_volreg_parkinson_ratio',
+        entry='check_entry', exit='check_exit',
+        label='vr_park', grid=[14, 20, 50], min_len=150,
+    ),
+    'volreg_range_expansion': dict(
+        module='volreg_range_expansion', calc='calc_volreg_range_expansion',
+        entry='check_entry', exit='check_exit',
+        label='vr_rex', grid=[5, 10, 20], min_len=120,
+    ),
+    'volreg_rs_break': dict(
+        module='volreg_rs_break', calc='calc_volreg_rs_break',
+        entry='check_entry', exit='check_exit',
+        label='vr_rs', grid=[10, 20, 50], min_len=150,
+    ),
+    'volreg_volofvol': dict(
+        module='volreg_volofvol', calc='calc_volreg_volofvol',
+        entry='check_entry', exit='check_exit',
+        label='vr_vov', grid=[20, 60, 120], min_len=200,
+    ),
+    'volreg_wr7_fade': dict(
+        module='volreg_wr7_fade', calc='calc_volreg_wr7_fade',
+        entry='check_entry', exit='check_exit',
+        label='vr_wr7', grid=[7, 14, 21], min_len=120,
+    ),
+    'volreg_yz_regime': dict(
+        module='volreg_yz_regime', calc='calc_volreg_yz_regime',
+        entry='check_entry', exit='check_exit',
+        label='vr_yz', grid=[12, 24, 48], min_len=150,
+    ),
+    # Профиль объёма (5)
+    'volprof_cvd_div': dict(
+        module='volprof_cvd_div', calc='calc_volprof_cvd_div',
+        entry='check_entry', exit='check_exit',
+        label='vp_cvd', grid=[20, 50, 100], min_len=150,
+    ),
+    'volprof_effort_result': dict(
+        module='volprof_effort_result', calc='calc_volprof_effort_result',
+        entry='check_entry', exit='check_exit',
+        label='vp_er', grid=[10, 20, 50], min_len=150,
+    ),
+    'volprof_poc_break': dict(
+        module='volprof_poc_break', calc='calc_volprof_poc_break',
+        entry='check_entry', exit='check_exit',
+        label='vp_poc', grid=[1, 5, 20], min_len=120,
+    ),
+    'volprof_volume_dry': dict(
+        module='volprof_volume_dry', calc='calc_volprof_volume_dry',
+        entry='check_entry', exit='check_exit',
+        label='vp_dry', grid=[5, 10, 20], min_len=120,
+    ),
+    'volprof_vol_imbalance': dict(
+        module='volprof_vol_imbalance', calc='calc_volprof_vol_imbalance',
+        entry='check_entry', exit='check_exit',
+        label='vp_imb', grid=[10, 20, 50], min_len=150,
+    ),
+    # Паттерны (3; rectangle_break и wedge_rising уже в реестре)
+    'pattern_flag_bull': dict(
+        module='pattern_flag_bull', calc='calc_pattern_flag_bull',
+        entry='check_entry', exit='check_exit',
+        label='pt_flag', grid=[10, 20, 40], min_len=150,
+    ),
+    'pattern_gap_go': dict(
+        module='pattern_gap_go', calc='calc_pattern_gap_go',
+        entry='check_entry', exit='check_exit',
+        label='pt_gap', grid=[1, 5, 10], min_len=120,
+    ),
+    'pattern_triangle_sym': dict(
+        module='pattern_triangle_sym', calc='calc_pattern_triangle_sym',
+        entry='check_entry', exit='check_exit',
+        label='pt_tri', grid=[10, 20, 40], min_len=150,
+    ),
+    # Осцилляторы (8; klinger уже в реестре)
+    'osc_aroon': dict(
+        module='osc_aroon', calc='calc_osc_aroon',
+        entry='check_entry', exit='check_exit',
+        label='os_aroon', grid=[14, 25, 50], min_len=150,
+    ),
+    'osc_bop': dict(
+        module='osc_bop', calc='calc_osc_bop',
+        entry='check_entry', exit='check_exit',
+        label='os_bop', grid=[10, 14, 20], min_len=120,
+    ),
+    'osc_center_of_gravity': dict(
+        module='osc_center_of_gravity', calc='calc_osc_center_of_gravity',
+        entry='check_entry', exit='check_exit',
+        label='os_cog', grid=[10, 14, 20], min_len=120,
+    ),
+    'osc_coppock': dict(
+        module='osc_coppock', calc='calc_osc_coppock',
+        entry='check_entry', exit='check_exit',
+        label='os_copp', grid=[10, 14, 20], min_len=120,
+    ),
+    'osc_ehlers_stoch': dict(
+        module='osc_ehlers_stoch', calc='calc_osc_ehlers_stoch',
+        entry='check_entry', exit='check_exit',
+        label='os_ehl', grid=[10, 14, 20], min_len=120,
+    ),
+    'osc_kst': dict(
+        module='osc_kst', calc='calc_osc_kst',
+        entry='check_entry', exit='check_exit',
+        label='os_kst', grid=[9, 12, 20], min_len=120,
+    ),
+    'osc_mass_index': dict(
+        module='osc_mass_index', calc='calc_osc_mass_index',
+        entry='check_entry', exit='check_exit',
+        label='os_mass', grid=[20, 25, 50], min_len=150,
+    ),
+    'osc_z_rsi': dict(
+        module='osc_z_rsi', calc='calc_osc_z_rsi',
+        entry='check_entry', exit='check_exit',
+        label='os_zrsi', grid=[50, 100], min_len=200,
+    ),
+    # Статистика (3)
+    'stat_adf_regime': dict(
+        module='stat_adf_regime', calc='calc_stat_adf_regime',
+        entry='check_entry', exit='check_exit',
+        label='st_adf', grid=[60, 120], min_len=200,
+    ),
+    'stat_half_life': dict(
+        module='stat_half_life', calc='calc_stat_half_life',
+        entry='check_entry', exit='check_exit',
+        label='st_hl', grid=[50, 100], min_len=200,
+    ),
+    'stat_lz_complexity': dict(
+        module='stat_lz_complexity', calc='calc_stat_lz_complexity',
+        entry='check_entry', exit='check_exit',
+        label='st_lz', grid=[50, 100], min_len=200,
+    ),
+    # Режимы (3)
+    'regime_er_adx_matrix': dict(
+        module='regime_er_adx_matrix', calc='calc_regime_er_adx_matrix',
+        entry='check_entry', exit='check_exit',
+        label='rg_adx', grid=[10, 20, 40], min_len=150,
+    ),
+    'regime_er_low': dict(
+        module='regime_er_low', calc='calc_regime_er_low',
+        entry='check_entry', exit='check_exit',
+        label='rg_er', grid=[10, 20, 40], min_len=150,
+    ),
+    'regime_vol_switch': dict(
+        module='regime_vol_switch', calc='calc_regime_vol_switch',
+        entry='check_entry', exit='check_exit',
+        label='rg_vol', grid=[10, 20, 40], min_len=150,
+    ),
+    # Пары / спреды (3)
+    'pair_halflife_entry': dict(
+        module='pair_halflife_entry', calc='calc_pair_halflife_entry',
+        entry='check_entry', exit='check_exit',
+        label='pr_hl', grid=[50, 100], min_len=260,
+    ),
+    'pair_ratio_trend': dict(
+        module='pair_ratio_trend', calc='calc_pair_ratio_trend',
+        entry='check_entry', exit='check_exit',
+        label='pr_ratio', grid=[10, 20, 50], min_len=150,
+    ),
+    'pair_spread_z_simple': dict(
+        module='pair_spread_z_simple', calc='calc_pair_spread_z_simple',
+        entry='check_entry', exit='check_exit',
+        label='pr_z', grid=[50, 100], min_len=260,
+    ),
+    # Моментум (6)
+    'mom_accel_z': dict(
+        module='mom_accel_z', calc='calc_mom_accel_z',
+        entry='check_entry', exit='check_exit',
+        label='mm_accel', grid=[10, 20, 40], min_len=150,
+    ),
+    'mom_breakout_confirm': dict(
+        module='mom_breakout_confirm', calc='calc_mom_breakout_confirm',
+        entry='check_entry', exit='check_exit',
+        label='mm_break', grid=[10, 20, 40], min_len=150,
+    ),
+    'mom_efficiency': dict(
+        module='mom_efficiency', calc='calc_mom_efficiency',
+        entry='check_entry', exit='check_exit',
+        label='mm_eff', grid=[10, 20, 40], min_len=150,
+    ),
+    'mom_pullback_ratio': dict(
+        module='mom_pullback_ratio', calc='calc_mom_pullback_ratio',
+        entry='check_entry', exit='check_exit',
+        label='mm_pull', grid=[10, 20, 40], min_len=150,
+    ),
+    'mom_roc_of_roc': dict(
+        module='mom_roc_of_roc', calc='calc_mom_roc_of_roc',
+        entry='check_entry', exit='check_exit',
+        label='mm_ror', grid=[5, 10, 20], min_len=120,
+    ),
+    'mom_vs_vol': dict(
+        module='mom_vs_vol', calc='calc_mom_vs_vol',
+        entry='check_entry', exit='check_exit',
+        label='mm_vol', grid=[10, 20, 40], min_len=150,
+    ),
+
 }
 
 _MODULE_CACHE = {}
@@ -626,6 +869,28 @@ ENABLED_BATCH = (
     # остальные семейства не трогаются.
     'ma_zerolag', 'ma_frama', 'ma_vote', 'klinger',
     'rect_break', 'wedge_rise', 'swing_bos',
+    # ── Батч 5 (05.11.2026): 45 кандидатов 29–30.10 в ночной рэнкинг ──
+    # Просьба: «в Roadmap не все финализированы — добавить их все». Здесь
+    # именно те standalone-модули, которых не было ни в REGISTRY, ни в
+    # нативной сетке functions.py. +45 стратегий ≈ +112 параметризаций на
+    # символ → 112 × 3 SL × 3 TP ≈ 1000 бэктестов на символ (×7 ≈ +7000 за
+    # ночь к прежним ~15 000, это ~+45% ко времени пересчёта).
+    # Если ночное окно не влезает — резать этот блок, начиная с хвоста.
+    'chan_adaptive_donchian', 'chan_donchian_pct_squeeze', 'chan_median_band',
+    'chan_regression_band_z',
+    'volreg_bbw_pct_low', 'volreg_choppiness', 'volreg_gk_zscore', 'volreg_nr7_break',
+    'volreg_parkinson_ratio', 'volreg_range_expansion', 'volreg_rs_break',
+    'volreg_volofvol', 'volreg_wr7_fade', 'volreg_yz_regime',
+    'volprof_cvd_div', 'volprof_effort_result', 'volprof_poc_break',
+    'volprof_volume_dry', 'volprof_vol_imbalance',
+    'pattern_flag_bull', 'pattern_gap_go', 'pattern_triangle_sym',
+    'osc_aroon', 'osc_bop', 'osc_center_of_gravity', 'osc_coppock',
+    'osc_ehlers_stoch', 'osc_kst', 'osc_mass_index', 'osc_z_rsi',
+    'stat_adf_regime', 'stat_half_life', 'stat_lz_complexity',
+    'regime_er_adx_matrix', 'regime_er_low', 'regime_vol_switch',
+    'pair_halflife_entry', 'pair_ratio_trend', 'pair_spread_z_simple',
+    'mom_accel_z', 'mom_breakout_confirm', 'mom_efficiency',
+    'mom_pullback_ratio', 'mom_roc_of_roc', 'mom_vs_vol',
 )
 
 

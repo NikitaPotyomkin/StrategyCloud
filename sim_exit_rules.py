@@ -56,7 +56,9 @@ def _flows():
     """Внешние деньги по замерам: ts_true -> накопительно, и день операции."""
     try:
         import cashflow as _cf
-        rows = _cf.ops_list(limit=5000)
+        # Только реальные движения (source='deals'): 'reconcile' — синтетика сверки,
+        # дублировавшая пополнения (см. cashflow.reconcile, 05.11.2026).
+        rows = _cf.ops_list(limit=5000, sources=('deals',))
     except Exception as exc:
         print("  cashflow недоступен ({}): вычет внешних денег отключён".format(exc))
         return pd.DataFrame(columns=['ts_true', 'day', 'amount'])

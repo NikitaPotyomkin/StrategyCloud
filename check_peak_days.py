@@ -78,7 +78,9 @@ def _flows_frame():
     empty = pd.DataFrame(columns=['ts', 'ts_true', 'day', 'amount'])
     try:
         import cashflow as _cf
-        rows = _cf.ops_list(limit=5000)
+        # Только реальные движения (source='deals'): 'reconcile' — синтетика сверки
+        # баланса, дублировавшая пополнения; см. cashflow.reconcile (05.11.2026).
+        rows = _cf.ops_list(limit=5000, sources=('deals',))
     except Exception as exc:
         print("  cashflow/balance_ops недоступны ({}): вычет отключён".format(exc))
         return empty

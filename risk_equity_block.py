@@ -197,7 +197,9 @@ def _flows_df() -> pd.DataFrame:
     recs = []
     try:
         import cashflow as _cashflow
-        rows = _cashflow.ops_list(limit=5000)
+        # Только реальные движения (source='deals'): 'reconcile' — синтетика сверки
+        # баланса, дублировавшая пополнения (см. cashflow.reconcile, 05.11.2026).
+        rows = _cashflow.ops_list(limit=5000, sources=('deals',))
     except Exception:
         rows = []
     for row in rows:

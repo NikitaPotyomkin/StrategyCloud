@@ -4,7 +4,7 @@
   сделка идёт внутри дня и по удельной прибыли (₽ на лот) проходит 55к → 75к →
   90к ₽/лот. По истории ДНЕЙ есть эталон — МАКСИМУМ удельной прибыли дня за всё
   время (сейчас ≈ 12 409 ₽/лот), а не прибыль одной сделки. Как только удельная
-  прибыль СЧЁТА (потенциал дня / объём книги) доходит до pct (99%) эталона —
+  прибыль СЧЁТА (потенциал дня / плановый объём дня) доходит до pct (100%) эталона —
   режем ВСЕ позиции до 0.01 лот, остаток доживает до TP/SL, чтобы видеть, докуда
   дошла бы история. Эталон со временем поднимается сам.
 
@@ -25,8 +25,8 @@
 Что делает scan_and_trim() (на каждом тике сэмплера):
   1) эталон = ref_quantile(удельная прибыль ДНЯ из equity_samples) за lookback_days
      (lookback_days = 0 → вся история с начала работы робота, since 29.09.2026);
-  2) считает удельную прибыль ДНЯ сейчас: (equity − balance_начала_суток −
-     внешние пополнения/выводы) / суммарный объём книги — как на графике Risk;
+  2) считает удельную прибыль ДНЯ сейчас: (реализованные сделки дня + плавающая
+     открытых позиций) / ПЛАНОВЫЙ объём дня — как на графике Risk;
   3) ratio = удельная_дня / эталон; если ratio >= pct — в лог идёт
      `[TRIM] REAL/would …` (и событие в peak_trim) → РЕЖЕМ ВСЕ позиции своих
      magic до keep_volume; остаток доживает до своего TP/SL;
@@ -51,7 +51,9 @@
 """
 
 import datetime
+import json
 import math
+import os
 
 from config import PeakTrimParams
 
@@ -61,6 +63,14 @@ _MAX_MAGIC = 869999
 
 # Серверное время = UTC+3 (та же граница суток, что в equity_samples/риск-блоке)
 SRV_OFFSET_H = 3
+
+# План на день — journals/active_state.json (собирает ночной реранк), а НЕ
+# фактическая книга за сутки: порог трима в рублях должен быть один на день.
+PLAN_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'journals', 'active_state.json')
+PLAN_CACHE_SEC = 300      # как часто перечитывать файл плана (с)
+PLAN_MAX_AGE_H = 26.0     # план старше — недостоверен (ночной реранк не прошёл)
+_PLAN_CACHE = {'ts': 0.0, 'vol': 0.0, 'updated': ''}
 
 # Порог, начиная с которого shadow-решение попадает в лог (доля эталона)
 _EVAL_THRESHOLDS = (0.70, 0.75, 0.80, 0.85, 0.90)
@@ -354,7 +364,9 @@ def _flows_map():
     out = {}
     try:
         import cashflow
-        rows = cashflow.ops_list(limit=5000)
+        # Только реальные движения (source='deals'): 'reconcile' — синтетика сверки,
+        # дублировавшая пополнения; 'cutoff'/'bootstrap' — входящий остаток.
+        rows = cashflow.ops_list(limit=5000, sources=('deals',))
     except Exception:
         return out
     for row in rows:
@@ -551,16 +563,61 @@ def _daily_ref(con, today, cfg, login):
             'last_day': max(vals)}
 
 
-def _plan_volume(con, today, login, cur_vol):
-    """Плановый объём книги на день (лот) — максимум суммарного объёма за сутки.
+def _plan_from_state():
+    """Σ лотов плана из journals/active_state.json: (объём, дата сборки плана).
 
-    Берём максимум из equity_samples.floating_volume по замерам сегодняшнего дня
-    и текущей суммы объёмов открытых позиций. Знаменатель удельной НЕ должен
-    уменьшаться, когда пара сделок закрылась: потенциал дня (реализованное +
-    floating) тогда делится на остаток книги, ₽/лот задирается и получается
-    ложный трим. Поэтому считаем по плановому объёму, а уход текущего объёма
-    от плана проверяем допуском cfg.volume_tolerance_pct.
+    Файл собирает ночной реранк (~00:49), расклад — на текущие сутки, поэтому
+    план известен с утра и в течение дня не меняется. Кэш PLAN_CACHE_SEC, чтобы
+    не читать файл на каждом замере. Возвращает (0.0, '') — плана нет, файл
+    битый, план пуст или старше PLAN_MAX_AGE_H часов (тогда работает фолбэк
+    в _plan_volume: максимум фактической книги за сутки).
     """
+    now = datetime.datetime.now()
+    if _PLAN_CACHE['ts'] and (now.timestamp() - _PLAN_CACHE['ts']) < PLAN_CACHE_SEC:
+        return float(_PLAN_CACHE['vol']), str(_PLAN_CACHE['updated'])
+    vol, updated = 0.0, ''
+    try:
+        with open(PLAN_STATE_PATH, 'r', encoding='utf-8') as fh:
+            state = json.load(fh)
+        for item in (state.get('strategies') or []):
+            try:
+                vol += float(item.get('lot') or 0.0)
+            except (TypeError, ValueError):
+                continue
+        updated = str(state.get('updated') or '')
+        if updated:
+            try:
+                _age_h = ((now - datetime.datetime.fromisoformat(updated))
+                          .total_seconds() / 3600.0)
+            except ValueError:
+                _age_h = 0.0
+            if _age_h > PLAN_MAX_AGE_H:
+                vol = 0.0      # план протух — реранк не прошёл, берём фолбэк
+    except (OSError, ValueError, TypeError):
+        vol, updated = 0.0, ''
+    _PLAN_CACHE.update({'ts': now.timestamp(), 'vol': vol, 'updated': updated})
+    return float(vol), str(updated)
+
+
+def _plan_volume(con, today, login, cur_vol):
+    """Плановый объём дня (лот) — Σ лотов плана из journals/active_state.json.
+
+    План собирает ночной реранк и в течение суток НЕ меняется: порог трима в
+    рублях (pct × эталон × plan_vol) один на день и не «догоняет» разросшуюся
+    книгу, как было с максимумом фактического объёма за сутки.
+    Знаменатель удельной тоже один на день: закрытие пачки сделок не задирает
+    ₽/лот. Фолбэк (плана нет / он битый / старше PLAN_MAX_AGE_H часов) — прежнее
+    поведение: максимум книги из equity_samples плюс текущий объём.
+    Уход текущей книги от плана проверяем допуском cfg.volume_tolerance_pct.
+    """
+
+    plan, _plan_upd = _plan_from_state()
+    if plan > 0:
+        return plan
+    # Фолбэк: плана нет или он протух — максимум фактической книги за сутки
+    # (прежнее поведение до 05.11.2026: порог рос вместе с книгой)
+    # (источник плана, кэш и срок годности — в _plan_from_state).
+    # плана нет — считаем по фактической книге; порог тогда снова «плывёт».
     best = float(cur_vol or 0.0)
     try:
         row = con.execute(
@@ -575,10 +632,11 @@ def _plan_volume(con, today, login, cur_vol):
 
 
 def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
-    """Текущая удельная прибыль дня: потенциал дня / ПЛАНОВЫЙ объём книги.
+    """Текущая удельная прибыль дня: потенциал дня / ПЛАНОВЫЙ объём дня.
 
-    Плановый объём дня (_plan_volume) — максимум объёма книги за сутки: он не
-    уменьшается, когда пара сделок закрылась, поэтому удельная не задирается.
+    Плановый объём дня (_plan_volume) — Σ лотов из journals/active_state.json:
+    он фиксирован на сутки, поэтому удельная не задирается, а порог в рублях
+    не «догоняет» книгу, разросшуюся за день (фолбэк — максимум книги за сутки).
     Допуск tolerance — насколько текущий объём может уйти от плана (±20%);
     vol_dev/in_tol возвращаем, чтобы лог и дэш показали уход объёма от плана.
     День считается по серверному времени (UTC+3), как и дни эталона.
@@ -600,7 +658,7 @@ def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
     # пополнения/выводы дня. При выводе ext < 0 «минус на минус» прибавлял
     # сумму к потенциалу — отсюда фиктивные пики 02.11.2026 (195 000 ₽).
     # Теперь: potential = реализованные сделки дня + floating открытых позиций.
-    # Сделки — из trades_db (deal_type IN (0,1)):     # Сделки — из trades_db (deal_type IN (0,1)), пополнение сделкой не является.
+    # Сделки — из trades_db (deal_type IN (0,1)): пополнение сделкой не является.
     # Если ингест сделок отстал, останется только плавающая — это честнее,
     # чем подмешивать баланс счёта и внешние деньги.
     # Ниже — знаменатель удельной (плановый объём дня), код не менялся.
@@ -610,10 +668,14 @@ def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
     # potential и per_lot остались теми же ключами — трим читает их как раньше.
     # Знаменатель удельной — ПЛАНОВЫЙ объём дня, не остаток книги: иначе
     # закрытие пары сделок уменьшает объём, ₽/лот растёт и трим врёт.
+    # Источник знаменателя: план из active_state.json, иначе фолбэк на книгу.
+    _plan_state, _plan_upd = _plan_from_state()
     plan_vol = _plan_volume(con, today, login, vol)
     denom = plan_vol if plan_vol > 0 else vol
     vol_dev = ((vol - plan_vol) / plan_vol) if plan_vol > 0 else 0.0
     return {'potential': potential, 'vol': vol, 'plan_vol': plan_vol,
+            'plan_src': ('план' if _plan_state > 0 else 'книга'),
+            'plan_updated': _plan_upd,
             'vol_dev': vol_dev, 'in_tol': abs(vol_dev) <= float(tolerance),
             'realized': _real,
             'floating': _floating, 'per_lot': (potential / denom if denom > 0 else None),
@@ -681,7 +743,7 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                           f"{_space(cfg.min_ref_per_lot)}) — правило не оцениваем",
                           flush=True)
                 return 0
-            # Объём в правиле — ПЛАНОВЫЙ объём дня (максимум книги за сутки),
+            # Объём в правиле — ПЛАНОВЫЙ объём дня из active_state.json (Σ лотов),
             # допуск отклонения текущего объёма от плана — volume_tolerance_pct.
             _tol = float(getattr(cfg, 'volume_tolerance_pct', 0.20))
             cur = _today_per_lot(con, acc, positions, today, login, _tol)
@@ -719,9 +781,13 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                       flush=True)
                 print(f"  [TRIM]   Объём: {float(cur.get('vol') or 0):.2f} из плановых "
                       f"{float(cur.get('plan_vol') or 0):.2f} лот "
+                      f"[{cur.get('plan_src') or '?'}] "
                       f"({float(cur.get('vol_dev') or 0) * 100:+.0f}%, "
                       f"допуск ±{_tol * 100:.0f}%)", flush=True)
                 print(f"  [TRIM]   Эталон: {_space(ref_val)} ₽/лот ({_ref_label(cfg)})",
+                      flush=True)
+                print(f"  [TRIM]   Порог: {ref_val * float(cfg.pct) * float(cur.get('plan_vol') or 0):,.0f} ₽ "
+                      f"({float(cfg.pct) * 100:.0f}% эталона × план {float(cur.get('plan_vol') or 0):.2f} лот)",
                       flush=True)
                 print(f"  [TRIM]   Выполнение: {_acct_ratio * 100:.0f}% {'→ РЕЖЕМ' if _acct_hit else ''}",
                       flush=True)
@@ -923,6 +989,15 @@ def main():
     if args.eval or not args.live:
         evaluate(cfg=cfg, path=args.db)
     if args.live:
+
+        _plan_vol_d, _plan_upd_d = _plan_from_state()
+        if _plan_vol_d > 0:
+            print(f"  [TRIM] план дня: {_plan_vol_d:.2f} лот "
+                  f"(journals/active_state.json, собран {_plan_upd_d})", flush=True)
+        else:
+            print("  [TRIM] план дня: НЕТ достоверного плана — фолбэк на максимум "
+                  "фактической книги за сутки (порог будет расти в течение дня)",
+                  flush=True)
         n = scan_and_trim(cfg=cfg, path=args.db)
         print(f"  [TRIM] триггеров: {n}", flush=True)
     return 0

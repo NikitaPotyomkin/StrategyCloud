@@ -337,7 +337,8 @@ def bootstrap(verbose=True):
 def reconcile(balance_now, verbose=True):
     """Ловит движения средств, которых нет в истории сделок (демо-перезапись).
 
-    expected = last_balance + Σ торговых сделок, появившихся после прошлой сверки.
+    expected = last_balance + Σ торговых сделок + Σ пополнений/выводов (source='deals')
+    за окно после прошлой сверки.
     Расхождение больше допуска → синтетическая операция source='reconcile'.
 
     last_check_ts хранится в СЕРВЕРНОМ времени (как время сделок), поэтому
@@ -365,7 +366,22 @@ def reconcile(balance_now, verbose=True):
             trade_pnl += _deal_net(d)
     ops = []
     if last_balance is not None and balance_now is not None:
-        unexplained = float(balance_now) - float(last_balance) - trade_pnl
+        # Реальные пополнения/выводы (source='deals') тоже меняют баланс — их
+        # обязательно вычитаем. Без этого КАЖДОЕ пополнение учитывалось дважды:
+        # один раз как сделка типа balance и второй раз как «необъяснимое»
+        # движение — отсюда фиктивные 668 941 ₽ пополнений / 461 903 ₽ выводов.
+        external = 0.0
+        try:
+            _con = _connect()
+            _row = _con.execute(
+                "SELECT SUM(amount) AS s FROM balance_ops "
+                "WHERE account_login = ? AND source = 'deals' AND ts >= ?",
+                (_account_login(), int(last_ts or 0))).fetchone()
+            external = float((_row['s'] if _row is not None else 0.0) or 0.0)
+            _con.close()
+        except Exception:
+            external = 0.0
+        unexplained = float(balance_now) - float(last_balance) - trade_pnl - external
         if abs(unexplained) >= TOLERANCE_RUB:
             ts = int(time.time())
             ops.append({
@@ -453,13 +469,27 @@ def maybe_sync(min_gap=300, balance_now=None, verbose=False):
     return n
 
 
-def ops_list(from_ts=None, to_ts=None, limit=200):
-    """Список операций (для дэшборда): [(ts, amount, kind, source, comment)]."""
+
+def ops_list(from_ts=None, to_ts=None, limit=200, sources=None, account_login=None):
+    """Список операций (для дэшборда): [(ts, amount, kind, source, comment)].
+
+    sources — какие источники брать: ('deals',) = только реальные движения из
+    истории сделок; 'reconcile' — синтетическая сверка баланса, 'cutoff' /
+    'bootstrap' — входящий остаток периода учёта (это НЕ пополнение дня).
+    None — все источники.
+    account_login — ограничить одним счётом: в balance_ops лежат операции
+    нескольких логинов (демо/тесты), иначе суммы смешиваются.
+    """
     where, args = [], []
     if from_ts:
         where.append('ts >= ?'); args.append(int(from_ts))
     if to_ts:
         where.append('ts < ?'); args.append(int(to_ts))
+    if account_login:
+        where.append('account_login = ?'); args.append(int(account_login))
+    if sources:
+        where.append('source IN (' + ','.join('?' * len(sources)) + ')')
+        args.extend([str(_s) for _s in sources])
     q = ("SELECT ts, amount, kind, source, comment FROM balance_ops"
          + (" WHERE " + " AND ".join(where) if where else "")
          + f" ORDER BY ts DESC LIMIT {int(limit)}")
@@ -470,7 +500,7 @@ def ops_list(from_ts=None, to_ts=None, limit=200):
         con.close()
 
 
-def summary(from_ts=None, to_ts=None, account_login=None):
+def summary(from_ts=None, to_ts=None, account_login=None, sources=None):
     """(пополнения, выводы, нетто, число операций) за окно.
 
     «Пополнения» включают входящий остаток на начало периода учёта — это тоже
@@ -483,6 +513,11 @@ def summary(from_ts=None, to_ts=None, account_login=None):
         where.append('ts < ?'); args.append(int(to_ts))
     if account_login:
         where.append('account_login = ?'); args.append(int(account_login))
+    if account_login:
+        where.append('account_login = ?'); args.append(int(account_login))
+    if sources:
+        where.append('source IN (' + ','.join('?' * len(sources)) + ')')
+        args.extend([str(_s) for _s in sources])
     q = ("SELECT amount FROM balance_ops"
          + (" WHERE " + " AND ".join(where) if where else ""))
     deposit = withdraw = 0.0
@@ -517,7 +552,31 @@ if __name__ == '__main__':
         for _ts, _amt, _kind, _src, _cmt in ops_list(limit=20):
             _when = datetime.fromtimestamp(_ts).strftime('%Y-%m-%d %H:%M')
             print(f"  {_when}  {_amt:+12,.2f}  {_kind:<10} [{_src}]  {_cmt}")
-    dep, wd, net, cnt = summary()
+    elif _cmd == 'purge-reconcile':
+        # Синтетические операции сверки (source='reconcile') — не движения денег:
+        # до 05.11.2026 в них дублировалось каждое пополнение/вывод. Удаляем.
+        _login = int(getattr(_acc, 'login', 0) or 0) if _acc else 0
+        _con = _connect()
+        try:
+            _row = _con.execute(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS s FROM balance_ops "
+                "WHERE source = 'reconcile' AND account_login = ?", (_login,)).fetchone()
+            _n = int(_row['n'] or 0) if _row is not None else 0
+            _s = float(_row['s'] or 0.0) if _row is not None else 0.0
+            print(f"синтетических операций сверки (счёт {_login}): {_n}, "
+                  f"их сумма {_s:+,.0f} ₽")
+            if '--yes' in sys.argv and _n:
+                _cur = _con.execute(
+                    "DELETE FROM balance_ops WHERE source = 'reconcile' AND account_login = ?",
+                    (_login,))
+                _con.commit()
+                print(f"удалено строк: {int(getattr(_cur, 'rowcount', 0) or 0)}")
+            elif _n:
+                print("ничего не удалено: добавьте --yes для удаления")
+        finally:
+            _con.close()
+    dep, wd, net, cnt = summary(account_login=int(getattr(_acc, 'login', 0) or 0),
+                                sources=('deals',))
     _period = CUTOFF_BY_LOGIN.get(int(getattr(_acc, 'login', 0) or 0)) if _acc else None
     _tail = f" (период учёта с {_period})" if _period else ""
     print(f"за всё время{_tail}: пополнения {dep:+,.0f} ₽, выводы {wd:+,.0f} ₽, "
