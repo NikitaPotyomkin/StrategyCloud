@@ -13,8 +13,27 @@ def calc_osc_aroon(df, period=25):
     high_25 = df['high'].rolling(period).max()
     low_25 = df['low'].rolling(period).min()
     
-    periods_since_high = period - df['high'].rolling(period).apply(lambda x: len(x)-1-x[x==x.max()].index[0], raw=True)
-    periods_since_low = period - df['low'].rolling(period).apply(lambda x: len(x)-1-x[x==x.min()].index[0], raw=True)
+    # (right) rolling.apply с lambda и .index ломается на numpy arrays —
+    # переписываем через explicit loop, возвращая float
+    def _last_max_idx(arr):
+        """Индекс последнего максимума в массиве."""
+        if len(arr) == 0:
+            return 0.0
+        max_val = np.max(arr)
+        # Ищем последний индекс максимума
+        indices = np.where(arr == max_val)[0]
+        return float(len(arr) - 1 - indices[-1])
+    
+    def _last_min_idx(arr):
+        """Индекс последнего минимума в массиве."""
+        if len(arr) == 0:
+            return 0.0
+        min_val = np.min(arr)
+        indices = np.where(arr == min_val)[0]
+        return float(len(arr) - 1 - indices[-1])
+    
+    periods_since_high = df['high'].rolling(period).apply(_last_max_idx, raw=True)
+    periods_since_low = df['low'].rolling(period).apply(_last_min_idx, raw=True)
     
     aroon_up = periods_since_high / period * 100
     aroon_down = periods_since_low / period * 100

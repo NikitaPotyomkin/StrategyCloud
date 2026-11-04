@@ -14,10 +14,14 @@ def calc_stat_adf_regime(df, period=120):
     
     lag = min(10, period // 10)
     delta_ret = ret.diff()
-    lags = pd.concat([delta_ret, ret.shift(1).rolling(lag+1).apply(lambda x: x[:-1])], axis=1).dropna()
+    # Лаги Δr строим сдвигами. Было .rolling(lag+1).apply(lambda x: x[:-1]) —
+    # rolling.apply ждёт СКАЛЯР, а получал Series → TypeError: must be real
+    # number, not Series, и стратегия падала целиком (profit 0 в ночи).
+    lags = pd.concat([delta_ret] + [delta_ret.shift(k) for k in range(1, lag + 1)],
+                     axis=1).dropna()
     
-    y = lags.iloc[:, -1]
-    X = lags.iloc[:, :-1]
+    y = lags.iloc[:, 0]      # Δr_t — зависимая переменная
+    X = lags.iloc[:, 1:]     # лаги Δr — регрессоры
     X = pd.concat([pd.Series(1, index=X.index), X], axis=1)
     
     beta = np.zeros(len(df))
@@ -28,10 +32,13 @@ def calc_stat_adf_regime(df, period=120):
         X_i = X.iloc[i-period:i]
         
         try:
-            beta_i = np.linalg.inv(X_i.T @ X_i) @ X_i.T @ y_i
+            XtX = X_i.T @ X_i
+            Xty = X_i.T @ y_i
+            beta_i = np.linalg.solve(XtX, Xty)
             residuals = y_i - X_i @ beta_i
-            se = np.sqrt(np.sum(residuals**2) / (period - 2) / (X_i.T @ X_i).iloc[0, 0])
-            t_stat = beta_i[0] / se if se > 0 else 0
+            # (right) float(XtX.iloc[0, 0]) — иначе TypeError: must be real number, not Series
+            se = np.sqrt(np.sum(residuals**2) / (period - 2) / float(XtX.iloc[0, 0]))
+            t_stat = float(beta_i[0]) / se if se > 0 else 0.0
             p_value[i] = 2 * (1 - min(abs(t_stat) / 2, 1))
             
             if p_value[i] < 0.05:
@@ -41,7 +48,10 @@ def calc_stat_adf_regime(df, period=120):
         except:
             beta[i] = 0
     
-    k = beta[period:]
+    # k — на всю длину df: раньше тут было beta[period:] (короче индекса df
+    # на period баров) → ValueError при присваивании колонки.
+    k = np.zeros(len(df))
+    k[period:] = beta[period:]
     
     df = df.copy()
     df['k'] = k
@@ -72,8 +82,8 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
         
-        sl = sl_points[0]
-        tp = tp_points[0]
+        sl = sl_points
+        tp = tp_points
 
         if prev_k == 0 and curr_k == 1:
             sl_price = df['close'].iloc[i] - sl * point

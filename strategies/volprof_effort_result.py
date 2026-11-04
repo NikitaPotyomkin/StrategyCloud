@@ -13,8 +13,11 @@ def calc_volprof_effort_result(df, period=20):
     vol = df['volume'] if 'volume' in df.columns else pd.Series(1, index=df.index)
     range_ = df['high'] - df['low']
     
-    vol_trend = vol.rolling(period).sum() - vol.rolling(period).shift(1).sum()
-    range_trend = range_.rolling(period).sum() - range_.rolling(period).shift(1).sum()
+    # (right) rolling.sum() затем shift — shift нельзя применять к Rolling объекту
+    vol_sum = vol.rolling(period).sum()
+    range_sum = range_.rolling(period).sum()
+    vol_trend = vol_sum - vol_sum.shift(1)
+    range_trend = range_sum - range_sum.shift(1)
     
     k = np.zeros(len(df))
     k[(vol_trend > 0) & (range_trend < 0)] = 1
@@ -44,8 +47,8 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     profit = 0
     n_trades = 0
     trade_profits = []
-    sl = sl_points[0]
-    tp = tp_points[0]
+    sl = sl_points
+    tp = tp_points
 
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]

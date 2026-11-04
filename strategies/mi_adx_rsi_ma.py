@@ -51,7 +51,8 @@ def calc_adx_rsi_ma(df, adx_period=14, rsi_period=14, ma_period=50):
     
     k = np.where(trend_up, 1.0, np.where(trend_down, -1.0, 0.0))
     
-    df['k'] = k.values
+    # (right) k уже numpy array — присваиваем напрямую
+    df['k'] = k
     
     return df
 

@@ -50,8 +50,9 @@ def check_exit(prev, curr, direction):
 def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
              sim_lot=0.01, spread_points=0):
     """Бэктест breakout continuation с объёмным фильтром."""
-    parts = str(param_key).split(',') if param_key else '20,60,80'
-    parts = parts.split('/')
+    # (right) param_key может прийти списком — приводим к строке перед split
+    param_key_str = str(param_key).split(',')[0] if isinstance(param_key, list) else str(param_key or '20,60,80')
+    parts = param_key_str.split(',')
     range_period = int(parts[0]) if len(parts) > 0 else 20
     vol_period = int(parts[1]) if len(parts) > 1 else 60
     vol_pct = int(parts[2]) if len(parts) > 2 else 80

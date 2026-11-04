@@ -39,7 +39,8 @@ def calc_stoch_atr_vol(df, stoch_period=14, atr_period=14, vol_period=30):
     
     k = stoch_signal * vol_conf
     
-    df['k'] = k.values
+    # (right) k уже numpy array — присваиваем напрямую
+    df['k'] = k
     
     return df
 

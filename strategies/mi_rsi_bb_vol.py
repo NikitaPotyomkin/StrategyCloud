@@ -46,7 +46,8 @@ def calc_rsi_bb_vol(df, rsi_period=14, bb_period=20, bb_std=2.0, vol_period=30):
     
     k = (rsi_signal + bb_signal) * vol_signal / 2.0
     
-    df['k'] = k.values
+    # (right) k уже numpy array — присваиваем напрямую, не нужно .values
+    df['k'] = k
     
     return df
 

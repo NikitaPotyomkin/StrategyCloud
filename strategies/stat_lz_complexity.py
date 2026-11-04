@@ -70,8 +70,8 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
         prev_k = df['k'].iloc[i-1]
         curr_k = df['k'].iloc[i]
         
-        sl = sl_points[0]
-        tp = tp_points[0]
+        sl = sl_points
+        tp = tp_points
 
         if prev_k == 0 and curr_k == 1:
             sl_price = df['close'].iloc[i] - sl * point

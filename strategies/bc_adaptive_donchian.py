@@ -21,8 +21,8 @@ def calc_adaptive_donchian(df, er_period=10, base_period=20):
     sum_delta = df['close'].diff().abs().rolling(er_period).sum()
     er = (delta / sum_delta).replace(0, 1e-8)
     
-    # Адаптивный период
-    adaptive_period = (base_period / er).astype(int).clip(base_period, base_period * 4)
+    # (right) fillna перед astype(int) — иначе IntCastingNaNError на NaN
+    adaptive_period = (base_period / er).fillna(base_period).astype(int).clip(base_period, base_period * 4)
     
     # Donchian канал
     upper = []

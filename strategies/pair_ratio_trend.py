@@ -42,8 +42,8 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     n_trades = 0
     trade_profits = []
 
-    sl = sl_points[0]
-    tp = tp_points[0]
+    sl = sl_points
+    tp = tp_points
 
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]

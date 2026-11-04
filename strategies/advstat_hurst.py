@@ -61,7 +61,9 @@ def calc_hurst_exponent(df, period=60):
         
         hurst_vals.append(h)
     
-    df['k'] = np.array(hurst_vals)
+    # (right) reindex на df.index — иначе Length mismatch если len(returns) != len(df)
+    hurst_series = pd.Series(hurst_vals, index=df.index[:len(hurst_vals)])
+    df['k'] = hurst_series.reindex(df.index, fill_value=0.5)
     
     return df
 

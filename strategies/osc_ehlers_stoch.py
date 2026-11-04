@@ -20,7 +20,8 @@ def calc_osc_ehlers_stoch(df, period=10):
     c3 = -a1 * a1
     c1 = 1 - c2 - c3
     
-    smoothed = pd.Series(0, index=df.index)
+    # (right) float64 вместо int64 — иначе TypeError при присваивании float в int Series
+    smoothed = pd.Series(0.0, index=df.index, dtype=float)
     for i in range(period, len(df)):
         smoothed.iloc[i] = c1 * close_norm.iloc[i] + c2 * smoothed.iloc[i-1] + c3 * smoothed.iloc[i-2]
     
@@ -53,8 +54,8 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     n_trades = 0
     trade_profits = []
     
-    sl = sl_points[0]
-    tp = tp_points[0]
+    sl = sl_points
+    tp = tp_points
     
     for i in range(1, len(df)):
         prev_k = df['k'].iloc[i-1]

@@ -48,8 +48,9 @@ def check_exit(prev, curr, direction):
 def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
              sim_lot=0.01, spread_points=0):
     """Бэктест mean reversion RSI+SMA."""
-    parts = str(param_key).split(',') if param_key else '14,50,2.0'
-    parts = parts.split('/')
+    # (right) param_key может прийти списком — приводим к строке перед split
+    param_key_str = str(param_key).split(',')[0] if isinstance(param_key, list) else str(param_key or '14,50,2.0')
+    parts = param_key_str.split(',')
     rsi_period = int(parts[0]) if len(parts) > 0 else 14
     sma_period = int(parts[1]) if len(parts) > 1 else 50
     std_mult = float(parts[2]) if len(parts) > 2 else 2.0
