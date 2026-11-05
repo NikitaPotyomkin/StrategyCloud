@@ -309,7 +309,7 @@ def _scan_sql():
     """Таблица Roadmap ИЗ SQL (roadmap_rows): файлы strategies/ дэш не читает.
 
     Сборку делает roadmap_build.refresh() — торговый цикл (main.py, раз в
-    ROADMAP_REFRESH_SEC) либо кнопка «↻ Пересчитать» ниже. Здесь только чтение
+    ROADMAP_REFRESH_SEC) или вручную `python roadmap_build.py`. Здесь только чтение
     двух таблиц, поэтому вкладка рисуется мгновенно.
     """
     try:
@@ -326,7 +326,7 @@ def _scan():
     """Таблица Roadmap ИЗ SQL (roadmap_rows). Файлы strategies/ дэш больше не читает.
 
     Сборку делает roadmap_build.refresh() — торговый цикл (main.py, раз в
-    ROADMAP_REFRESH_SEC) либо кнопка «↻ Пересчитать». Здесь остаётся только чтение
+    ROADMAP_REFRESH_SEC) или вручную `python roadmap_build.py`. Здесь остаётся только чтение
     двух таблиц, поэтому вкладка рисуется мгновенно и не грузит дэш.
     """
     try:
@@ -774,19 +774,9 @@ def _plan_gates() -> dict:
 def render_roadmap_tab() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
-    _hc1, _hc2 = st.columns([5, 1])
-    with _hc2:
-        if st.button("↻ Пересчитать", key='rdm_refresh', use_container_width=True,
-                     help='Пересобрать таблицу из файлов strategies/ и записать в SQL '
-                          '(та же операция, что roadmap_build.refresh() в цикле)'):
-            try:
-                import roadmap_build
-                _n = roadmap_build.refresh(verbose=False)
-                st.session_state['rdm_refresh_msg'] = f'пересобрано строк: {_n}'
-            except Exception as _exc:
-                st.session_state['rdm_refresh_msg'] = f'ошибка пересчёта: {_exc!r}'
-            _scan_sql.clear()
-            st.rerun()
+    # Кнопку «↻ Пересчитать» убрали: она вызывала тот же roadmap_build.refresh(),
+    # что торговый цикл main.py делает раз в ROADMAP_REFRESH_SEC (30 мин).
+    # После деплоя таблица обновляется сама — не позже чем через полчаса.
     rows, stat = _scan_sql()
     # Liveness накладываем ПРИ ОТРИСОВКЕ, а не в SQL: снимок пишет liveness.py
     # после прогона, и он может обновиться позже сборки roadmap_rows. Так
@@ -801,16 +791,14 @@ def render_roadmap_tab() -> None:
         # ключом реестра — поэтому ищем сначала по key, потом по fam.
         _r['alive'] = (_liv.get(str(_r.get('key') or ''), '')
                        or _liv.get(str(_r.get('fam') or ''), ''))
-    with _hc1:
-        if stat.get('saved_at'):
-            st.caption(f"таблица из SQL (`roadmap_rows`): {stat['saved_at']}"
-                       + (f" · {st.session_state['rdm_refresh_msg']}"
-                          if st.session_state.get('rdm_refresh_msg') else ''))
-        elif not rows:
-            st.caption("таблица в SQL ещё не собрана")
+    if stat.get('saved_at'):
+        st.caption(f"таблица из SQL (`roadmap_rows`): {stat['saved_at']}")
+    elif not rows:
+        st.caption("таблица в SQL ещё не собрана — её наполняет `python roadmap_build.py` "
+                   "или торговый цикл бота (раз в 30 мин)")
     if not rows:
-        st.warning("Таблица Roadmap ещё не собрана в SQL (`roadmap_rows`). Нажми "
-                   "«↻ Пересчитать» вверху вкладки или запусти `python roadmap_build.py`. "
+        st.warning("Таблица Roadmap ещё не собрана в SQL (`roadmap_rows`). Запусти "
+                   "`python roadmap_build.py` — или подожди ближайший цикл бота. "
                    "Дэш файлы strategies/ больше не читает.")
         return  # не st.stop(): Roadmap рендерится раньше Backtest — stop убил бы и его
 

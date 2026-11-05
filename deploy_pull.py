@@ -309,13 +309,32 @@ def main():
         write_status(rec, quiet)
         return 2
 
+    # ── 0b. Не мешаем полному пересчёту (ДО git) ──
+    # Замок checkpoints/full_recalc_inprogress.json лежит всё время ночного
+    # пересчёта (03:00–03:12, 3 процесса): диск занят записью чекпойнтов, и
+    # fetch в это окно упирался в таймаут 180 с — так падал цикл 03:04.
+    # --check ничего не меняет в рабочей копии, поэтому его замок не держит.
+    if args.mode == 'git' and not args.check and not args.force and recalc_running():
+        rec['note'] = 'идёт полный пересчёт — деплой отложен (--force чтобы всё равно)'
+        log(rec['note'], quiet)
+        write_status(rec, quiet)
+        return 3
+
     # ── 1. Что нового? ──
     old = local_sha()
     rec['from'] = old[:8]
     if args.mode == 'git':
-        rc, _ = git('fetch', 'origin', BRANCH, '--quiet')
+        rc, out = git('fetch', 'origin', BRANCH, '--quiet')
         if rc != 0:
-            rec.update(ok=False, error='git fetch не удался')
+            # Один ретрай: под нагрузкой ночного пересчёта или при чужом
+            # git-процессе fetch срывается на локе/таймауте (180 с), со второй
+            # попытки проходит. Причину пишем в лог и статус — иначе провал
+            # виден только как «git fetch не удался» без текста git.
+            log(f'git fetch rc={rc}: {out[:300] or "без вывода"} — повтор через 15 с')
+            time.sleep(15)
+            rc, out = git('fetch', 'origin', BRANCH, '--quiet')
+        if rc != 0:
+            rec.update(ok=False, error=f'git fetch rc={rc}: {out[:300] or "без вывода"}')
             log(rec['error'])
             write_status(rec, quiet)
             return 2

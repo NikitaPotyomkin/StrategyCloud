@@ -807,7 +807,8 @@ with tab_overview:
 
         with col_gross:
             st.markdown("### Equity Gross")
-            # Gross = торговый P&L (от нуля) + пополнения/выводы (без входящего остатка)
+            # Gross = уровень БАЛАНСА счёта: старт от реального баланса (не от нуля),
+            # плюс торговый P&L и пополнения/выводы (cashflow с 29.09.2026).
             # Источник операций — balance_ops (пополнения / выводы / charge), без входящего остатка.
             df_g = filter_weekends(data['trades_df']).sort_values('timestamp').reset_index(drop=True)
             df_g['seq'] = list(range(len(df_g)))
@@ -846,9 +847,14 @@ with tab_overview:
                     _bal_now = float(_acc_g.balance) if _acc_g else None
                 except Exception:
                     _bal_now = None
-                # Gross идёт от нуля: уровень депозита в него не входит.
-                _base = 0.0  # график от нуля прибыли: уровень депозита в него не входит
-                # (якорь на баланс не нужен: это график прибыли + операции, а не equity)
+                # Точка отсчёта — РЕАЛЬНЫЙ БАЛАНС, а не ноль: кривая показывает
+                # уровень средств на счёте, поэтому старт = баланс на начало окна.
+                # Берём его от текущего баланса назад: баланс_сейчас минус всё, что
+                # наросло за окно (торговый P&L + внешние пополнения/выводы) —
+                # так последняя точка совпадает с реальным балансом счёта.
+                # MT5 недоступен (дэш без терминала) → 0, как было раньше.
+                _pnl_win = float(df_g['profit_net'].sum()) if len(df_g) else 0.0
+                _base = (float(_bal_now) - (_pnl_win + _dep + _wd)) if _bal_now is not None else 0.0
             except Exception as _ce:
                 _gross_src = f"ошибка cashflow: {_ce!r}"
                 _bal_now, _base = None, 0.0
@@ -879,23 +885,32 @@ with tab_overview:
                 # Точка «сейчас»: пополнение без последующих сделок видно сразу,
                 # иначе событие не к чему привязать (ось X — сделки, не время).
                 df_g = pd.concat([df_g, pd.DataFrame({'seq': [df_g['seq'].iloc[-1] + 1],
-                                                      'gross': [float(df_g['profit_net'].sum()) + _dep + _wd],
+                                                      'gross': [_base + float(df_g['profit_net'].sum()) + _dep + _wd],
                                                       'timestamp': ['сейчас']})],
                                  ignore_index=True, sort=False)
             fig_g = go.Figure()
+            # Заливка идёт к точке отсчёта (стартовый баланс), а не к нулю оси:
+            # при базе ~1.2 млн площадь от нуля закрыла бы весь график. Невидимая
+            # опорная линия на уровне _base задаёт нижнюю границу заливки.
+            fig_g.add_trace(go.Scatter(
+                x=df_g['seq'], y=[_base] * len(df_g), mode='lines',
+                line=dict(width=0), hoverinfo='skip', showlegend=False,
+            ))
             fig_g.add_trace(go.Scatter(
                 x=df_g['seq'], y=df_g['gross'], customdata=df_g['timestamp'],
                 mode='lines', line=dict(color=COL_AMBER, width=1.5),
-                fill='tozeroy',
-                hovertemplate='Time: %{customdata}<br>Gross: %{y:,.1f}<extra></extra>',
+                fill='tonexty',
+                hovertemplate='%{customdata}<br>Баланс: %{y:,.2f}<extra></extra>',
                 name='',
             ))
-            fig_g.add_hline(y=0, line_dash='dot', line_color=COL_MUTED, opacity=0.4)
+            fig_g.add_hline(y=_base, line_dash='dot', line_color=COL_MUTED, opacity=0.6)
             st.plotly_chart(plotly_dark_layout(fig_g, 260).update_xaxes(showticklabels=False, title=''),
                             use_container_width=True, key="overview_equity_gross")
-            st.caption(f"Gross = торговый P&L (от нуля) + пополнения/выводы по счёту "
-                       f"(cashflow с 29.09.2026). {_gross_src}"
-                       + (f"; баланс счёта {_bal_now:,.0f} ₽" if _bal_now else ""))
+            _base_txt = (f"старт {_base:,.0f} ₽ — реальный баланс на начало окна"
+                         if _bal_now is not None else "отсчёт от нуля: MT5 недоступен")
+            st.caption(f"Gross = уровень БАЛАНСА счёта ({_base_txt})"
+                       f" + торговый P&L + пополнения/выводы (cashflow с 29.09.2026). {_gross_src}"
+                       + (f"; текущий баланс {_bal_now:,.0f} ₽" if _bal_now is not None else ""))
 
     # ── Trade scatter ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
