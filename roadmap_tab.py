@@ -679,10 +679,32 @@ def _run_cell(r: dict) -> str:
             f"title='{tip}'>{txt}</td>")
 
 
+def _alive_cell(r: dict) -> str:
+    """Колонка Alive — живость по данным последнего прогона (journals/liveness.csv).
+
+    Alive  — сделки есть, сетка реально попадает в рынок;
+    Thin   — сделки есть, но заполнено <5% комбинаций (сигнал редкий);
+    Silent — ни одной сделки ни на одном символе ни в одном параметре;
+    «—»    — снимка нет (liveness.py не прогоняли после последнего прогона).
+
+    Silent ≠ «битая»: исключение в бэктесте тоже даёт 0 сделок. Побитых ищет
+    _check_bt.py на синтетическом ряду — сверяй два отчёта.
+    """
+    st = str(r.get('alive') or '')
+    if not st:
+        return f"<td style='text-align:center;color:{COL_MUTED};'>—</td>"
+    color = {'Alive': COL_GREEN_LT, 'Thin': COL_AMBER,
+             'Silent': COL_RED, 'Unknown': COL_MUTED}.get(st, COL_TEXT)
+    return (f"<td class='mono' style='text-align:center;color:{color};' "
+            f"title='liveness: {st} — по чекпойнтам последнего прогона. "
+            f"Alive = торгует; Thin = сигнал редкий; Silent = 0 сделок "
+            f"(возможно битая — см. _check_bt.py)'>{st}</td>")
+
+
 def _row_html(r: dict) -> str:
     cls = 'inf' if r['infra'] else ''
     if r['infra']:
-        tail = ("<td colspan='8' class='left' style='color:#6E7681;'>"
+        tail = ("<td colspan='9' class='left' style='color:#6E7681;'>"
                 "инфраструктура — не стратегия</td>")
         return (f"<tr class='{cls}'>"
                 f"<td class='mono left'>{r['file']}</td>"
@@ -720,8 +742,8 @@ def _row_html(r: dict) -> str:
     # Видимые колонки: Модуль · Расчёт сигнала · type · score · Standalone ·
     # backtest · score · Финализировано · В плане. Остальные ячейки (ключ реестра,
     # батч, комбинации, native, семейство, позиция) считаются, но не рисуются.
-    _cells = [cells[1], cells[2], _type, cells[5], cells[0], cells[3], cells[4],
-              cells[8], cells[12]]
+    _cells = [cells[1], cells[2], _type, _alive_cell(r), cells[5], cells[0],
+              cells[3], cells[4], cells[8], cells[12]]
     return f"<tr class='{cls}'>{''.join(_cells)}</tr>"
 
 
@@ -766,6 +788,19 @@ def render_roadmap_tab() -> None:
             _scan_sql.clear()
             st.rerun()
     rows, stat = _scan_sql()
+    # Liveness накладываем ПРИ ОТРИСОВКЕ, а не в SQL: снимок пишет liveness.py
+    # после прогона, и он может обновиться позже сборки roadmap_rows. Так
+    # колонка Alive свежая без пересборки таблицы.
+    try:
+        import roadmap_scan as _rs
+        _liv = _rs.liveness_map()
+    except Exception:
+        _liv = {}
+    for _r in rows:
+        # native-строки в чекпойнте помечены именем семейства (r['fam']), а не
+        # ключом реестра — поэтому ищем сначала по key, потом по fam.
+        _r['alive'] = (_liv.get(str(_r.get('key') or ''), '')
+                       or _liv.get(str(_r.get('fam') or ''), ''))
     with _hc1:
         if stat.get('saved_at'):
             st.caption(f"таблица из SQL (`roadmap_rows`): {stat['saved_at']}"
@@ -790,7 +825,8 @@ def render_roadmap_tab() -> None:
             "Показать",
             ("Все", "Только пробелы (нет ни в реестре, ни в native)",
              "Только реестр", "Только батч", "Только native", "Только в плане",
-             "Только готовые к торговле", "Только не финализированные"),
+             "Только готовые к торговле", "Только не финализированные",
+             "Только не-Alive (Silent + Thin)"),
             key='rdm_view',
         )
     with f3:
@@ -817,6 +853,8 @@ def render_roadmap_tab() -> None:
             continue
         if view == 'Только готовые к торговле' and not r['rready']:
             continue
+        if view == 'Только не-Alive (Silent + Thin)' and str(r.get('alive') or '') not in ('Silent', 'Thin'):
+            continue
         if view == 'Только не финализированные' and r['rsym']:
             continue
             # дубль continue убран (фильтр выше)
@@ -830,16 +868,23 @@ def render_roadmap_tab() -> None:
 
     head = (
         "<table class='rdm'><thead><tr>"
-        # Порядок: Module · Signal calc · type · score · Standalone · entry+exit ·
+        # Порядок: Module · Signal calc · type · Alive · score · Standalone ·
+        # entry+exit · backtest · Finalized · In plan
         # backtest · Finalized · In plan
         "<th class='left'>Module</th>"
         "<th class='left' title='Signal calc: def calc_... inside the module'>Signal calc</th>"
         "<th title='Strategy Tree type: registry key or native family'>type</th>"
+        "<th title='Живость по чекпойнтам последнего прогона (journals/liveness.csv): Alive — сделки есть и сетка попадает в рынок; Thin — сигнал редкий; Silent — ни одной сделки; «—» — снимка нет. Silent не значит «битая»: сверяй с _check_bt.py'>Alive</th>"
         "<th title='Score семейства: МАКСИМУМ best_score по посчитанным "
         "комбинациям (family_score) — чемпион, по нему и допуск в план. "
         "Зелёный — выше порога и покрытие полное; жёлтый — часть комбинаций "
         "из кэша; красный — даже лучший символ ниже порога min_score'>score</th>"
         "<th title='Module file exists in strategies/'>Standalone</th>"
+        ""
+        ""
+        ""
+        ""
+        ""
         "<th>entry+exit</th>"
         "<th>backtest</th>"
         # type переехал сразу после Signal calc

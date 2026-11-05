@@ -29,6 +29,16 @@ ROADMAP_REFRESH_SEC = 1800
 
 def refresh(path=None, verbose: bool = True) -> int:
     """Пересчитать инвентаризацию и записать её в SQL. Возвращает число строк."""
+    # Живость обновляем ДО скана: Roadmap накладывает статусы из liveness.csv.
+    # Разбор чекпойнтов (~7 файлов по 13 МБ) идёт только когда снимок старше 6 ч,
+    # так что на каждую пересборку (раз в 30 мин) это не влияет.
+    try:
+        import liveness
+        liveness.ensure_snapshot(verbose=verbose)
+    except Exception as exc:
+        if verbose:
+            print(f"  [LIVENESS] снимок не обновлён: {exc!r}", flush=True)
+
     t0 = time.time()
     try:
         import roadmap_scan

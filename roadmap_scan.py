@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
@@ -273,6 +274,27 @@ def _sl_tp_counts():
         return max(1, len(sp.sl_points_list)), max(1, len(sp.tp_points_list))
     except Exception:
         return 3, 3
+
+
+def liveness_map() -> dict:
+    """{ключ реестра: Alive|Thin|Silent|Unknown} из journals/liveness.csv.
+
+    Снимок пишет liveness.py после ночного прогона (по чекпойнтам). Разбирать
+    чекпойнты прямо здесь нельзя: это 7 файлов по ~13 МБ JSON, в Streamlit
+    слишком дорого на каждый рендер. Нет файла — пустой словарь, в таблице «—».
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'journals', 'liveness.csv')
+    out = {}
+    try:
+        with open(path, 'r', encoding='utf-8', newline='') as fh:
+            for row in csv.DictReader(fh):
+                key = str(row.get('key') or '').strip()
+                if key:
+                    out[key] = str(row.get('status') or '').strip()
+    except (OSError, ValueError, csv.Error, UnicodeDecodeError):
+        return {}
+    return out
 
 
 def scan():
