@@ -724,7 +724,207 @@ with tab_overview:
         except Exception:
             metric_card("Fund Age", "—")
 
+    with _col_blank:
+        # Annual Return, % — доходность окна, приведённая к году (CAGR).
+        # База — баланс на начало окна (текущий минус P&L за окно): так пополнения
+        # и выводы не раздувают ставку. При коротком окне формула даёт ту же цифру,
+        # что и линейная, но не занижает на длинном.
+        _ar_pnl = float(data.get('total_profit') or 0.0)
+        _ar_bal = float(data.get('balance') or 0.0)
+        _ar_base = _ar_bal - _ar_pnl
+        _ar_days = max(1, int(days_back))
+        _ar_val = None
+        if _ar_base > 0:
+            _ar_r = _ar_pnl / _ar_base
+            if _ar_r > -1.0:
+                try:
+                    _ar_val = ((1.0 + _ar_r) ** (365.0 / _ar_days) - 1.0) * 100.0
+                except (OverflowError, ValueError):
+                    _ar_val = _ar_r * (365.0 / _ar_days) * 100.0
+        if _ar_val is None:
+            metric_card("Annual Return, %", "—")
+        else:
+            metric_card("Annual Return, %", f"{_ar_val:+.1f}%",
+                        color=COL_GREEN_LT if _ar_val >= 0 else COL_RED_LT,
+                        sub=f"{_ar_days}D → год (CAGR)")
+
     st.caption(f"Last update: {updated} | Trades ({days_back}D): {data['total_trades']}")
+
+    # ── Market Regime: сбор данных ──
+    # Карточки Market — week / Market — last day рисуются в САМОМ НИЗУ вкладки,
+    # после графиков: сначала цифры счёта, потом контекст рынка.
+    # Оценка по корзине ВАЛЮТНЫХ ПАР (металлы/индексы/крипта отброшены): тренд/
+    # боковик — через efficiency ratio Кауфмана (|сдвиг| / сумма |шагов|),
+    # волатильность — ATR% и её отношение к недельному уровню. Не прогноз, а
+    # «в каком режиме мы сейчас находимся».
+
+    _ms_week = {'сильный тренд': 0, 'тренд': 0, 'боковик': 0}
+    _ms_today = dict(_ms_week)
+    _vi_w, _vi_t, _vi_pw, _ms_n, _ms_day_ts = [], [], [], 0, None
+    _er_w, _er_t = [], []   # ER по корзине: направленность недели и дня
+
+    _ms_dow_ru = ('вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб')   # _mql_dow: 0 = воскресенье
+
+    def _ms_strength(_er):
+        """Направленность окна по ER Кауфмана: 1 — ход без откатов, 0 — пила.
+        Три класса: сильный тренд (≥ 0.50), тренд (≥ 0.35), боковик (всё ниже)."""
+        if _er >= 0.50:
+            return 'сильный тренд'
+        if _er >= 0.35:
+            return 'тренд'
+
+
+        return 'боковик'
+    try:
+        # Только валютные пары: у металлов (XAUUSD), индексов (US500) и крипты
+        # своя волатильность — они размывали бы режим валютной корзины.
+        _ms_fiat = {'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'SEK',
+                    'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'TRY', 'ZAR', 'MXN', 'SGD',
+                    'HKD', 'CNH', 'CNY', 'RUB', 'ILS', 'INR', 'THB', 'BRL', 'KRW'}
+
+        def _ms_is_fx(_sym):
+            """Валютная пара: 3 буквы базы + 3 буквы котировки — фиатные коды."""
+            _t = ''.join(_ch for _ch in str(_sym).upper() if _ch.isalpha())
+            return len(_t) >= 6 and _t[:3] in _ms_fiat and _t[3:6] in _ms_fiat
+
+        _ms_syms = sorted({str(_s) for _s in data['trades_df']['symbol'].dropna().unique()
+                           if _ms_is_fx(_s)}) \
+            if (not data['trades_df'].empty and 'symbol' in data['trades_df'].columns) else []
+        if MT5_AVAILABLE and _ms_syms:
+            if mt5.terminal_info() is None:
+                mt5.initialize()
+            for _s in _ms_syms:
+                _row = []
+                # Три прохода — ЧАСОВИКИ: текущая неделя (168 баров), прошлая неделя
+                # (то же окно со смещением 168) и последний торговый день (тот же
+                # массив, обрезанный маской по дате). Один таймфрейм нужен, чтобы ER
+                # и ATR всех окон были сопоставимы: на M5 сумма |шагов| в 2–3 раза
+                # больше (шум), и ER «съедал» даже отвесные дни.
+
+
+
+
+                for _ti, (_start, _bars) in enumerate(((0, 168), (168, 168), (0, 168))):
+
+                    _r = mt5.copy_rates_from_pos(_s, mt5.TIMEFRAME_H1, _start, _bars)
+                    if _r is None or len(_r) < 60:
+                        _row.append(None)
+                        continue
+                    if _ti == 2:   # третий проход — только последний торговый день
+                        # «День» = последний ТОРГОВЫЙ день, а не последние 24 часа:
+                        # в субботу/воскресенье рынок закрыт, и последний бар — пятница.
+                        # Оставляем бары только последней календарной даты (время сервера).
+                        _tday = _r['time'].astype('int64') // 86400
+                        _mask = _tday == _tday[-1]
+                        if int(_mask.sum()) < 6:
+                            _row.append(None)
+                            continue
+                        _r = _r[_mask]
+                        _last_day = int(_r['time'][-1])
+                    _c = _r['close'].astype(float)
+                    _h = _r['high'].astype(float)
+                    _l = _r['low'].astype(float)
+                    _er = abs(_c[-1] - _c[0]) / max(1e-9, float(np.abs(np.diff(_c)).sum()))
+                    _tr = np.maximum(_h[1:] - _l[1:],
+                                     np.maximum(np.abs(_h[1:] - _c[:-1]),
+                                                np.abs(_l[1:] - _c[:-1])))
+                    _atr = float(np.mean(_tr[-50:])) / max(1e-9, float(_c[-1])) * 100.0
+                    _row.append((_er, _atr))
+                if _row[0] is None or _row[1] is None or _row[2] is None:
+                    continue
+                _ms_n += 1
+                _ms_day_ts = _last_day   # дата последнего торгового дня (сервер)
+                _vi_w.append(_row[0][1])
+                _vi_pw.append(_row[1][1])   # прошлая неделя — опора для «громкости»
+                _vi_t.append(_row[2][1])
+                _er_w.append(_row[0][0])
+                _er_t.append(_row[2][0])
+
+                # Голосуем за силу окна: неделя и последний день отдельно.
+                for _er, _acc in ((_row[0][0], _ms_week), (_row[2][0], _ms_today)):
+                    _acc[_ms_strength(_er)] += 1
+
+
+
+
+
+
+
+
+
+    except Exception:
+        _ms_n = 0
+
+    def _ms_mode(_acc):
+        """Доминирующий режим корзины + доля символов в нём."""
+        if not _acc or sum(_acc.values()) == 0:
+            return None, 0.0
+        _k = max(_acc, key=_acc.get)
+        _tot = sum(_acc.values())
+        return _k, (_acc[_k] / _tot * 100.0)
+
+    def _ms_qual(_ratio, _base):
+        """Приставка «громкости»: окно на 30%+ громче/тише опорного."""
+        if not _base:
+            return None
+        if _ratio >= 1.30:
+            return 'волатильный ' + _base
+        if _ratio <= 0.70:
+            return 'тихий ' + _base
+        return _base
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # ── (здесь были блоки «Состояние рынка» и «Новости по доллару») ──
+    # 1. Карточки рынка переехали в самый низ вкладки — блок «Состояние рынка:
+    #    карточки» после Trade Scatter. Здесь остался только сбор данных.
+    # 2. Новости по доллару убраны: calendar_* в этой сборке MT5 Python API
+    #    отдаёт пустой массив, а рисовать «нет данных» со ссылками смысла нет.
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
 
     # ── Volume + Equity Curve ──
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
@@ -956,6 +1156,53 @@ with tab_overview:
         # Высота 260 — как у соседей по ряду (Daily Volume / Equity Curve / Equity Gross).
         _sc.plotly_chart(plotly_dark_layout(fig, 260).update_xaxes(showticklabels=False, title=''), use_container_width=True,
                         key="overview_trade_scatter")
+
+
+
+
+    # ── Market Regime ──
+    # Чуть ниже Trade Scatter (пустая строка = отступ), цифры счёта и графики уже
+    # показаны — здесь только контекст. Данные собраны выше (блок «сбор данных»).
+    st.write("")
+    st.markdown("### Market Regime")
+    _ms_col1, _ms_col2 = st.columns(2)
+    if _ms_n:
+        _mode_w, _share_w = _ms_mode(_ms_week)
+        _mode_t, _share_t = _ms_mode(_ms_today)
+        _vi_week = float(np.mean(_vi_w)) if _vi_w else 0.0
+        _vi_prevw = float(np.mean(_vi_pw)) if _vi_pw else 0.0
+        _er_week = float(np.mean(_er_w)) if _er_w else 0.0
+        _er_day = float(np.mean(_er_t)) if _er_t else 0.0
+        _vi_day = float(np.mean(_vi_t)) if _vi_t else 0.0
+        # Итог по корзине: СИЛА (мода ER-класса) + ГРОМКОСТЬ (VI окна к опорному):
+        # неделю сверяем с прошлой неделей, день — с текущей неделей.
+        _wr_ratio = (_vi_week / _vi_prevw) if _vi_prevw > 0 else 1.0
+        _wd_ratio = (_vi_day / _vi_week) if _vi_week > 0 else 1.0
+        _lab_w = _ms_qual(_wr_ratio, _mode_w) or '—'
+        _lab_d = _ms_qual(_wd_ratio, _mode_t) or '—'
+        # Показываем РЕАЛЬНУЮ дату последнего торгового дня: в выходные это пятница,
+        # иначе «сегодня» читалось бы как воскресенье с закрытым рынком.
+        if _ms_day_ts:
+            _ms_day_dt = datetime.utcfromtimestamp(_ms_day_ts)
+            _ms_day_txt = f"{_ms_dow_ru[_mql_dow(_ms_day_dt)]} {_ms_day_dt.strftime('%d.%m')}"
+        else:
+            _ms_day_txt = '—'
+
+
+        with _ms_col1:
+            metric_card("Market — week", _lab_w,
+                        sub=f"ER {_er_week:.2f} · VI {_vi_week:.3f}% "
+                            f"(к пред. неделе {(_wr_ratio - 1) * 100:+.0f}%) · {_share_w:.0f}% пар")
+        with _ms_col2:
+
+            metric_card("Market — last day", _lab_d,
+                        color=COL_AMBER if _lab_d.startswith('волатильный') else None,
+                        sub=f"{_ms_day_txt} · ER {_er_day:.2f} · VI {_vi_day:.3f}% "
+                            f"({(_wd_ratio - 1) * 100:+.0f}% к неделе) · {_share_t:.0f}% пар")
+
+    else:
+        st.caption("Оценка рынка недоступна: нет MT5, нет символов в истории сделок или "
+                   "по последнему торговому дню меньше 6 часовых баров (день только начался).")
 
 
 # ═══════════════════════════════════════════════════════════════
