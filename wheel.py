@@ -71,6 +71,25 @@ def compute_categories(trades_df, family_col='strategy_type', symbol_col='symbol
     if family_col is None or pnl_col is None:
         return []
 
+    # ── Только торгуемая корзина (config.SYMBOLS) ──
+    # Металлы (XAU/XAG) выключены из торговли 30.10.2026, но их сделки ещё лежат
+    # в окне истории. Без фильтра они попадают в Strategy Tree и Wheel, получают
+    # квоту и вытесняют живые валютные категории из скоринга. Фильтр стоит на
+    # ЕДИНОМ источнике категорий, поэтому действует и в дереве, и в штурвале.
+    try:
+        import config as _cfg
+        _tradeable = set(getattr(_cfg, 'SYMBOLS', ()) or ())
+    except Exception:
+        _tradeable = set()
+    if _tradeable:
+        _before = len(df)
+        df = df[df[symbol_col].astype(str).isin(_tradeable)].reset_index(drop=True)
+        _dropped = _before - len(df)
+        if _dropped:
+            print(f"  [WHEEL] в скоринг не идут {_dropped} сделок вне торгуемой корзины "
+                  f"({len(_tradeable)} симв.): металлы/снятые инструменты", flush=True)
+        if len(df) == 0:
+            return []
     df[pnl_col] = pd.to_numeric(df[pnl_col], errors='coerce').fillna(0.0)
     has_vol = volume_col in df.columns
     if has_vol:
