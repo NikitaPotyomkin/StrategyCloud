@@ -667,7 +667,76 @@ def _mix_line(real, floating) -> str:
 
 
 
-def trim_banner(data: dict, ref_day: float = None) -> None:
+def trim_limit_rub(day):
+    """Дневной лимит правила пик-трима в рублях — то, по чему реально режем.
+
+    Формула ровно как в peak_trim.scan_and_trim (строка «Порог: … ₽»):
+        лимит = cfg.pct × эталон ₽/лот × плановый объём дня (лот)
+    эталон — агрегат cfg.ref_quantile удельной по дням ДО сегодняшнего (медиана
+    дневных пиков, то же число, что лейбл «Медиана на 1 лот»); плановый объём —
+    Σ лотов плана из journals/active_state.json (peak_trim._plan_from_state),
+    фолбэк — максимум книги за сутки, если плана нет или он протух.
+    Возвращает None, если правило выключено или данных не хватает.
+    """
+    if day is None or getattr(day, 'empty', True):
+        return None
+    try:
+        from config import PeakTrimParams as _PeakTrim
+        _pt = _PeakTrim()
+        if not bool(getattr(_pt, 'enabled', False)):
+            return None
+        _d = day.dropna(subset=['per_lot'])
+        if _d.empty:
+            return None
+        _today = _d['day'].max()
+        _prev = _d[_d['day'] < _today]
+        if not len(_prev):
+            return None
+        _q = float(getattr(_pt, 'ref_quantile', 0.5) or 0.5)
+        _ref = float(_prev['per_lot'].quantile(_q))
+        _plan = 0.0
+        try:
+            import peak_trim as _ptm
+            _plan = float((_ptm._plan_from_state() or (0.0, ''))[0] or 0.0)
+        except Exception:
+            _plan = 0.0
+        if _plan <= 0:
+            _cur = _d[_d['day'] == _today].iloc[0]
+            _pv = _cur.get('plan_vol')
+            _plan = float(_pv) if (_pv is not None and pd.notna(_pv)) else 0.0
+        if _ref <= 0 or _plan <= 0:
+            return None
+        return float(getattr(_pt, 'pct', 1.0)) * _ref * _plan
+    except Exception:
+        return None
+
+
+def trim_banner(data: dict, ref_day: float = None, limit_rub: float = None) -> None:
+    """Красный флаг: правило пик-трима включено + дневной лимит в рублях.
+
+    Одна строка по запросу 10.11.2026: «лимит N ₽» — это порог дня, при котором
+    правило режет все позиции до keep_volume. Проценты эталона, окно истории и
+    допуск объёма из баннера убраны (живут в config.PeakTrimParams и в метриках
+    блока «Максимальная потенциальная прибыль»).
+    """
+    _pt = None
+    try:
+        from config import PeakTrimParams as _PeakTrim
+        _pt = _PeakTrim()
+    except Exception:
+        _pt = None
+    if _pt is None or not bool(getattr(_pt, 'enabled', False)):
+        return
+    if limit_rub is None:
+        limit_rub = trim_limit_rub(_daily((data or {}).get('equity_df')))
+    _lim = (f"{_num(float(limit_rub))} руб."
+            if (limit_rub is not None and limit_rub == limit_rub and limit_rub > 0)
+            else '—')
+    st.error(f"❗ ПРАВИЛО ПИК-ТРИМА АКТИВНО — лимит {_lim}")
+
+
+def _trim_banner_unused(data: dict, ref_day: float = None) -> None:
+    """Прежний развёрнутый баннер — НЕ вызывается с 10.11.2026 (оставлен как справка)."""
     # ── Красный флаг: правило пик-трима включено (РЕАЛЬНЫЕ закрытия) ──────────
     # Стоит в САМОМ начале: флаг должен быть виден даже когда в equity_samples
     # пусто (тогда ниже срабатывает ранний return и блок бы не отрисовался).
@@ -855,15 +924,16 @@ def render(data: dict, days_back: int) -> None:
     _n_per = int(len(_per))
 
     st.markdown("### Максимальная потенциальная прибыль за день")
-    trim_banner(data, float(day['per_lot'].median()))
-    trim_live(day)
+    trim_banner(data, float(day['per_lot'].median()), trim_limit_rub(day))
+    # trim_live(day) — отключён 10.11.2026: строка «check peak · последний замер …»
+    # и прогресс-бар убраны, дневной порог показывает красный флаг trim_banner.
     c1, c2, c3 = st.columns(3)
     with c1:
         st.metric("Медиана пика за день",
                   f"{_num(float(day['potential_peak'].median()))} ₽"
                   + _pct_sfx(day['fill_pct'].median()),
                   delta_color="off")
-        st.caption(f"медиана за {_n_days} торговых дней · лучший день: "
+        _ = (  # подпись под метрикой убрана 10.11.2026 (по запросу: не нужна)
                    f"{_pk['day'].strftime('%d.%m')} "
                    f"в {_pk['peak_time'].strftime('%H:%M')}"
                    + _ctx_line(_pk.get('peak_vol'), _pk.get('peak_npos'))
@@ -878,7 +948,7 @@ def render(data: dict, days_back: int) -> None:
                       f"{_num(float(day['per_lot'].median()))} ₽/лот"
                       + _pct_sfx(day['per_fill_pct'].median()),
                       delta_color="off")
-            st.caption(f"медиана за {_n_per} дней · лучший день: "
+            _ = (  # подпись под метрикой убрана 10.11.2026 (по запросу: не нужна)
                        f"{_pkp['day'].strftime('%d.%m')} "
                        f"в {_pkp['per_time'].strftime('%H:%M')} · ₽ на 1.00 лот "
                        f"· к концу дня "
@@ -962,7 +1032,7 @@ def render(data: dict, days_back: int) -> None:
                      '<extra></extra>'),
               title='максимальный потенциал на лот за день, ₽/лот',
               key='risk_profit_peak_per_lot')
-        st.caption(
+        _ = (  # пояснение под графиками убрано 10.11.2026 (по запросу: не нужно)
             "Потенциал = P&L сделок, закрытых в этот день к t, + floating открытых "
             "позиций в момент t; пополнений и выводов нет. Верхняя цифра — если бы "
             "ты закрыл всё в лучший момент дня по всему счёту; в подписи видно, при "

@@ -1827,7 +1827,7 @@ with tab_risk:
         _risk_cap_pct = None
     st.metric("Risk Ceiling — потолок риска",
               f"{_risk_cap_pct:.0f}% баланса" if _risk_cap_pct is not None else "—")
-    st.caption(
+    _ = (  # пояснение к «Потолок риска» убрано 10.11.2026 (по запросу)
         ("Потолок риска: суммарный риск по SL всех стратегий плана не может превышать "
          f"{_risk_cap_pct:.0f}% баланса — это и есть квота (balance × "
          f"{_risk_cap_pct / 100:.2f}). Больше — лоты масштабируются вниз, меньше — "

@@ -1,24 +1,35 @@
 """Volatility Regime: Vol-of-Vol (H1).
 
 Idea: 0005 volreg_volofvol
-Вход: std(Parkinson(20), 60) > p80 and close > open
-Выход: trail 1.5xATR
-Отличие: vol-of-vol detects volatility acceleration
+Вход: vol-of-vol (std Parkinson(20) за period) выше своего p80 и close > open;
+      ниже своего p20 и close < open — короткая сторона (симметрично).
+Выход: смена состояния k (check_exit), плюс SL/TP.
+Отличие: vol-of-vol detects volatility acceleration.
+
+Правка 10.11.2026: раньше std(park) сравнивался с перцентилем САМОГО park
+(уровень волатильности против её же разброса) — величины в разных единицах:
+лонг почти никогда не срабатывал, шорт срабатывал почти на любом красном баре
+в спокойном рынке. Теперь оба порога — перцентили ряда vol-of-vol.
+Бэктест переведён на общий движок strategies._bt_core (вход по open следующего
+бара, спред, выход по сигналу) — как у остальных семейств.
 """
 import numpy as np
 import pandas as pd
+
+from strategies._bt_core import run_backtest, state_entry, state_exit
 
 
 def calc_volreg_volofvol(df, period=60):
     hl = np.log(df['high'] / df['low']) ** 2
     park = hl.rolling(20).mean() ** 0.5
     volofvol = park.rolling(period).std()
-    p80 = park.rolling(period).quantile(0.80)
-    
+    hi = volofvol.rolling(period).quantile(0.80)
+    lo = volofvol.rolling(period).quantile(0.20)
+
     k = np.zeros(len(df))
-    k[(volofvol > p80) & (df['close'] > df['open'])] = 1
-    k[(volofvol < park.rolling(period).mean() - park.rolling(period).std()) & (df['close'] < df['open'])] = -1
-    
+    k[(volofvol > hi) & (df['close'] > df['open'])] = 1
+    k[(volofvol < lo) & (df['close'] < df['open'])] = -1
+
     df = df.copy()
     df['k'] = k
     return df
@@ -38,48 +49,6 @@ def check_exit(prev, curr, direction):
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,
              tick_size, sim_lot=0.01, spread_points=0):
-    df = calc_volreg_volofvol(df, int(param_key))
-    
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-    
-    sl = sl_points
-    tp = tp_points
-    
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-        
-        if prev_k == 0 and curr_k == 1:
-            sl_price = df['close'].iloc[i] - sl * point
-            tp_price = df['close'].iloc[i] + tp * point
-            
-            for j in range(i+1, min(i+50, len(df))):
-                if df['low'].iloc[j] <= sl_price:
-                    profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(sl_price - df['close'].iloc[i])
-                    break
-                elif df['high'].iloc[j] >= tp_price:
-                    profit += (tp_price - df['close'].iloc[i]) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(tp_price - df['close'].iloc[i])
-                    break
-                    
-        elif prev_k == 0 and curr_k == -1:
-            sl_price = df['close'].iloc[i] + sl * point
-            tp_price = df['close'].iloc[i] - tp * point
-            for j in range(i+1, min(i+50, len(df))):
-                if df['high'].iloc[j] >= sl_price:
-                    profit += (df['close'].iloc[i] - sl_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(df['close'].iloc[i] - sl_price)
-                    break
-                elif df['low'].iloc[j] <= tp_price:
-                    profit += (df['close'].iloc[i] - tp_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(df['close'].iloc[i] - tp_price)
-                    break
-    
-    return (profit, n_trades, trade_profits)
+    return run_backtest(df, calc_volreg_volofvol, state_entry, state_exit,
+                        int(param_key), sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)
