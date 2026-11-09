@@ -485,6 +485,28 @@ def drop_weekends(df, col='timestamp'):
     return df[days < 5].copy()
 
 
+def fx_only_trades(df):
+    """Закрытые сделки БЕЗ металлов — только торгуемая валютная корзина.
+
+    Металлы (XAUUSDrfd/XAGUSDrfd) выключены из торговли 30.10.2026, но их сделки
+    ещё лежат в окне дашборда и попадают в разрезы Risk-вкладки (пироги по валютам,
+    Exposure Matrix). Список символов берём из config.SYMBOLS — тот же источник,
+    что у wheel.compute_categories, поэтому цифры дэшборда и штурвала не расходятся.
+    Фильтр мягкий: нет config или пустой список — возвращаем данные как есть,
+    чтобы недоступный конфиг не гасил графики.
+    """
+    if df is None or len(df) == 0 or 'symbol' not in df.columns:
+        return df
+    try:
+        import config as _cfg_fx
+        _syms = set(getattr(_cfg_fx, 'SYMBOLS', ()) or ())
+    except Exception:
+        _syms = set()
+    if not _syms:
+        return df
+    return df[df['symbol'].astype(str).isin(_syms)].reset_index(drop=True)
+
+
 # ── Заголовок ──
 # REFRESH — прямо НАД лейблом STRATEGY CLOUD: кнопка в отдельной узкой колонке,
 # заголовок рендерится следующим рядом (ниже), а не сбоку.
@@ -1968,9 +1990,10 @@ with tab_risk:
 
 
     # ── Exposure heatmap ──
-    if not data['trades_df'].empty and PLOTLY_AVAILABLE:
+    _heat_df = fx_only_trades(data['trades_df'])
+    if not _heat_df.empty and PLOTLY_AVAILABLE:
         st.markdown("### Exposure Matrix")
-        df_heat = data['trades_df'].copy()
+        df_heat = _heat_df.copy()
 
         if days_back <= 3:
             df_heat['bucket'] = df_heat['timestamp'].dt.floor('h')
@@ -2014,7 +2037,7 @@ with tab_risk:
         st.caption("Scale: 0 — dark, 1-2 — green, 3 (limit) — amber, >3 — red")
 
     # ── Realized P&L by currency ──
-    # Источник — data['trades_df']: одна строка = одна ЗАКРЫТАЯ позиция окна дашборда,
+    # Источник — fx_only_trades(data['trades_df']): одна строка = одна ЗАКРЫТАЯ позиция окна,
     # profit_net — реализованный результат в валюте счёта (₽), уже с комиссией и свопом.
     if not data['trades_df'].empty and PLOTLY_AVAILABLE:
         # ═══════════════════════════════════════════════════════════
@@ -2215,7 +2238,7 @@ with tab_risk:
         # Небольшой отступ сверху: блок тактики и заголовок пирогов визуально слипались.
         st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
         st.markdown("### Currency Breakdown — realized P&L & volume")
-        _ccy = data['trades_df'].copy()
+        _ccy = fx_only_trades(data['trades_df']).copy()
         _ccy['ccy'] = _ccy['symbol'].str.replace('rfd', '')
         _ccy = _ccy.groupby('ccy').agg(
             pnl=('profit_net', 'sum'),
@@ -2260,7 +2283,7 @@ with tab_risk:
         # Тот же набор: ЗАКРЫТЫЕ позиции окна. volume — объём входа позиции (лоты),
         # т.е. сумма по валюте = «отработанный» оборот, а не текущая экспозиция.
         _col_lots.markdown("#### Volume, lots")
-        _lots = data['trades_df'].copy()
+        _lots = fx_only_trades(data['trades_df']).copy()
         _lots['ccy'] = _lots['symbol'].str.replace('rfd', '')
         _lots = _lots.groupby('ccy').agg(
             lots=('volume', 'sum'),
