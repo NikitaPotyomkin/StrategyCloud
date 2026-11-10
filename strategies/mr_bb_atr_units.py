@@ -56,7 +56,7 @@ def backtest(df, param_key, sl_points, tp_points, point, tick_value,
     bb_period = int(parts[0]) if len(parts) > 0 else 20
     atr_mult = float(parts[1]) if len(parts) > 1 else 2.0
 
-    df = calc_mr_bb_atr_units(df, bb_period, atr_mult)
+    df = calc_mr_bb_atr_units(df, f"{bb_period},{atr_mult}")
     profit = 0
     n_trades = 0
     trade_profits = []

@@ -75,7 +75,12 @@ def calc_stat_half_life(df, period=20):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Returns 'long' / 'short' / None for engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):
