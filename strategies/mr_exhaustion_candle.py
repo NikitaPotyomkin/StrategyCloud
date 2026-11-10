@@ -9,8 +9,9 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_exhaustion_candle(df, period=20):
+def calc_mr_exhaustion_candle(df, param_key):
     """Маленькое тело на экстремуме."""
+    period = int(param_key) if not isinstance(param_key, str) or ',' not in str(param_key) else 20
     body = (df['close'] - df['open']).abs()
     range_ = df['high'] - df['low']
     body_ratio = body / (range_ + 1e-12)
@@ -29,7 +30,12 @@ def calc_mr_exhaustion_candle(df, period=20):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

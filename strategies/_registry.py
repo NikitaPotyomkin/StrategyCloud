@@ -870,6 +870,31 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='vr_vov2b', grid=[60], min_len=200,
     ),
+    'volreg_ewma_accel': dict(
+        module='volreg_ewma_accel', calc='calc_volreg_ewma_accel',
+        entry='check_entry', exit='check_exit',
+        label='vr_ewma', grid=[50, 100], min_len=200,
+    ),
+    'volreg_intrinsic_time': dict(
+        module='volreg_intrinsic_time', calc='calc_volreg_intrinsic_time',
+        entry='check_entry', exit='check_exit',
+        label='vr_intri', grid=[20, 40], min_len=120,
+    ),
+    'volreg_vhf_trend': dict(
+        module='volreg_vhf_trend', calc='calc_volreg_vhf_trend',
+        entry='check_entry', exit='check_exit',
+        label='vr_vhf', grid=[20, 28], min_len=150,
+    ),
+    'volreg_er_kaufman': dict(
+        module='volreg_er_kaufman', calc='calc_volreg_er_kaufman',
+        entry='check_entry', exit='check_exit',
+        label='vr_er', grid=[10, 20], min_len=120,
+    ),
+    'volreg_tr_skew': dict(
+        module='volreg_tr_skew', calc='calc_volreg_tr_skew',
+        entry='check_entry', exit='check_exit',
+        label='vr_trsk', grid=[60], min_len=150,
+    ),
     # Осцилляторы (10)
     'osc_fisher': dict(
         module='osc_fisher_transform', calc='calc_osc_fisher_transform',
@@ -1147,11 +1172,13 @@ ENABLED_BATCH = (
     'pair_halflife_entry', 'pair_ratio_trend', 'pair_spread_z_simple',
     'mom_accel_z', 'mom_breakout_confirm', 'mom_efficiency',
     'mom_pullback_ratio', 'mom_roc_of_roc', 'mom_vs_vol',
-    # ── БАТЧ 6 (06.11.2026): 50 новых стратегий в 5 категориях ──
-    # Волатильность (10)
+    # ── БАТЧ 6 (06.11.2026): 55 новых стратегий в 5 категориях ──
+    # Волатильность (15)
     'volreg_volofvol', 'volreg_ewma_accel', 'volreg_intrinsic_time',
     'volreg_vhf_trend', 'volreg_er_kaufman', 'volreg_tr_skew',
     'volreg_yz_alt', 'volreg_nr7_alt', 'volreg_range_exp_alt', 'volreg_vol_of_vol2',
+    'volreg_ewma_accel', 'volreg_intrinsic_time', 'volreg_vhf_trend',
+    'volreg_er_kaufman', 'volreg_tr_skew',
     # Осцилляторы (10)
     'osc_fisher', 'osc_tii', 'osc_pgo', 'osc_ravi', 'osc_rvi_hlc',
     'osc_er_gator', 'osc_fisher_alt', 'osc_tii_alt', 'osc_pgo_alt', 'osc_ravi_alt',

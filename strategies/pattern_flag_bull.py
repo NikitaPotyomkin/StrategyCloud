@@ -47,7 +47,9 @@ def calc_pattern_flag_bull(df, period=20):
             flag_start = int(impulse_start[i])
             flag_end = i
             flag_high[i] = np.max(high[flag_start:flag_end])
-    k = np.where((flag == 1) & (close > flag_high.shift(1)), 1, k)
+    # (right) convert to Series for .shift() compatibility
+    flag_high_s = pd.Series(flag_high, index=df.index)
+    k = np.where((flag == 1) & (df['close'] > flag_high_s.shift(1)), 1, k)
     # (right) k=-1: bear flag detected + close below flag low
     flag_low = np.zeros(len(close))
     for i in range(period, len(close)):
@@ -55,7 +57,9 @@ def calc_pattern_flag_bull(df, period=20):
             flag_start = int(impulse_start[i])
             flag_end = i
             flag_low[i] = np.min(low[flag_start:flag_end])
-    k = np.where((flag == 1) & (close < flag_low.shift(1)), -1, k)
+    # (right) convert to Series for .shift() compatibility
+    flag_low_s = pd.Series(flag_low, index=df.index)
+    k = np.where((flag == 1) & (df['close'] < flag_low_s.shift(1)), -1, k)
     df = df.copy()
     df['k'] = k
     return df

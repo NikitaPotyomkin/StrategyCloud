@@ -15,14 +15,18 @@ def calc_stat_vr_ratio(df, period=20, q=5):
     n = len(returns)
     k = np.zeros(n)
 
+    # (right) Fixed: var_q and var_1 used identical window, making VR always = q.
+    # Now compute q-period cumulative returns separately.
+    q_returns = returns.rolling(window=q).sum()
+
     for i in range(q, n):
-        # Variance over q periods
-        var_q = np.var(returns.iloc[i - q + 1:i + 1]) * q
-        # Variance over 1 period
+        # Variance of q-period returns over the window
+        var_q = np.var(q_returns.iloc[i - q + 1:i + 1])
+        # Variance of 1-period returns over the window
         var_1 = np.var(returns.iloc[i - q + 1:i + 1])
 
-        if var_1 > 1e-12 and var_q > 1e-12:
-            vr = var_q / var_1
+        if var_1 > 1e-12:
+            vr = var_q / (q * var_1)
             if vr > 1.2:
                 k[i] = 1
             elif vr < 0.8:

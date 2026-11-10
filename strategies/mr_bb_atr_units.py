@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_bb_atr_units(df, bb_period=20, atr_mult=2.0):
+def calc_mr_bb_atr_units(df, param_key):
     """Цена > 2 ATR от BB middle."""
+    parts = str(param_key).split(',') if isinstance(param_key, str) else [str(param_key)]
+    bb_period = int(parts[0]) if len(parts) > 0 else 20
+    atr_mult = float(parts[1]) if len(parts) > 1 else 2.0
     mid = df['close'].rolling(bb_period).mean()
     std = df['close'].rolling(bb_period).std()
     bb_upper = mid + 2 * std
@@ -31,7 +34,12 @@ def calc_mr_bb_atr_units(df, bb_period=20, atr_mult=2.0):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

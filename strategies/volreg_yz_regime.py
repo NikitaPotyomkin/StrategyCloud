@@ -31,16 +31,20 @@ def calc_volreg_yz_regime(df, period=24):
         overnight_hist = overnight.iloc[i-period+1:i+1]
         intraday_hist = intraday.iloc[i-period+1:i+1]
         close_close_hist = close_close.iloc[i-period+1:i+1]
-        
+
         sigma_overnight = overnight_hist.mean()
         sigma_intraday = intraday_hist.mean()
         sigma_close = close_close_hist.mean()
-        
-        k = sigma_overnight / (sigma_overnight + sigma_intraday)
-        yz = sigma_close + (1.0 / (period - 1)) * sum(
-            (sigma_overnight + sigma_intraday - sigma_close) ** 2 
-            for j in range(period)
-        )
+
+        # (right) Fix: renamed accumulator from sigma_overnight to sum_sq_diff
+        # to avoid variable collision (sigma_overnight was being overwritten)
+        # (right) Fix: iterate over actual window data, not range(period),
+        # to prevent IndexError when window < period (i.e., i > 2*period-1)
+        sum_sq_diff = 0.0
+        for oh, ih, cc in zip(overnight_hist, intraday_hist, close_close_hist):
+            sum_sq_diff += (oh + ih - sigma_close) ** 2
+
+        yz = sigma_close + (1.0 / (period - 1)) * sum_sq_diff
         yz_vol.iloc[i] = yz ** 0.5
     
     sma50 = df['close'].rolling(50).mean()

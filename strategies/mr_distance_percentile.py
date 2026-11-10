@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_distance_percentile(df, ma_period=20, win_period=500):
+def calc_mr_distance_percentile(df, param_key):
     """Процентиль расстояния цены от MA."""
+    parts = str(param_key).split(',') if isinstance(param_key, str) else [str(param_key)]
+    ma_period = int(parts[0]) if len(parts) > 0 else 20
+    win_period = int(parts[1]) if len(parts) > 1 else 500
     ma = df['close'].rolling(ma_period).mean()
     distance = (df['close'] - ma).abs()
 
@@ -34,7 +37,12 @@ def calc_mr_distance_percentile(df, ma_period=20, win_period=500):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

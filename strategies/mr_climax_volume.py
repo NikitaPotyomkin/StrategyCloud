@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_climax_volume(df, vol_period=200, ext_period=20):
+def calc_mr_climax_volume(df, param_key):
     """Объём > p95 на экстремуме 20 баров."""
+    parts = str(param_key).split(',') if isinstance(param_key, str) else [str(param_key)]
+    vol_period = int(parts[0]) if len(parts) > 0 else 200
+    ext_period = int(parts[1]) if len(parts) > 1 else 20
     vol = df['volume'] if 'volume' in df.columns else pd.Series(1, index=df.index)
     vol = vol.fillna(1)
     vol_p95 = vol.rolling(vol_period).apply(
@@ -34,7 +37,12 @@ def calc_mr_climax_volume(df, vol_period=200, ext_period=20):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

@@ -9,8 +9,9 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_overshoot_range(df, adr_period=20):
+def calc_mr_overshoot_range(df, param_key):
     """Цена > 130% ADR от open дня."""
+    adr_period = int(param_key) if not isinstance(param_key, str) or ',' not in str(param_key) else 20
     # (right) ADR — средний диапазон за adr_period дней
     daily_range = df['high'] - df['low']
     adr = daily_range.rolling(adr_period).mean()
@@ -32,7 +33,12 @@ def calc_mr_overshoot_range(df, adr_period=20):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

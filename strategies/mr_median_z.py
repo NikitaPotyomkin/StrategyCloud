@@ -9,8 +9,9 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_median_z(df, period=100):
+def calc_mr_median_z(df, param_key):
     """Робастный z-score: (price - median) / MAD."""
+    period = int(param_key) if not isinstance(param_key, str) or ',' not in str(param_key) else 100
     median = df['close'].rolling(period).median()
     mad = (df['close'] - median).abs().rolling(period).mean()
 
@@ -26,7 +27,12 @@ def calc_mr_median_z(df, period=100):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

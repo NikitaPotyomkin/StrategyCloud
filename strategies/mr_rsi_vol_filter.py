@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 
 
-def calc_mr_rsi_vol_filter(df, rsi_period=14, vol_period=50):
+def calc_mr_rsi_vol_filter(df, param_key):
     """RSI < 25 при низкой волатильности."""
+    parts = str(param_key).split(',') if isinstance(param_key, str) else [str(param_key)]
+    rsi_period = int(parts[0]) if len(parts) > 0 else 14
+    vol_period = int(parts[1]) if len(parts) > 1 else 50
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0.0)
     loss = -delta.where(delta < 0, 0.0)
@@ -34,7 +37,12 @@ def calc_mr_rsi_vol_filter(df, rsi_period=14, vol_period=50):
 
 
 def check_entry(prev, curr):
-    return (prev == 0 and curr == 1) or (prev == 0 and curr == -1)
+    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    if prev == 0 and curr == 1:
+        return 'long'
+    if prev == 0 and curr == -1:
+        return 'short'
+    return None
 
 
 def check_exit(prev, curr, direction):

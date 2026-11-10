@@ -30,9 +30,12 @@ def calc_mom_efficiency(df, period=20):
         else:
             er[i] = 0
     # (right) k=1: er > 0.5 and close > close.shift(period) (uptrend)
-    k = np.where((er > 0.5) & (close > np.roll(close, period)), 1, k)
+    # (right) use manual shift instead of np.roll to avoid wrapping artifacts
+    close_shifted = np.roll(close, period)
+    close_shifted[:period] = np.nan
+    k = np.where((er > 0.5) & (close > close_shifted), 1, k)
     # (right) k=-1: er > 0.5 and close < close.shift(period) (downtrend)
-    k = np.where((er > 0.5) & (close < np.roll(close, period)), -1, k)
+    k = np.where((er > 0.5) & (close < close_shifted), -1, k)
     df = df.copy()
     df['k'] = k
     return df

@@ -18,7 +18,7 @@ def calc_chan_donchian_pct_squeeze(df, period=20):
     # (right) width as percentage of mid
     width = (upper - lower) / mid
     # (right) squeeze condition: width below percentile threshold
-    p15 = int(df['param_key']) if 'param_key' in dir() else 20
+    # (right) removed: p15 = int(df['param_key']) — param_key is not a df column, would raise KeyError
     width_pct = width.rolling(100).quantile(0.15) if len(width) > 100 else width.quantile(0.15)
     squeeze = width < width_pct
     # (right) k=1: squeeze + close above upper
