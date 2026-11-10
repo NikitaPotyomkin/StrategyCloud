@@ -894,12 +894,18 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
         # 10.11.2026: сбой печатаем ВСЕГДА — раньше он тонул, потому что main.py
         # зовёт scan_and_trim(verbose=False), а печать была под `if verbose`.
         # Повторы гасит _ERR_LOG (не чаще раза в _ERR_EVERY_SEC на тот же текст).
-            _err = repr(exc)
-            _now_e = datetime.datetime.now().timestamp()
-            if (_ERR_LOG.get('msg') != _err
-                    or (_now_e - float(_ERR_LOG.get('ts') or 0.0)) > _ERR_EVERY_SEC):
-                _ERR_LOG.update({'msg': _err, 'ts': _now_e})
-                print(f"  [TRIM] проверка не выполнена: {_err}", flush=True)
+        _emsg = repr(exc)
+        _ets = datetime.datetime.now().timestamp()
+        if (_ERR_LOG.get('msg') != _emsg
+                or (_ets - float(_ERR_LOG.get('ts') or 0.0)) > _ERR_EVERY_SEC):
+            _ERR_LOG.update({'msg': _emsg, 'ts': _ets})
+            print(f"  [TRIM] проверка не выполнена: {_emsg}", flush=True)
+            
+            
+            
+                    
+                
+                
         return 0
 
 
