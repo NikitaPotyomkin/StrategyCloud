@@ -667,11 +667,15 @@ def _mix_line(real, floating) -> str:
 
 
 
-def trim_limit_rub(day):
-    """Дневной лимит правила пик-трима в рублях — то, по чему реально режем.
+def trim_limit_rub(day, act_mult=None):
+    """Рублёвый порог АКТИВАЦИИ пик-трима — с него правило включает трейл.
 
-    Формула ровно как в peak_trim.scan_and_trim (строка «Порог: … ₽»):
-        лимит = cfg.pct × эталон ₽/лот × плановый объём дня (лот)
+    Формула ровно как в peak_trim.scan_and_trim (порог активации):
+        порог активации = cfg.trail_act × эталон ₽/лот × плановый объём дня (лот)
+    cfg.trail_act = 2.0 («2× эталона»); act_mult переопределяет множитель для подписей.
+    Ниже порога правило не режет ничего; выше — держит ПИК удельной дня и срезает
+    только при откате cfg.trail_pct (25%) от пика. Лимита в рублях больше нет:
+    до 10.11.2026 им был плоский срез cfg.pct × эталон × план (на 1.00 эталона).
     эталон — агрегат cfg.ref_quantile удельной по дням ДО сегодняшнего (медиана
     дневных пиков, то же число, что лейбл «Медиана на 1 лот»); плановый объём —
     Σ лотов плана из journals/active_state.json (peak_trim._plan_from_state),
@@ -706,18 +710,20 @@ def trim_limit_rub(day):
             _plan = float(_pv) if (_pv is not None and pd.notna(_pv)) else 0.0
         if _ref <= 0 or _plan <= 0:
             return None
-        return float(getattr(_pt, 'pct', 1.0)) * _ref * _plan
+        _act = float(act_mult if act_mult is not None
+                     else getattr(_pt, 'trail_act', 2.0))
+        return _act * _ref * _plan
     except Exception:
         return None
 
 
 def trim_banner(data: dict, ref_day: float = None, limit_rub: float = None) -> None:
-    """Красный флаг: правило пик-трима включено + дневной лимит в рублях.
+    """Красный флаг: правило пик-трима включено + порог активации трейла.
 
-    Одна строка по запросу 10.11.2026: «лимит N ₽» — это порог дня, при котором
-    правило режет все позиции до keep_volume. Проценты эталона, окно истории и
-    допуск объёма из баннера убраны (живут в config.PeakTrimParams и в метриках
-    блока «Максимальная потенциальная прибыль»).
+    Одна строка по запросу 10.11.2026. Лимита в рублях больше нет: это не точка
+    среза, а порог ВКЛЮЧЕНИЯ трейла: ниже него правило молчит, выше — держит пик
+    удельной дня и срезает при откате trail_pct от пика. Проценты эталона, окно
+    истории и допуск объёма убраны (живут в config.PeakTrimParams).
     """
     _pt = None
     try:
@@ -729,10 +735,12 @@ def trim_banner(data: dict, ref_day: float = None, limit_rub: float = None) -> N
         return
     if limit_rub is None:
         limit_rub = trim_limit_rub(_daily((data or {}).get('equity_df')))
-    _lim = (f"{_num(float(limit_rub))} руб."
+    _act = float(getattr(_pt, 'trail_act', 2.0))
+    _tr = float(getattr(_pt, 'trail_pct', 0.25))
+    _on = (f"активация от {_num(float(limit_rub))} ₽ ({_act:g}× эталона)"
             if (limit_rub is not None and limit_rub == limit_rub and limit_rub > 0)
-            else '—')
-    st.error(f"❗ ПРАВИЛО ПИК-ТРИМА АКТИВНО — лимит {_lim}")
+            else f"активация от {_act:g}× эталона")
+    st.error(f"❗ ПРАВИЛО ПИК-ТРИМА АКТИВНО — трейл {_tr:.0%} от пика дня, {_on}")
 
 
 def _trim_banner_unused(data: dict, ref_day: float = None) -> None:
@@ -926,7 +934,7 @@ def render(data: dict, days_back: int) -> None:
     st.markdown("### Максимальная потенциальная прибыль за день")
     trim_banner(data, float(day['per_lot'].median()), trim_limit_rub(day))
     # trim_live(day) — отключён 10.11.2026: строка «check peak · последний замер …»
-    # и прогресс-бар убраны, дневной порог показывает красный флаг trim_banner.
+    # и прогресс-бар убраны, порог активации трейла показывает флаг trim_banner.
     c1, c2, c3 = st.columns(3)
     with c1:
         st.metric("Медиана пика за день",

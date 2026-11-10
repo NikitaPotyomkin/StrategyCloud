@@ -646,7 +646,7 @@ def _today_per_lot(con, acc, positions, today, login, tolerance=0.20):
     нет: это не сделки (deal_type IN (0,1)). См. _realized_by_day.
     """
     # Баланс на счету на начало суток больше не нужен: потенциал не от баланса.
-    _real = _realized_at(_realized_by_day(today, login), today, _now)
+    _real = _realized_at(_realized_by_day(today, login), today, int(datetime.datetime.now().timestamp()))
     # Плавающая — «живьём» из счёта: equity минус balance.
     _floating = (float(getattr(acc, 'equity', 0.0) or 0.0)
                  - float(getattr(acc, 'balance', 0.0) or 0.0))
@@ -753,7 +753,10 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                     print("  [TRIM] плановый объём дня 0 — удельную дня не считаем", flush=True)
                 return 0
             _acct_ratio = float(_per_now) / ref_val
-            _acct_hit = _acct_ratio >= float(cfg.pct)
+            # Трейлинг от пика дня (решение 10.11.2026): активация на trail_act
+            # эталонах, срез при откате trail_pct от пика удельной за день.
+            # Пик живёт в атрибуте функции и сбрасывается со сменой дня.
+            _act = float(getattr(cfg, 'trail_act', 2.0));  _tr = float(getattr(cfg, 'trail_pct', 0.25));  _st = getattr(scan_and_trim, '_trail', None);  _st = _st if (_st and _st[0] == today) else [today, 0.0];  _st[1] = max(_st[1], _acct_ratio) if _acct_ratio >= _act else _st[1];  _acct_hit = bool(_acct_ratio >= _act and _acct_ratio <= _st[1] * (1.0 - _tr));  scan_and_trim._trail = _st
             # Объём ушёл от планового больше допуска (закрылась пачка сделок или
             # книга разрослась): удельную всё равно считаем по плановому объёму,
             # но пишем предупреждение — одна строка на ступень отклонения.
