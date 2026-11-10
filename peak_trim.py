@@ -352,6 +352,13 @@ def _send_close(mt5, pos, volume, info, tick):
 # Анти-спам для счётового лога: последняя записанная ступень (10% эталона)
 _ACCT_LOG = {'day': None, 'band': -1.0}
 
+# Анти-спам ошибок прохода. Раньше сбой печатался только при verbose=True, а
+# main.py зовёт scan_and_trim(verbose=False): NameError в _today_per_lot молчал
+# с 03.11 по 10.11. Теперь ошибку печатаем ВСЕГДА, но не чаще, чем раз в
+# _ERR_EVERY_SEC секунд на одинаковый текст.
+_ERR_LOG = {'msg': '', 'ts': 0.0}
+_ERR_EVERY_SEC = 600
+
 
 def _flows_map():
     """Внешние деньги (пополнения/выводы) по дням: {day: [(ts_true, amount)]}.
@@ -756,7 +763,16 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
             # Трейлинг от пика дня (решение 10.11.2026): активация на trail_act
             # эталонах, срез при откате trail_pct от пика удельной за день.
             # Пик живёт в атрибуте функции и сбрасывается со сменой дня.
-            _act = float(getattr(cfg, 'trail_act', 2.0));  _tr = float(getattr(cfg, 'trail_pct', 0.25));  _st = getattr(scan_and_trim, '_trail', None);  _st = _st if (_st and _st[0] == today) else [today, 0.0];  _st[1] = max(_st[1], _acct_ratio) if _acct_ratio >= _act else _st[1];  _acct_hit = bool(_acct_ratio >= _act and _acct_ratio <= _st[1] * (1.0 - _tr));  scan_and_trim._trail = _st
+            _act = float(getattr(cfg, 'trail_act', 2.0))
+            _tr = float(getattr(cfg, 'trail_pct', 0.25))
+            _st = getattr(scan_and_trim, '_trail', None)
+            if not (_st and _st[0] == today):
+                _st = [today, 0.0]               # новый день — пик с нуля
+            if _acct_ratio >= _act:              # трейл активен — копим пик дня
+                _st[1] = max(_st[1], _acct_ratio)
+            _acct_hit = bool(_acct_ratio >= _act
+                             and _acct_ratio <= _st[1] * (1.0 - _tr))
+            scan_and_trim._trail = _st           # живёт в памяти процесса, ~1 день
             # Объём ушёл от планового больше допуска (закрылась пачка сделок или
             # книга разрослась): удельную всё равно считаем по плановому объёму,
             # но пишем предупреждение — одна строка на ступень отклонения.
@@ -789,8 +805,12 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
                       f"допуск ±{_tol * 100:.0f}%)", flush=True)
                 print(f"  [TRIM]   Эталон: {_space(ref_val)} ₽/лот ({_ref_label(cfg)})",
                       flush=True)
-                print(f"  [TRIM]   Порог: {ref_val * float(cfg.pct) * float(cur.get('plan_vol') or 0):,.0f} ₽ "
-                      f"({float(cfg.pct) * 100:.0f}% эталона × план {float(cur.get('plan_vol') or 0):.2f} лот)",
+                _plan_v = float(cur.get('plan_vol') or 0)
+                _peak_txt = (f"{_st[1] * 100:.0f}% эталона, срез ниже "
+                             f"{_st[1] * (1.0 - _tr) * 100:.0f}%" if _st[1] > 0
+                             else 'ещё не активирован')
+                print(f"  [TRIM]   Активация: {ref_val * _act * _plan_v:,.0f} ₽ ({_act:g}× эталона × план {_plan_v:.2f} лот) "
+                      f"| трейл {_tr:.0%} | пик дня: {_peak_txt}",
                       flush=True)
                 print(f"  [TRIM]   Выполнение: {_acct_ratio * 100:.0f}% {'→ РЕЖЕМ' if _acct_hit else ''}",
                       flush=True)
@@ -871,8 +891,15 @@ def scan_and_trim(cfg=None, path=None, verbose=True):
         finally:
             con.close()
     except Exception as exc:
-        if verbose:
-            print(f"  [TRIM] проверка не выполнена: {exc!r}", flush=True)
+        # 10.11.2026: сбой печатаем ВСЕГДА — раньше он тонул, потому что main.py
+        # зовёт scan_and_trim(verbose=False), а печать была под `if verbose`.
+        # Повторы гасит _ERR_LOG (не чаще раза в _ERR_EVERY_SEC на тот же текст).
+            _err = repr(exc)
+            _now_e = datetime.datetime.now().timestamp()
+            if (_ERR_LOG.get('msg') != _err
+                    or (_now_e - float(_ERR_LOG.get('ts') or 0.0)) > _ERR_EVERY_SEC):
+                _ERR_LOG.update({'msg': _err, 'ts': _now_e})
+                print(f"  [TRIM] проверка не выполнена: {_err}", flush=True)
         return 0
 
 
@@ -965,7 +992,9 @@ def main():
     ap.add_argument('--eval', action='store_true', help='оценить правило на истории position_peak')
     ap.add_argument('--live', action='store_true', help='один проход по открытым позициям (shadow)')
     ap.add_argument('--real', action='store_true', help='ВНИМАНИЕ: реально закрывать (по умолчанию нет)')
-    ap.add_argument('--pct', type=float, default=None, help='порог от эталона (0.75)')
+    ap.add_argument('--pct', type=float, default=None, help='исторический порог от эталона (в решении не участвует)')
+    ap.add_argument('--act', type=float, default=None, help='активация трейла, во сколько эталонов (2.0)')
+    ap.add_argument('--trail', type=float, default=None, help='срез при откате от пика дня (0.25)')
     ap.add_argument('--keep', type=float, default=None, help='оставить объём (0.01)')
     ap.add_argument('--days', type=int, default=None, help='окно истории эталона, дней')
     ap.add_argument('--quantile', type=float, default=None, help='агрегат эталона (0.90 = p90)')
@@ -977,6 +1006,8 @@ def main():
         enabled=bool(args.real),
         shadow=True,
         pct=args.pct if args.pct is not None else base.pct,
+        trail_act=args.act if args.act is not None else base.trail_act,
+        trail_pct=args.trail if args.trail is not None else base.trail_pct,
         keep_volume=args.keep if args.keep is not None else base.keep_volume,
         lookback_days=args.days if args.days is not None else base.lookback_days,
         ref_quantile=args.quantile if args.quantile is not None else base.ref_quantile,
@@ -986,7 +1017,8 @@ def main():
         single_shot=base.single_shot,
     )
     print(f"  [TRIM] режим: {'REAL' if cfg.enabled else 'ОЦЕНКА (без закрытий)'} | "
-          f"порог {cfg.pct:.0%} | оставляем {cfg.keep_volume:.2f} лот | "
+          f"трейл {cfg.trail_pct:.0%} от пика дня, активация {cfg.trail_act:g}× эталона | "
+          f"оставляем {cfg.keep_volume:.2f} лот | "
           f"эталон {_ref_label(cfg)} | "
           f"окно {_win_label(cfg)}", flush=True)
     if args.eval or not args.live:
