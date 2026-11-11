@@ -283,7 +283,7 @@ def _fit_angle(sub: pd.DataFrame) -> tuple:
     X — дни от первого замера окна, Y — баланс без внешних денег. Наклон ₽/день
     нормируем на средний баланс окна и на конвенцию 1% в день = 45°: иначе
     градусы зависят от длины окна и размера депозита и несопоставимы день ко дню.
-    Знак сохраняется: минус — кривая идёт вниз.
+    Знак: плюс — кривая идёт вверх (поворот против часовой), минус — вниз.
     """
     if sub is None or len(sub) < 3:
         return float('nan'), float('nan')
@@ -297,7 +297,9 @@ def _fit_angle(sub: pd.DataFrame) -> tuple:
     base = float(np.nanmean(y))
     if not np.isfinite(base) or base <= 0:
         return float('nan'), slope_day
-    return float(np.degrees(np.arctan((slope_day / base) / SLOPE_PCT_45DEG))), slope_day
+    # Знак угла (11.11.2026): ПРОТИВ часовой стрелки = плюс. Рост баланса даёт
+    # положительный угол, падение — отрицательный, поэтому берём -atan().
+    return float(-np.degrees(np.arctan((slope_day / base) / SLOPE_PCT_45DEG))), slope_day
 
 
 def _week_mean_angle(bal: pd.DataFrame, n_days: int = 5) -> float:

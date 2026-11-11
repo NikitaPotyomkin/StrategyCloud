@@ -39,7 +39,8 @@ WATCH_STATE = os.path.join(_HERE, 'journals', 'peak_trim_watch_state.json')
 
 FIELDS = [
     'ts', 'day', 'potential', 'realized_day', 'floating', 'book_vol', 'plan_vol',
-    'per_lot', 'ref', 'ratio', 'peak', 'armed', 'hit', 'act_rub', 'cut_rub',
+    'per_lot', 'ref', 'ratio', 'peak', 'armed', 'hit', 'cuts', 'dirty',
+    'act_rub', 'cut_rub', 'book_vs_plan_pct', 'note',
     'book_vs_plan_pct', 'note',
 ]
 
@@ -115,6 +116,16 @@ def snapshot(cfg=None, save=True):
     try:
         ref = pt._daily_ref(con, today, cfg, login)
         cur = pt._today_per_lot(con, acc, positions, today, login, tol)
+        # Реальные срезы дня — из таблицы бота (watch считает только решение,
+        # а факт исполнения виден лишь в peak_trim: mode='real' + retcode).
+        cuts = 0
+        try:
+            _rc = con.execute(
+                "SELECT COUNT(*) AS n FROM peak_trim WHERE day = ? AND mode = 'real'",
+                (today,)).fetchone()
+            cuts = int(_rc['n'] or 0) if _rc is not None else 0
+        except Exception:
+            cuts = 0
     finally:
         con.close()
 
@@ -166,6 +177,9 @@ def snapshot(cfg=None, save=True):
     elif book_vol < plan_vol * (1.0 - tol) and plan_vol > 0:
         note = 'книга меньше плана'
 
+    if cuts > 0:
+        note = (note + '; ' if note else '') + f'срез {cuts}'
+
     row = {
         'ts': ts,
         'day': today,
@@ -179,6 +193,8 @@ def snapshot(cfg=None, save=True):
         'ratio': round(ratio, 4) if ratio is not None else '',
         'peak': round(peak, 4),
         'armed': int(armed),
+        'cuts': int(cuts),
+        'dirty': int(cuts > 0),
         'hit': int(hit),
         'act_rub': round(act_rub, 0),
         'cut_rub': round(cut_rub, 0),
@@ -231,8 +247,10 @@ def summary(days=None):
         day_keys = day_keys[-int(days):]
 
     print(f"{'день':<12}{'сним':>5}{'пикР':>10}{'итогР':>10}{'отдалР':>10}"
-          f"{'maxотн':>9}{'актив':>7}{'срез':>6}{'план':>7}{'книга':>7}")
+          f"{'maxотн':>9}{'актив':>7}{'грязн':>7}{'план':>7}{'книга':>7}")
     total_give = 0.0
+    dirty_give = 0.0
+    dirty_days = 0
     for day in day_keys:
         chunk = per_day[day]
         pots = [x for x in (_f(r.get('potential')) for r in chunk) if x is not None]
@@ -242,18 +260,29 @@ def summary(days=None):
         pot_max = max(pots)
         pot_last = pots[-1]
         give = pot_last - pot_max
-        total_give += give
+        # итоги ниже: чистые и грязные дни считаются раздельно
         armed = any(str(r.get('armed')) == '1' for r in chunk)
         hit = any(str(r.get('hit')) == '1' for r in chunk)
+        dirty = any(str(r.get('dirty')) == '1' for r in chunk)
+        give_txt = f"({_num(give)})" if dirty else _num(give)
+        if dirty:
+            dirty_give += give
+            dirty_days += 1
+        else:
+            total_give += give
         plan = _f(chunk[-1].get('plan_vol')) or 0.0
         book = _f(chunk[-1].get('book_vol')) or 0.0
         print(f"{day:<12}{len(chunk):>5}{_num(pot_max):>10}{_num(pot_last):>10}"
-              f"{_num(give):>10}{(max(ratios) * 100 if ratios else 0):>8.0f}%"
-              f"{('да' if armed else '—'):>7}{('ДА' if hit else '—'):>6}"
+              f"{give_txt:>10}{(max(ratios) * 100 if ratios else 0):>8.0f}%"
+              f"{('да' if armed else '—'):>7}{('ГРЯЗН' if dirty else ('срез?' if hit else '—')):>7}"
               f"{plan:>7.2f}{book:>7.2f}")
-    print(f"\n  суммарно отдано от пиков: {_num(total_give)} Р за {len(day_keys)} дн.")
+    print(f"\n  чисто: отдано от пиков {_num(total_give)} Р "
+          f"({len(day_keys) - dirty_days} дн. без среза)")
+    if dirty_days:
+        print(f"  грязно: {_num(dirty_give)} Р за {dirty_days} дн. — "
+              f"в скобках, для вывода не годится")
     print("  'отдалР' = потенциал в последнем снимке минус пик дня "
-          "(минус — значит день закрылся выше своего пика, плюс — отдали)")
+          "(минус — день выше пика; в скобках — день со срезом)")
     return rows
 
 
