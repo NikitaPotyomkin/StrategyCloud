@@ -640,11 +640,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='vr_rs', grid=[10, 20, 50], min_len=150,
     ),
-    'volreg_volofvol': dict(
-        module='volreg_volofvol', calc='calc_volreg_volofvol',
-        entry='check_entry', exit='check_exit',
-        label='vr_vov', grid=[20, 60, 120], min_len=200,
-    ),
     'volreg_wr7_fade': dict(
         module='volreg_wr7_fade', calc='calc_volreg_wr7_fade',
         entry='check_entry', exit='check_exit',
@@ -825,31 +820,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='vr_vov2', grid=[20, 60, 120], min_len=200,
     ),
-    'volreg_ewma_accel': dict(
-        module='volreg_ewma_accel', calc='calc_volreg_ewma_accel',
-        entry='check_entry', exit='check_exit',
-        label='vr_ewma', grid=[20, 50, 100], min_len=200,
-    ),
-    'volreg_intrinsic_time': dict(
-        module='volreg_intrinsic_time', calc='calc_volreg_intrinsic_time',
-        entry='check_entry', exit='check_exit',
-        label='vr_intri', grid=[3, 5], min_len=120,
-    ),
-    'volreg_vhf_trend': dict(
-        module='volreg_vhf_trend', calc='calc_volreg_vhf_trend',
-        entry='check_entry', exit='check_exit',
-        label='vr_vhf', grid=[20, 28, 40], min_len=150,
-    ),
-    'volreg_er_kaufman': dict(
-        module='volreg_er_kaufman', calc='calc_volreg_er_kaufman',
-        entry='check_entry', exit='check_exit',
-        label='vr_er', grid=[10, 20], min_len=120,
-    ),
-    'volreg_tr_skew': dict(
-        module='volreg_tr_skew', calc='calc_volreg_tr_skew',
-        entry='check_entry', exit='check_exit',
-        label='vr_trsk', grid=[20, 60], min_len=150,
-    ),
     'volreg_yz_alt': dict(
         module='volreg_yz_regime', calc='calc_volreg_yz_regime',
         entry='check_entry', exit='check_exit',
@@ -998,11 +968,6 @@ REGISTRY = {
         label='mr_vz', grid=[100], min_len=150,
     ),
     # Статистика (10)
-    'stat_vr': dict(
-        module='stat_vr_ratio', calc='calc_stat_vr_ratio',
-        entry='check_entry', exit='check_exit',
-        label='st_vr', grid=[5, 10], min_len=200,
-    ),
     'stat_ljung': dict(
         module='stat_ljung_box', calc='calc_stat_ljung_box',
         entry='check_entry', exit='check_exit',
@@ -1161,7 +1126,7 @@ ENABLED_BATCH = (
     'chan_regression_band_z',
     'volreg_bbw_pct_low', 'volreg_choppiness', 'volreg_gk_zscore', 'volreg_nr7_break',
     'volreg_parkinson_ratio', 'volreg_range_expansion', 'volreg_rs_break',
-    'volreg_volofvol', 'volreg_wr7_fade', 'volreg_yz_regime',
+    'volreg_wr7_fade', 'volreg_yz_regime',
     'volprof_cvd_div', 'volprof_effort_result', 'volprof_poc_break',
     'volprof_volume_dry', 'volprof_vol_imbalance',
     'pattern_flag_bull', 'pattern_gap_go', 'pattern_triangle_sym',
@@ -1174,8 +1139,7 @@ ENABLED_BATCH = (
     'mom_pullback_ratio', 'mom_roc_of_roc', 'mom_vs_vol',
     # ── БАТЧ 6 (06.11.2026): 55 новых стратегий в 5 категориях ──
     # Волатильность (15)
-    'volreg_volofvol', 'volreg_ewma_accel', 'volreg_intrinsic_time',
-    'volreg_vhf_trend', 'volreg_er_kaufman', 'volreg_tr_skew',
+    'volreg_volofvol', 
     'volreg_yz_alt', 'volreg_nr7_alt', 'volreg_range_exp_alt', 'volreg_vol_of_vol2',
     'volreg_ewma_accel', 'volreg_intrinsic_time', 'volreg_vhf_trend',
     'volreg_er_kaufman', 'volreg_tr_skew',
@@ -1186,7 +1150,7 @@ ENABLED_BATCH = (
     'mr_bb_atr', 'mr_median_z', 'mr_dist_pct', 'mr_rsi_vol', 'mr_overshoot',
     'mr_consec', 'mr_climax', 'mr_exhaust', 'mr_rubber', 'mr_volz',
     # Статистика (10)
-    'stat_vr', 'stat_ljung', 'stat_mutinfo', 'stat_ks', 'stat_hl',
+    'stat_ljung', 'stat_mutinfo', 'stat_ks', 'stat_hl',
     'stat_acf', 'stat_ent', 'stat_pent', 'stat_lz', 'stat_ad',
     # Breakout / momentum / паттерны (10)
     'struct_liq_swp', 'struct_swing', 'chan_dsc_sq', 'chan_regz',
