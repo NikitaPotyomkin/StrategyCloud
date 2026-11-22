@@ -29,10 +29,19 @@ echo [2/3] Push...
 git push origin main || goto :fail
 
 echo [3/3] Запуск деплоя на боевой (%TRADE_HOST%)...
-schtasks /S %TRADE_HOST% /Run /TN "%TASK_NAME%" || goto :fail
+REM Шаг не критичный: коммит уже в origin/main, и боевая подтянет его на плановом
+REM тике (задача "StrategyCloud deploy" ходит в git раз в час). Ошибка доступа
+REM здесь значит только "не удалось дёрнуть сейчас", а не "деплой не состоялся".
+schtasks /S %TRADE_HOST% /Run /TN "%TASK_NAME%" >nul 2>&1
+if errorlevel 1 (
+    echo       не удалось дёрнуть задачу - ждём планового тика
+    echo       проверить: дашборд, плашка деплоя
+) else (
+    echo       задача запущена
+)
 
 echo.
-echo Готово. Статус смотри на боевой: journals\deploy.log и checkpoints\deploy_status.json
+echo Готово. Статус смотри на боевой: journals\deploy.log и journals\deploy_status.json
 goto :end
 
 :fail
