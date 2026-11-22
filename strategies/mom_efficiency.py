@@ -8,6 +8,8 @@ Idea: Efficiency ratio measures directional momentum vs total noise
 import numpy as np
 import pandas as pd
 
+from strategies._bt_core import run_backtest
+
 
 def calc_mom_efficiency(df, period=20):
     """Calculate signal. Returns df with 'k' column."""
@@ -60,50 +62,14 @@ def check_exit(prev, curr, direction):
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,
              tick_size, sim_lot=0.01, spread_points=0):
-    df = calc_mom_efficiency(df, int(param_key))
-    profit = 0
-    n_trades = 0
-    trade_profits = []
+    """Симуляция сделок через общий движок strategies/_bt_core.run_backtest.
 
-    sl_dist = sl_points * point
-    tp_dist = tp_points * point
-
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-        close = df['close'].iloc[i]
-        high = df['high'].iloc[i]
-        low = df['low'].iloc[i]
-
-        if prev_k == 0 and curr_k == 1:
-            entry = close
-            sl_price = entry - sl_dist
-            tp_price = entry + tp_dist
-            for j in range(i+1, min(i+50, len(df))):
-                if df['low'].iloc[j] <= sl_price:
-                    profit += (sl_price - entry) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(sl_price - entry)
-                    break
-                elif df['high'].iloc[j] >= tp_price:
-                    profit += (tp_price - entry) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(tp_price - entry)
-                    break
-        elif prev_k == 0 and curr_k == -1:
-            entry = close
-            sl_price = entry + sl_dist
-            tp_price = entry - tp_dist
-            for j in range(i+1, min(i+50, len(df))):
-                if df['high'].iloc[j] >= sl_price:
-                    profit += (entry - sl_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(entry - sl_price)
-                    break
-                elif df['low'].iloc[j] <= tp_price:
-                    profit += (entry - tp_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(entry - tp_price)
-                    break
-
-    return (profit, n_trades, trade_profits)
+    Прежняя собственная петля входила по close сигнального бара (цена закрытия
+    уже известна в момент входа), не вычитала спред, выбрасывала сделки, не
+    закрывшиеся за 49 баров, и считала P&L как diff * lot * tick_value без
+    деления на tick_size — из-за этого её числа были несравнимы с остальным
+    реестром. Замер: tools/loop_model_pilot.py.
+    """
+    return run_backtest(df, calc_mom_efficiency, check_entry, check_exit,
+                        int(param_key), sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)

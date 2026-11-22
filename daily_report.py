@@ -182,6 +182,9 @@ def _calc_strategy_metrics(positions, registry, open_positions):
             'gross_loss': round(gross_loss, 2),
             'profit_factor': pf_str,
             'win_rate': round(win_rate * 100, 1),
+            # Выигрышных сделок: сводка по type считает win_rate по сделкам,
+            # а не по знаку итога стратегии (см. _write_summary)
+            'wins': wins,
             'avg_profit': round(avg_profit, 2),
             'volume': round(volume, 2),
             'best': round(best, 2),
@@ -207,7 +210,8 @@ def _write_csv(date, metrics):
                   'open_positions', 'conflict']
     
     with open(csv_file, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        # 'wins' в metrics нужен только сводке по type — в CSV его не пишем
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(metrics)
     
@@ -233,8 +237,8 @@ def _write_summary(date, metrics):
         by_type[stype]['profit'] += m['profit']
         by_type[stype]['gross_profit'] += m['gross_profit']
         by_type[stype]['gross_loss'] += m['gross_loss']
-        if m['profit'] > 0:
-            by_type[stype]['wins'] += m['trades']
+        if m['trades'] > 0:  # wins считаем по сделкам, а не по знаку итога стратегии
+            by_type[stype]['wins'] += m.get('wins', 0)
         total_profit += m['profit']
         total_trades += m['trades']
     

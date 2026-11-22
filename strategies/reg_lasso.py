@@ -100,7 +100,9 @@ def calc_reg_lasso(df, period=100, alpha=0.1):
         # Прогноз для бара i — скалярным произведением, а не весом w[-1].
         # Цель в lasso нормирована (y_norm), поэтому возвращаем прогноз в
         # единицы доходности: * y_std + y_mean.
-        _jp = i - 5
+        # j = i-4 — последняя строка, чьи признаки (ret[i-3..i]) уже известны на
+        # закрытии бара i; её цель по обучению — ret[i+1], то есть бар вперёд.
+        _jp = i - 4
         _f = [ret.iloc[_jp + lag] for lag in range(1, n_lags)]
         _f.append(atr_ratio.iloc[_jp] if not np.isnan(atr_ratio.iloc[_jp]) else 0.0)
         _f.append(float(hl_range.iloc[_jp]) if not np.isnan(hl_range.iloc[_jp]) else 0.0)

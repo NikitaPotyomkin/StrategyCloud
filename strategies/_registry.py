@@ -456,16 +456,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='MR-ZScore', grid=[30, 40, 60], min_len=80,
     ),
-    'mr_cvd_div': dict(
-        module='mr_cvd_div', calc='calc_cvd',
-        entry='check_entry', exit='check_exit',
-        label='MR-CVDDiv', grid=[30, 50, 80], min_len=100,
-    ),
-    'mr_bb_middle': dict(
-        module='mr_bb_middle', calc='calc_bb_middle_z',
-        entry='check_entry', exit='check_exit',
-        label='MR-BBMid', grid=[20, 40, 60], min_len=70,
-    ),
     'mr_rsi_sma': dict(
         module='mr_rsi_sma', calc='calc_rsi_sma_z',
         entry='check_entry', exit='check_exit',
@@ -897,11 +887,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='mr_osh', grid=[20, 40], min_len=120,
     ),
-    'mr_consec': dict(
-        module='mr_consecutive_bars', calc='calc_mr_consecutive_bars',
-        entry='check_entry', exit='check_exit',
-        label='mr_con', grid=[6, 8], min_len=120,
-    ),
     'mr_climax': dict(
         module='mr_climax_volume', calc='calc_mr_climax_volume',
         entry='check_entry', exit='check_exit',
@@ -1000,7 +985,7 @@ ENABLED_BATCH = (
     'insidebar', 'tworsi', 'willstoch',
     # ── NEW BATCH (25.10): +17 стратегий в 6 категориях ──
     # Mean reversion (4)
-    'mr_zscore', 'mr_cvd_div', 'mr_bb_middle', 'mr_rsi_sma',
+    'mr_zscore', 'mr_rsi_sma',
     # Breakout continuation (3)
     'bc_adaptive_donchian', 'bc_keltner_squeeze', 'bc_volume_confirm',
     # Reversal (3)
@@ -1047,7 +1032,7 @@ ENABLED_BATCH = (
     'osc_er_gator', 
     # Mean reversion (10)
     'mr_bb_atr', 'mr_median_z', 'mr_dist_pct', 'mr_rsi_vol', 'mr_overshoot',
-    'mr_consec', 'mr_climax', 'mr_exhaust', 'mr_rubber', 'mr_volz',
+    'mr_climax', 'mr_exhaust', 'mr_rubber', 'mr_volz',
     # Статистика (10)
     'stat_ljung', 'stat_mutinfo', 'stat_ks', 
     'stat_acf', 'stat_ent', 'stat_pent', 'stat_ad',

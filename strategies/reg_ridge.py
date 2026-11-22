@@ -77,9 +77,9 @@ def calc_reg_ridge(df, period=100, alpha=1.0):
         # Ridge regression
         w = _ridge_regression(X_norm, y, alpha=alpha)
         # Прогноз для бара i — скалярным произведением, а не весом w[-1].
-        # Строка признаков та же, что в обучении, но для j_pred = i-5: её лаги
-        # 1..4 — это ret[i-4..i-1], а они уже известны на баре i.
-        _jp = i - 5
+        # Строка признаков та же, что в обучении; берём j = i-4, чтобы целью был
+        # ret[i+1]: признаки ret[i-3..i] уже известны на закрытии бара i.
+        _jp = i - 4
         _f = [ret.iloc[_jp + lag] for lag in range(1, n_lags)]
         _f.append(atr_ratio.iloc[_jp] if not np.isnan(atr_ratio.iloc[_jp]) else 0.0)
         _f.append(float(hl_range.iloc[_jp]) if not np.isnan(hl_range.iloc[_jp]) else 0.0)
