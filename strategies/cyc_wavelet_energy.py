@@ -45,10 +45,16 @@ def calc_cyc_wavelet_energy(df, period=100):
     e2_mean = pd.Series(energy2).rolling(period).mean().values
     e3_mean = pd.Series(energy3).rolling(period).mean().values
 
+    # Ensure float dtype for bitwise operations
+    energy3 = np.asarray(energy3, dtype=np.float64)
+    e3_mean = np.asarray(e3_mean, dtype=np.float64)
+    energy1 = np.asarray(energy1, dtype=np.float64)
+    energy2 = np.asarray(energy2, dtype=np.float64)
+
     # E3 > E1 и E3 > E2
     k = np.zeros(len(df))
-    k[energy3 > e3_mean & energy3 > energy1 & energy3 > energy2] = 1
-    k[energy3 < e3_mean & energy3 < energy1 & energy3 < energy2] = -1
+    k[np.logical_and(np.logical_and(energy3 > e3_mean, energy3 > energy1), energy3 > energy2)] = 1
+    k[np.logical_and(np.logical_and(energy3 < e3_mean, energy3 < energy1), energy3 < energy2)] = -1
 
     df = df.copy()
     df['k'] = k

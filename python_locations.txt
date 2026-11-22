@@ -1,0 +1,18 @@
+﻿FOUND: C:\Users\UseR\AppData\Local\Programs\Python
+NOT FOUND: C:\Python39
+NOT FOUND: C:\Python38
+NOT FOUND: C:\Python311
+NOT FOUND: C:\Python310
+NOT FOUND: C:\Program Files\Python39
+NOT FOUND: C:\Program Files\Python38
+NOT FOUND: C:\Program Files\Python311
+NOT FOUND: C:\Program Files\Python310
+NOT FOUND: C:\Program Files (x86)\Python39
+NOT FOUND: C:\Program Files (x86)\Python38
+NOT FOUND: C:\Program Files (x86)\Python311
+NOT FOUND: C:\Program Files (x86)\Python310
+Registry key exists: HKCU:\Software\Python\PythonCore
+  Version: HKEY_CURRENT_USER\Software\Python\PythonCore\3.11
+  Version: HKEY_CURRENT_USER\Software\Python\PythonCore\3.12
+  Version: HKEY_CURRENT_USER\Software\Python\PythonCore\3.14
+PATH contains python

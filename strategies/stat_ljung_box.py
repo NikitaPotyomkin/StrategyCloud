@@ -21,7 +21,9 @@ def calc_stat_ljung_box(df, period=50):
     # Если LB p-value < 0.05 -> есть автокорреляция -> предсказуемость
 
     # Используем ACF(1) как прокси
-    acf_1 = ret.rolling(period).autocorr(freq=1)
+    # Rolling.autocorr удалён в pandas 2.x (и аргумента freq= у него не было):
+    # ACF(1) по окну = корреляция ret с тем же ret, сдвинутым на один бар.
+    acf_1 = ret.rolling(period).corr(ret.shift(1))
     acf_1 = acf_1.fillna(0)
 
     # LB-статистика (упрощённо)

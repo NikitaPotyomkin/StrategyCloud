@@ -44,8 +44,9 @@ def calc_regime_stress_index(df, period=100):
 
     # Вход против стресса (fade)
     k = np.zeros(len(df))
-    k[stress > p80 & ret > 0] = -1  # Стресс вверх -> short
-    k[stress > p80 & ret < 0] = 1   # Стресс вниз -> long
+    stress_arr = np.asarray(stress)
+    k[(stress_arr > np.asarray(p80)) & (ret.values > 0)] = -1
+    k[(stress_arr > np.asarray(p80)) & (ret.values < 0)] = 1
 
     df = df.copy()
     df['k'] = k

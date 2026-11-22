@@ -19,8 +19,14 @@ def calc_port_alpha_decay(df, period=100):
     # Information Coefficient = корреляция signal vs return
     # Прокси: autocorrelation ret как прокси стабильности alpha
 
-    # Rolling autocorrelation
-    acf = ret.rolling(period).autocorr(1)
+    # Rolling autocorrelation — .autocorr() doesn't take args
+    acf = pd.Series(index=df.index, dtype=float)
+    for i in range(period, len(df)):
+        window = ret.iloc[i-period:i]
+        if window.std() > 0:
+            acf.iloc[i] = window.autocorr(lag=1)
+        else:
+            acf.iloc[i] = 0
     acf = acf.fillna(0)
 
     # Alpha decay: ACF < 0 (отрицательная предсказуемость)

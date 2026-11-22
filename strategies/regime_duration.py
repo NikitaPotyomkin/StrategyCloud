@@ -43,14 +43,16 @@ def calc_regime_duration(df, period=200):
             current_duration += 1
         duration[i] = current_duration
 
+    duration_s = pd.Series(duration, index=df.index)
+
     # p80 исторической длительности
-    p80 = duration.rolling(period).quantile(0.80)
+    p80 = duration_s.rolling(period).quantile(0.80)
     p80 = p80.replace(0, np.nan).fillna(10)
 
     # Вход когда режим длинный
     k = np.zeros(len(df))
-    k[duration > p80 & regime == 1] = 1
-    k[duration > p80 & regime == -1] = -1
+    k[(duration_s > p80) & (regime == 1)] = 1
+    k[(duration_s > p80) & (regime == -1)] = -1
 
     df = df.copy()
     df['k'] = k

@@ -20,7 +20,15 @@ def calc_stat_adf_regime(df, period=120):
     # Простая аппроксимация ADF-теста через autocorrelation
     # ADF: проверяет H0: unit root (тренд) vs H1: stationary (mean-reversion)
     # Используем autocorrelation как прокси
-    acf_1 = ret.rolling(period).autocorr(freq=1)
+    # .autocorr() doesn't take freq=, compute manually
+    acf_1 = pd.Series(index=df.index, dtype=float)
+    for i in range(period, len(df)):
+        window = ret.iloc[i-period:i]
+        if window.std() > 0:
+            acf_1.iloc[i] = window.autocorr(lag=1)
+        else:
+            acf_1.iloc[i] = 0
+    acf_1 = acf_1.fillna(0)
 
     # Низкая ACF(1) -> stationary (mean-reversion)
     # Высокая ACF(1) -> тренд

@@ -15,20 +15,27 @@ from strategies._bt_core import run_backtest, state_entry, state_exit
 
 def calc_cyc_hilbert_phase(df, period=64):
     close = df['close'].values.astype(float)
+    n = len(df)
 
     # Detrend
-    close = close - pd.Series(close).rolling(20).mean().values
+    close_detrend = close - pd.Series(close).rolling(20).mean().values
 
     # Hilbert transform (прямая аппроксимация через Hilbert quadrant)
     # I (in-phase): close smoothed
-    I = pd.Series(close).rolling(period).mean().values
+    s_close = pd.Series(close_detrend)
+    I = s_close.rolling(period).mean().values
 
     # Q (quadrature): Hilbert transform approximation
     # Q = Hilbert(close) ≈ close shifted by quarter period
-    q_shift = period // 4
-    Q = np.zeros_like(close)
-    Q[q_shift:] = (pd.Series(close).rolling(2).mean().diff(q_shift).values)
-    Q[:q_shift] = 0
+    q_shift = max(1, period // 4)
+    Q = np.zeros(n)
+    rolling2 = s_close.rolling(2).mean().diff(q_shift).values
+    start = min(q_shift, n - 1)
+    Q[q_shift:start+1] = rolling2[:start+1-q_shift] if start+1-q_shift > 0 else 0
+
+    # Ensure same length
+    I = I[:n]
+    Q = Q[:n]
 
     # Фаза
     phase = np.arctan2(Q, I)
@@ -36,7 +43,7 @@ def calc_cyc_hilbert_phase(df, period=64):
     # Нормализация в [0, pi]
     phase = np.abs(phase)
 
-    k = np.zeros(len(df))
+    k = np.zeros(n)
 
     # Фаза ~ 0 (начало цикла вверх)
     k[phase < 0.3] = 1

@@ -59,7 +59,10 @@ def _calc(df, param_key):
     parts = str(param_key).split(',') if isinstance(param_key, str) else [str(param_key)]
     rsi_period = int(parts[0]) if len(parts) > 0 else 14
     vol_period = int(parts[1]) if len(parts) > 1 else 50
-    return calc_mr_rsi_vol_filter(df, rsi_period, vol_period)
+    # calc_mr_rsi_vol_filter сам разбирает param_key («rsi,vol»). Обёртка собирала
+    # те же параметры вручную и звала его с тремя аргументами — TypeError на каждой
+    # комбинации, и семейство молча выпадало через _safe_backtest.
+    return calc_mr_rsi_vol_filter(df, param_key)
 
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,

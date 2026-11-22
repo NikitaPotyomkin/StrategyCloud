@@ -20,7 +20,8 @@ def calc_volprof_cvd_div(df, period=50):
     # Positive volume: close > open
     # Negative volume: close < open
     vol_direction = np.where(df['close'] > df['open'], df['volume'], -df['volume'])
-    cvd = pd.Series(vol_direction).cumsum()
+    # Use df.index to keep alignment
+    cvd = pd.Series(vol_direction, index=df.index).cumsum()
 
     # Дивергенция: CVD растёт, цена падает
     cvd_trend = cvd.diff(10) > 0  # CVD растёт за 10 баров
@@ -31,8 +32,10 @@ def calc_volprof_cvd_div(df, period=50):
     price_rise = df['close'] > df['close'].shift(10)
 
     k = np.zeros(len(df))
-    k[cvd_trend & price_fall] = 1   # Long: CVD растёт, цена упала
-    k[cvd_fall & price_rise] = -1   # Short: CVD падает, цена выросла
+    mask_long = cvd_trend.fillna(False) & price_fall.fillna(False)
+    mask_short = cvd_fall.fillna(False) & price_rise.fillna(False)
+    k[mask_long.values] = 1
+    k[mask_short.values] = -1
 
     df = df.copy()
     df['k'] = k

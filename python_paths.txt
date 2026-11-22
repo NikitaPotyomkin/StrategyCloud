@@ -1,0 +1,4 @@
+﻿Error checking 3.11: Cannot bind argument to parameter 'Path' because it is null.
+Error checking 3.12: Cannot bind argument to parameter 'Path' because it is null.
+Error checking 3.14: Cannot bind argument to parameter 'Path' because it is null.
+FOUND: C:\Users\UseR\AppData\Local\Programs\Python\Python314\python.exe

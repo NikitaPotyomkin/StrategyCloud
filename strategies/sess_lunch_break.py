@@ -31,8 +31,8 @@ def calc_sess_lunch_break(df, period=20):
         lunch_low = np.min(lows[:2])
         lunch_range = lunch_high - lunch_low
         
-        # Calculate average range
-        avg_range = np.mean(highs[2:]) - np.mean(lows[2:])
+        # Calculate average range (proper average of individual bar ranges)
+        avg_range = np.mean([highs[j] - lows[j] for j in range(2, len(highs))]) if len(highs) > 2 else 0
         
         # Low volatility lunch (<0.5× average)
         if lunch_range < 0.5 * avg_range and avg_range > 0:

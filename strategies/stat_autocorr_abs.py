@@ -17,9 +17,13 @@ def calc_stat_autocorr_abs(df, period=200):
     ret = df['close'].pct_change().fillna(0).abs()
 
     # ACF(1) абсолютных ret
-    acf_values = []
-    for i in range(period, len(df)):
-        series = ret.iloc[i-period:i].values
+    acf_values = [0.0] * (period - 1)
+    for i in range(period - 1, len(df)):
+        series = ret.iloc[i-period+1:i+1].values
+        n = len(series)
+        if n < 3:
+            acf_values.append(0.0)
+            continue
         mean = np.mean(series)
         var = np.var(series)
         if var > 0:
@@ -28,19 +32,18 @@ def calc_stat_autocorr_abs(df, period=200):
             acf = cov / var
             acf_values.append(acf)
         else:
-            acf_values.append(0)
-
-    acf_series = pd.Series(acf_values, index=df.index[period-1:])
-    acf_series = acf_series.reindex(df.index).fillna(0)
-
-    # Кластеры: ACF > 0.2
-    has_clusters = acf_series > 0.2
+            acf_values.append(0.0)
 
     # Вход по направлению текущего ret
     k = np.zeros(len(df))
     curr_ret = df['close'].pct_change().fillna(0)
-    k[has_clusters & (curr_ret > 0)] = 1
-    k[has_clusters & (curr_ret < 0)] = -1
+
+    for i in range(len(df)):
+        if i < len(acf_values) and acf_values[i] > 0.2:
+            if curr_ret.iloc[i] > 0:
+                k[i] = 1
+            elif curr_ret.iloc[i] < 0:
+                k[i] = -1
 
     df = df.copy()
     df['k'] = k

@@ -1328,7 +1328,7 @@ REGISTRY = {
         label='AnomSpike', grid=[20], min_len=120,
     ),
     'anom_long_wick_reject': dict(
-        module='anom_long_wick_reject', calc='calc_anom_long_wick_reject',
+        module='anom_long_wick', calc='calc_anom_long_wick',
         entry='check_entry', exit='check_exit',
         label='AnomWick', grid=[20], min_len=120,
     ),
@@ -1356,25 +1356,25 @@ REGISTRY = {
     ),
     # bc_ (5)
     'bc_keltner_squeeze': dict(
-        module='bc_keltner_squeeze', calc='calc_bc_keltner_squeeze',
+        module='bc_keltner_squeeze', calc='calc_keltner_squeeze',
         entry='check_entry', exit='check_exit',
         label='BCKelt', grid=[20], min_len=120,
     ),
     # rev_ (5)
     'rev_swing_failure': dict(
-        module='rev_swing_failure', calc='calc_rev_swing_failure',
+        module='rev_swing_failure', calc='calc_swing_failure',
         entry='check_entry', exit='check_exit',
         label='RevSwing', grid=[20], min_len=120,
     ),
     # mi_ (5)
     'mi_adx_rsi_ma': dict(
-        module='mi_adx_rsi_ma', calc='calc_mi_adx_rsi_ma',
+        module='mi_adx_rsi_ma', calc='calc_adx_rsi_ma',
         entry='check_entry', exit='check_exit',
         label='MiADXRSI', grid=[20], min_len=120,
     ),
     # advstat_ (5)
     'advstat_fractal_dim': dict(
-        module='advstat_fractal_dim', calc='calc_advstat_fractal_dim',
+        module='advstat_fractal_dim', calc='calc_fractal_dimension',
         entry='check_entry', exit='check_exit',
         label='AdvStatFD', grid=[20], min_len=120,
     ),
@@ -1513,15 +1513,13 @@ ENABLED_BATCH = (
     'pattern_triangle_asc', 'pattern_triangle_desc', 'pattern_pennant',
     'pattern_hns_top', 'pattern_cup_handle', 'pattern_double_bottom_w',
     'pattern_island_reversal', 'pattern_key_reversal_bar', 'pattern_marubozu_run',
-    'pattern_gap_go_new',
+    'pattern_gap_go',
     'sess_transition_ny', 'sess_asian_wide', 'sess_lunch_break',
     'sess_first_hour_bias', 'sess_night_range', 'sess_week_friday_flat',
-    'sess_monday_open_bias', 'sess_midweek_reversal', 'sess_month_start_flow',
-    'sess_month_end_flow',
     'stat_kpss_break', 'stat_vr_revert', 'stat_box_pierce_abs', 'stat_dw_residual',
     'stat_johansen', 'stat_granger_lead', 'stat_cross_corr_lag',
     'stat_kl_divergence', 'stat_jarque_bera', 'stat_sign_test',
-    'mr_vwap_mad', 'mr_keltner_pct', 'mr_overshoot_range_new',
+    'mr_vwap_mad', 'mr_keltner_pct', 'mr_overshoot_range',
     'mr_weekly_deviation', 'mr_ratio_reversion',
     'ma_vidya_trend', 'ma_alma_trend', 'ma_mcginley', 'ma_zlema_cross',
     'ma_dema_trend',
@@ -1532,14 +1530,13 @@ ENABLED_BATCH = (
     'regime_pelt_proxy', 'regime_chow_break', 'regime_bai_perron',
     'regime_hmm_proxy2', 'regime_range_classifier',
     'chan_donchian_all_inside', 'chan_donchian_double', 'chan_keltner_shift',
-    'chan_hma_envelope', 'chan_ma_high_low_band', 'chan_regression_band_z_new',
-    'chan_median_band_new',
-    'volprof_vol_shelf_new', 'volprof_open_vol_bias_new',
-    'anom_spike_volume', 'anom_long_wick_reject', 'anom_spread_blowout_new',
-    'volreg_arch_lm_new', 'volreg_range_expansion_new',
-    'osc_ehlers_stoch_new', 'bc_keltner_squeeze_new', 'rev_swing_failure_new',
-    'mi_adx_rsi_new',
-    'advstat_fractal_dim_new', 'mom_roc_of_roc_new',
+    'chan_hma_envelope', 'chan_ma_high_low_band',
+    'volprof_vol_shelf', 'volprof_open_vol_bias',
+    'anom_spike_volume', 'anom_long_wick_reject', 'anom_spread_blowout',
+    'volreg_arch_lm', 'volreg_range_expansion',
+    'osc_ehlers_stoch', 'bc_keltner_squeeze', 'rev_swing_failure',
+    'mi_adx_rsi_ma',
+    'advstat_fractal_dim', 'mom_roc_of_roc',
 )
 
     # ═══════════ БАТЧ 7 (12.11.2026): 35 новых стратегий в 8 категориях ═══════════

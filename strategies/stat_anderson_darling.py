@@ -7,6 +7,12 @@ Idea: Anderson-Darling test rejects normality (p < 0.05) indicating fat tails / 
 """
 import numpy as np
 import pandas as pd
+from math import erf
+
+
+def _phi(x):
+    """Standard normal CDF via erf."""
+    return 0.5 * (1.0 + erf(x / np.sqrt(2.0)))
 
 
 def _anderson_darling_stat(returns):
@@ -26,8 +32,7 @@ def _anderson_darling_stat(returns):
     z = (sorted_x - mean_x) / std_x
 
     # CDF of standard normal
-    # Using error function: Phi(x) = 0.5 * (1 + erf(x/sqrt(2)))
-    Phi = 0.5 * (1 + np.erf(z / np.sqrt(2)))
+    Phi = np.vectorize(_phi)(z)
 
     # AD statistic
     # A^2 = -n - (1/n) * sum((2i-1)(ln(F_i) + ln(1-F_{n-i+1})))

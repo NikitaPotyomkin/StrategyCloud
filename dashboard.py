@@ -323,8 +323,129 @@ _CARD_FONT = "'Space Grotesk', 'Inter', 'Segoe UI', sans-serif"
 
 # ── Рынок открыт/закрыт: по данным брокера, а не по календарю ──
 _MKT_SYMBOLS = ('EURUSDrfd', 'EURUSD', 'GBPUSDrfd', 'USDJPYrfd')
-_MKT_STALE_MIN = 10      # сессия по расписанию есть, а тика нет дольше — рынок фактически стоит
+_MKT_STALE_MIN = 10      # тика нет дольше — рынок фактически стоит
 _SRV_OFFSET_H = 3        # серверное время = UTC+3 (как в Overview и Daily Plan)
+# Между перезапусками дэшборда запоминаем выученное смещение серверных часов и
+# последние виденные тики. Без этого первый замер после старта нельзя отличить
+# от «тик пятницы лежит с вечера»: tick.time — серверный epoch, а не UTC.
+_MKT_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'journals', 'market_state.json')
+
+
+def _mkt_state_read():
+    """Состояние рынка с диска. Любая проблема чтения = «состояния нет»."""
+    try:
+        with open(_MKT_STATE, 'r', encoding='utf-8') as _f:
+            _d = json.load(_f)
+        return _d if isinstance(_d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _mkt_state_write(state):
+    """Молча: индикатор рынка не повод падать дэшборду."""
+    try:
+        os.makedirs(os.path.dirname(_MKT_STATE), exist_ok=True)
+        with open(_MKT_STATE, 'w', encoding='utf-8') as _f:
+            json.dump(state, _f)
+    except Exception:
+        pass
+
+
+def _mkt_terminal_ready():
+    """Поднимает IPC к терминалу.
+
+    get_dashboard_data() заканчивается mt5.shutdown(), поэтому к моменту отрисовки
+    бейджа соединения уже нет: symbol_info_tick() возвращает None, все символы
+    пропускаются, и ответ давал календарь (пн-пт = открыто). Отсюда «Market is
+    open» в понедельник в полночь, когда брокер ещё не торгует.
+    """
+    if not MT5_AVAILABLE:
+        return False
+    try:
+        if mt5.terminal_info() is not None:
+            return True
+        return bool(mt5.initialize())
+    except Exception:
+        return False
+
+
+def _mkt_sessions(sym, day):
+    """Сессии брокера за день: [(начало_в_минутах_от_полуночи, длина_в_минутах)].
+
+    MetaTrader5-Python в разных сборках принимает 2 или 3 аргумента, поэтому
+    пробуем оба варианта. Пустой список = брокер расписание не отдал, и тогда
+    остаётся только сверка по тикам.
+    """
+    for _name in ('symbol_info_session_quote', 'symbol_info_session_trade'):
+        _fn = getattr(mt5, _name, None)
+        if _fn is None:
+            continue
+        try:
+            _rows = list(_fn(sym, day) or ())
+        except TypeError:
+            _rows = []                      # сборка со session_index
+            for _idx in range(8):
+                try:
+                    _one = _fn(sym, day, _idx)
+                except Exception:
+                    break
+                if not _one:
+                    break
+                _rows.append(_one[0])
+        except Exception:
+            continue
+        _out = []
+        for _s in _rows:
+            try:
+                _out.append((_s.start.hour * 60 + _s.start.minute,
+                             int(_s.length or 0)))
+            except Exception:
+                continue
+        _out = [(s0, ln) for s0, ln in _out if ln > 0]
+        if _out:
+            return _out
+    return []
+
+
+def _mkt_offset_and_age(sym, tick_time, now_wall):
+    """Возраст последнего тика в минутах и смещение серверных часов.
+
+    tick.time — серверный epoch, а не UTC, поэтому «сколько минут назад» требует
+    смещения сервера. Учим его только на живом обновлении тика (тик сменился
+    между двумя опросами, интервал <= 15 мин → tick.time ≈ серверное «сейчас»).
+    Выученное кладём в journals/market_state.json: иначе после каждого перезапуска
+    дэшборда смещение снова неизвестно, а пятничный тик «научит» смещению 48 ч.
+    """
+    state = _mkt_state_read()
+    ticks = state.get('ticks') if isinstance(state.get('ticks'), dict) else {}
+    checked = state.get('checked_utc')
+    prev_tick = ticks.get(sym)
+    offset_h = state.get('offset_h')
+
+    gap = (now_wall - checked) if isinstance(checked, (int, float)) else None
+    changed = prev_tick is not None and int(prev_tick) != int(tick_time)
+    if changed and gap is not None and 0 <= gap <= 15 * 60:
+        _cand = (int(tick_time) - now_wall) / 3600.0
+        _cand = round(_cand * 2) / 2.0              # сетка 30 минут
+        if -12.0 <= _cand <= 14.0:
+            offset_h = _cand
+
+    ticks[sym] = int(tick_time)
+    state['ticks'] = ticks
+    state['checked_utc'] = now_wall
+    if offset_h is not None:
+        state['offset_h'] = offset_h
+    _mkt_state_write(state)
+
+    off = float(offset_h) if offset_h is not None else float(_SRV_OFFSET_H)
+    age_min = (now_wall + off * 3600 - float(tick_time)) / 60.0
+    if age_min < -_MKT_STALE_MIN:
+        # Выученное смещение поехало (тик «из будущего») — считаем по дефолту.
+        off = float(_SRV_OFFSET_H)
+        age_min = (now_wall + off * 3600 - float(tick_time)) / 60.0
+    return age_min, off
+
 
 # ── Русские подписи дат: одни и те же в Daily Plan и FinStatement ──
 # Дни недели индексируются как date.weekday(): пн=0 … вс=6 ('чт', а не 'Thu').
@@ -342,14 +463,17 @@ def _mql_dow(d):
 
 
 def market_is_open():
-    """Открыт ли рынок ПРЯМО СЕЙЧАС. Возвращает (is_open, source).
+    """Открыт ли рынок в эту минуту. Возвращает (is_open, source): True — торгуем,
+    False — закрыто, None — брокер молчит (статус неизвестен).
 
     Источники по убыванию достоверности:
       1) расписание сессий символа ОТ БРОКЕРА (symbol_info_session_quote/trade) —
          знает про выходные, праздники и клиринговый перерыв, календарь тут не нужен;
-      2) свежесть последнего тика — ловит «сессия по расписанию есть, а торговли нет»
-         (клиринг, обрыв связи, неторговый день в терминале);
-      3) календарный фолбэк (сб/вс = закрыто) — только если терминал недоступен.
+      2) свежесть последнего тика — ловит «сессия есть, а торговли нет», и именно она
+         отвечает на вопрос «открылся ли понедельник»: у этого брокера первые тики
+         недели приходят в 02:00 серверного времени, календарь «пн-пт» об этом не знает;
+      3) календарь (сб/вс = закрыто) — объяснение, а не ответ. Соврать «открыто»
+         хуже, чем сказать «неизвестно»: без данных брокера вернётся None.
 
     source возвращается наружу и печатается рядом с бейджем: видно, ОТКУДА ответ.
     Никогда не бросает исключение — дэшборд не должен падать из-за индикатора.
@@ -358,15 +482,16 @@ def market_is_open():
         # Серверные часы в той же шкале, что и tick.time (серверный epoch).
         now_srv = pd.Timestamp.now('UTC').tz_localize(None) + pd.Timedelta(hours=_SRV_OFFSET_H)
         srv_epoch = (now_srv - pd.Timestamp(1970, 1, 1)).total_seconds()
-        if MT5_AVAILABLE:
+        if _mkt_terminal_ready():
             for sym in _MKT_SYMBOLS:
                 try:
                     if mt5.symbol_info(sym) is None:
                         continue
                     tick = mt5.symbol_info_tick(sym)
-                    if tick is None:
+                    if tick is None or not tick.time:
                         continue
-                    age_min = (srv_epoch - tick.time) / 60.0
+                    age_min, _off_h = _mkt_offset_and_age(sym, tick.time,
+                                                           srv_epoch - _SRV_OFFSET_H * 3600)
 
                     sessions = []
                     for _fn in ('symbol_info_session_quote', 'symbol_info_session_trade'):
@@ -398,10 +523,10 @@ def market_is_open():
                 except Exception:
                     continue
         if now_srv.weekday() >= 5:
-            return False, ""
-        return True, ""
+            return False, "выходные по календарю"
+        return None, "нет данных от брокера: терминал не ответил или тиков нет"
     except Exception:
-        return True, "источник неизвестен"
+        return None, "источник неизвестен"
 
 
 def metric_card(label, value, color=None, sub=None):
@@ -660,13 +785,17 @@ with tab_overview:
     # ── Бейдж: открыт ли рынок прямо сейчас (источник — брокер, не календарь) ──
     # Внешний div задаёт отступ снизу: иначе бейдж «садится» на подпись Balance.
     _mkt_open, _mkt_src = market_is_open()
-    _mkt_color = COL_AMBER if _mkt_open else COL_GREEN_LT
+    # Три состояния: True — торгуем, False — закрыто, None — брокер молчит.
+    _mkt_text = ('Market is open' if _mkt_open is True else
+                 'Market is closed' if _mkt_open is False else 'Market status unknown')
+    _mkt_color = (COL_AMBER if _mkt_open is True else
+                  COL_GREEN_LT if _mkt_open is False else COL_MUTED)
     st.markdown(
         f"<div style='margin:0.15rem 0 1.15rem 0;'>"
         f"<span style='display:inline-block;padding:0.3rem 0.75rem;border:1px solid {_mkt_color};"
         f"border-radius:6px;color:{_mkt_color};font-size:0.78rem;font-weight:600;"
         f"text-transform:uppercase;letter-spacing:0.06em;'>"
-        f"{'Market is open' if _mkt_open else 'Market is closed'}</span>"
+        f"{_mkt_text}</span>"
         f"<span style='color:{COL_MUTED};font-size:0.75rem;margin-left:0.6rem;'>{_mkt_src}</span>"
         f"</div>",
         unsafe_allow_html=True,

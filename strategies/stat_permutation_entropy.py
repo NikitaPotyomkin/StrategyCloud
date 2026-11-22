@@ -7,6 +7,7 @@ Idea: Permutation Entropy < p25 indicates ordered structure (strong trend)
 """
 import numpy as np
 import pandas as pd
+from math import factorial, log as math_log
 
 
 def _permutation_entropy(series, delay=1, dimension=3):
@@ -15,13 +16,13 @@ def _permutation_entropy(series, delay=1, dimension=3):
     if n < dimension:
         return 0.0
 
-    max_entropy = np.log(np.math.factorial(dimension))
+    max_entropy = math_log(max(factorial(dimension), 1))
     if max_entropy < 1e-12:
         return 0.0
 
     # Count ordinal pattern frequencies
     pattern_counts = {}
-    n_patterns = np.math.factorial(dimension)
+    n_patterns = factorial(dimension)
 
     for i in range(n - dimension * delay):
         # Extract embedding vector
