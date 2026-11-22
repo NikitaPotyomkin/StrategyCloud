@@ -568,11 +568,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='WedgeRise', grid=[10, 20, 55], min_len=120,
     ),
-    'swing_bos': dict(
-        module='struct_swing_bos', calc='calc_struct_swing_bos',
-        entry='check_entry', exit='check_exit',
-        label='SwingBOS', grid=[20], min_len=120,
-    ),
 
 
     # ═══════════ БАТЧ 4 (05.11.2026): 45 стратегий-кандидатов ═══════════
@@ -664,7 +659,7 @@ REGISTRY = {
     'volprof_poc_break': dict(
         module='volprof_poc_break', calc='calc_volprof_poc_break',
         entry='check_entry', exit='check_exit',
-        label='vp_poc', grid=[1, 5, 20], min_len=120,
+        label='vp_poc', grid=[5, 10, 20], min_len=120,
     ),
     'volprof_volume_dry': dict(
         module='volprof_volume_dry', calc='calc_volprof_volume_dry',
@@ -820,26 +815,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='vr_vov2', grid=[20, 60, 120], min_len=200,
     ),
-    'volreg_yz_alt': dict(
-        module='volreg_yz_regime', calc='calc_volreg_yz_regime',
-        entry='check_entry', exit='check_exit',
-        label='vr_yz2', grid=[12, 24], min_len=150,
-    ),
-    'volreg_nr7_alt': dict(
-        module='volreg_nr7_break', calc='calc_volreg_nr7_break',
-        entry='check_entry', exit='check_exit',
-        label='vr_nr7b', grid=[7, 14], min_len=120,
-    ),
-    'volreg_range_exp_alt': dict(
-        module='volreg_range_expansion', calc='calc_volreg_range_expansion',
-        entry='check_entry', exit='check_exit',
-        label='vr_rex2', grid=[5, 10], min_len=120,
-    ),
-    'volreg_vol_of_vol2': dict(
-        module='volreg_volofvol', calc='calc_volreg_volofvol',
-        entry='check_entry', exit='check_exit',
-        label='vr_vov2b', grid=[60], min_len=200,
-    ),
     'volreg_ewma_accel': dict(
         module='volreg_ewma_accel', calc='calc_volreg_ewma_accel',
         entry='check_entry', exit='check_exit',
@@ -896,26 +871,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='os_gator', grid=[20, 30], min_len=150,
     ),
-    'osc_fisher_alt': dict(
-        module='osc_fisher_transform', calc='calc_osc_fisher_transform',
-        entry='check_entry', exit='check_exit',
-        label='os_fish2', grid=[10], min_len=120,
-    ),
-    'osc_tii_alt': dict(
-        module='osc_tii', calc='calc_osc_tii',
-        entry='check_entry', exit='check_exit',
-        label='os_tii2', grid=[60], min_len=150,
-    ),
-    'osc_pgo_alt': dict(
-        module='osc_pgo', calc='calc_osc_pgo',
-        entry='check_entry', exit='check_exit',
-        label='os_pgo2', grid=[14], min_len=120,
-    ),
-    'osc_ravi_alt': dict(
-        module='osc_ravi', calc='calc_osc_ravi',
-        entry='check_entry', exit='check_exit',
-        label='os_ravi2', grid=['7,65'], min_len=120,
-    ),
     # Mean reversion (10)
     'mr_bb_atr': dict(
         module='mr_bb_atr_units', calc='calc_mr_bb_atr_units',
@@ -971,7 +926,7 @@ REGISTRY = {
     'stat_ljung': dict(
         module='stat_ljung_box', calc='calc_stat_ljung_box',
         entry='check_entry', exit='check_exit',
-        label='st_lj', grid=[50, 100], min_len=200,
+        label='st_lj', grid=[20, 50, 100], min_len=200,
     ),
     'stat_mutinfo': dict(
         module='stat_mutual_info', calc='calc_stat_mutual_info',
@@ -982,11 +937,6 @@ REGISTRY = {
         module='stat_ks_change', calc='calc_stat_ks_change',
         entry='check_entry', exit='check_exit',
         label='st_ks', grid=[30, 60], min_len=200,
-    ),
-    'stat_hl': dict(
-        module='stat_half_life', calc='calc_stat_half_life',
-        entry='check_entry', exit='check_exit',
-        label='st_hl2', grid=[50, 100], min_len=200,
     ),
     'stat_acf': dict(
         module='stat_autocorr_abs', calc='calc_stat_autocorr_abs',
@@ -1003,11 +953,6 @@ REGISTRY = {
         entry='check_entry', exit='check_exit',
         label='st_pe', grid=[50, 100], min_len=200,
     ),
-    'stat_lz': dict(
-        module='stat_lz_complexity', calc='calc_stat_lz_complexity',
-        entry='check_entry', exit='check_exit',
-        label='st_lz2', grid=[50, 100], min_len=200,
-    ),
     'stat_ad': dict(
         module='stat_anderson_darling', calc='calc_stat_anderson_darling',
         entry='check_entry', exit='check_exit',
@@ -1018,51 +963,6 @@ REGISTRY = {
         module='struct_liquidity_sweep', calc='calc_struct_liquidity_sweep',
         entry='check_entry', exit='check_exit',
         label='st_lsq', grid=[10, 20], min_len=120,
-    ),
-    'struct_swing': dict(
-        module='struct_swing_bos', calc='calc_struct_swing_bos',
-        entry='check_entry', exit='check_exit',
-        label='st_swb', grid=[5, 10], min_len=120,
-    ),
-    'chan_dsc_sq': dict(
-        module='chan_donchian_pct_squeeze', calc='calc_chan_donchian_pct_squeeze',
-        entry='check_entry', exit='check_exit',
-        label='ch_dsc', grid=[15, 20], min_len=150,
-    ),
-    'chan_regz': dict(
-        module='chan_regression_band_z', calc='calc_chan_regression_band_z',
-        entry='check_entry', exit='check_exit',
-        label='ch_regz', grid=[50, 100], min_len=260,
-    ),
-    'mom_ror': dict(
-        module='mom_roc_of_roc', calc='calc_mom_roc_of_roc',
-        entry='check_entry', exit='check_exit',
-        label='mm_ror2', grid=[5, 10], min_len=120,
-    ),
-    'mom_eff': dict(
-        module='mom_efficiency', calc='calc_mom_efficiency',
-        entry='check_entry', exit='check_exit',
-        label='mm_eff2', grid=[10, 20], min_len=150,
-    ),
-    'mom_pull': dict(
-        module='mom_pullback_ratio', calc='calc_mom_pullback_ratio',
-        entry='check_entry', exit='check_exit',
-        label='mm_pull2', grid=[10, 20], min_len=150,
-    ),
-    'pat_tri': dict(
-        module='pattern_triangle_sym', calc='calc_pattern_triangle_sym',
-        entry='check_entry', exit='check_exit',
-        label='pt_tri2', grid=[10, 20], min_len=150,
-    ),
-    'pat_flag': dict(
-        module='pattern_flag_bull', calc='calc_pattern_flag_bull',
-        entry='check_entry', exit='check_exit',
-        label='pt_flag2', grid=[10, 20], min_len=150,
-    ),
-    'volprof_imb': dict(
-        module='volprof_vol_imbalance', calc='calc_volprof_vol_imbalance',
-        entry='check_entry', exit='check_exit',
-        label='vp_imb2', grid=[10, 20], min_len=150,
     ),
 }
 
@@ -1114,7 +1014,7 @@ ENABLED_BATCH = (
     # Пересчёт инкрементальный: family_fp знает и label, и ключ, поэтому
     # остальные семейства не трогаются.
     'ma_zerolag', 'ma_frama', 'ma_vote', 'klinger',
-    'rect_break', 'wedge_rise', 'swing_bos',
+    'rect_break', 'wedge_rise', 
     # ── Батч 5 (05.11.2026): 45 кандидатов 29–30.10 в ночной рэнкинг ──
     # Просьба: «в Roadmap не все финализированы — добавить их все». Здесь
     # именно те standalone-модули, которых не было ни в REGISTRY, ни в
@@ -1140,21 +1040,19 @@ ENABLED_BATCH = (
     # ── БАТЧ 6 (06.11.2026): 55 новых стратегий в 5 категориях ──
     # Волатильность (15)
     'volreg_volofvol', 
-    'volreg_yz_alt', 'volreg_nr7_alt', 'volreg_range_exp_alt', 'volreg_vol_of_vol2',
     'volreg_ewma_accel', 'volreg_intrinsic_time', 'volreg_vhf_trend',
     'volreg_er_kaufman', 'volreg_tr_skew',
     # Осцилляторы (10)
     'osc_fisher', 'osc_tii', 'osc_pgo', 'osc_ravi', 'osc_rvi_hlc',
-    'osc_er_gator', 'osc_fisher_alt', 'osc_tii_alt', 'osc_pgo_alt', 'osc_ravi_alt',
+    'osc_er_gator', 
     # Mean reversion (10)
     'mr_bb_atr', 'mr_median_z', 'mr_dist_pct', 'mr_rsi_vol', 'mr_overshoot',
     'mr_consec', 'mr_climax', 'mr_exhaust', 'mr_rubber', 'mr_volz',
     # Статистика (10)
-    'stat_ljung', 'stat_mutinfo', 'stat_ks', 'stat_hl',
-    'stat_acf', 'stat_ent', 'stat_pent', 'stat_lz', 'stat_ad',
+    'stat_ljung', 'stat_mutinfo', 'stat_ks', 
+    'stat_acf', 'stat_ent', 'stat_pent', 'stat_ad',
     # Breakout / momentum / паттерны (10)
-    'struct_liq_swp', 'struct_swing', 'chan_dsc_sq', 'chan_regz',
-    'mom_ror', 'mom_eff', 'mom_pull', 'pat_tri', 'pat_flag', 'volprof_imb',
+    'struct_liq_swp', 
     # ── БАТЧ 7 (12.11.2026): 35 новых стратегий в 8 категориях ──
     # Regime Detection (5)
     'regime_cusum_ret', 'regime_bocpd', 'regime_markov_q', 'regime_duration', 'regime_stress',
@@ -1163,15 +1061,14 @@ ENABLED_BATCH = (
     # Anomaly Detection (5)
     'anom_liq_hole', 'anom_stop_run', 'anom_spread_bo', 'anom_long_wick', 'anom_huge_vol',
     # Structural (5)
-    'struct_lsq', 'struct_bos', 'struct_fvg', 'struct_eqhighs', 'struct_rex',
+    'struct_bos', 'struct_fvg', 'struct_eqhighs', 'struct_rex',
     # Statistical Tests (5)
-    'stat_adf', 'stat_vr', 'stat_lb', 'stat_ks2', 'stat_acf2',
+    'stat_vr', 
     # Portfolio Layers (5)
     'port_live_bt', 'port_sharpe', 'port_min_trades', 'port_alpha', 'port_kill',
     # Session/Time (3)
     'sess_ldn', 'sess_asian', 'sess_hour',
     # Volume Profile (2)
-    'volprof_poc', 'volprof_cvd2',
     # ── БАТЧ 8 (15.11.2026): 8 новых регрессий ──
     'reg_theilsen', 'reg_ridge', 'reg_lasso', 'reg_poly',
     'reg_ransac', 'reg_bayesian', 'reg_elasticnet', 'reg_quantile',
@@ -1261,15 +1158,10 @@ REGISTRY.update({
         label='an_hvol', grid=[50, 100], min_len=150,
     ),
     # Structural (5)
-    'struct_lsq': dict(
-        module='struct_liquidity_sweep', calc='calc_struct_liquidity_sweep',
-        entry='check_entry', exit='check_exit',
-        label='str_lsq', grid=[10, 20], min_len=60,
-    ),
     'struct_bos': dict(
         module='struct_swing_bos', calc='calc_struct_swing_bos',
         entry='check_entry', exit='check_exit',
-        label='str_bos', grid=[5, 10], min_len=40,
+        label='str_bos', grid=[5, 10, 20], min_len=120,
     ),
     'struct_fvg': dict(
         module='struct_fvg_imbalance', calc='calc_struct_fvg_imbalance',
@@ -1287,30 +1179,10 @@ REGISTRY.update({
         label='str_rex', grid=[10, 20], min_len=60,
     ),
     # Statistical Tests (5)
-    'stat_adf': dict(
-        module='stat_adf_regime', calc='calc_stat_adf_regime',
-        entry='check_entry', exit='check_exit',
-        label='st_adf2', grid=[60, 120], min_len=200,
-    ),
     'stat_vr': dict(
         module='stat_vr_ratio', calc='calc_stat_vr_ratio',
         entry='check_entry', exit='check_exit',
         label='st_vr2', grid=[5, 10], min_len=100,
-    ),
-    'stat_lb': dict(
-        module='stat_ljung_box', calc='calc_stat_ljung_box',
-        entry='check_entry', exit='check_exit',
-        label='st_lb', grid=[20, 50], min_len=100,
-    ),
-    'stat_ks2': dict(
-        module='stat_ks_change', calc='calc_stat_ks_change',
-        entry='check_entry', exit='check_exit',
-        label='st_ks2', grid=[30, 60], min_len=150,
-    ),
-    'stat_acf2': dict(
-        module='stat_autocorr_abs', calc='calc_stat_autocorr_abs',
-        entry='check_entry', exit='check_exit',
-        label='st_acf2', grid=[100, 200], min_len=300,
     ),
     # Portfolio Layers (5)
     'port_live_bt': dict(
@@ -1355,16 +1227,6 @@ REGISTRY.update({
         label='sess_hr', grid=[30, 60], min_len=120,
     ),
     # Volume Profile (2)
-    'volprof_poc': dict(
-        module='volprof_poc_break', calc='calc_volprof_poc_break',
-        entry='check_entry', exit='check_exit',
-        label='vp_poc2', grid=[10, 20], min_len=60,
-    ),
-    'volprof_cvd2': dict(
-        module='volprof_cvd_div', calc='calc_volprof_cvd_div',
-        entry='check_entry', exit='check_exit',
-        label='vp_cvd2', grid=[20, 50], min_len=100,
-    ),
 
     # ═══════════ БАТЧ 8 (15.11.2026): 8 новых регрессий ═══════════
     # Theil-Sen (робастная)
