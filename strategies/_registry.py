@@ -1067,7 +1067,7 @@ ENABLED_BATCH = (
     # Portfolio Layers (5)
     'port_live_bt', 'port_sharpe', 'port_min_trades', 'port_alpha', 'port_kill',
     # Session/Time (3)
-    'sess_ldn', 'sess_asian', 'sess_hour',
+    'sess_ldn', 'sess_asian', 
     # Volume Profile (2)
     # ── БАТЧ 8 (15.11.2026): 8 новых регрессий ──
     'reg_theilsen', 'reg_ridge', 'reg_lasso', 'reg_poly',
@@ -1220,11 +1220,6 @@ REGISTRY.update({
         module='sess_asian_compress', calc='calc_sess_asian_compress',
         entry='state_entry', exit='state_exit',
         label='sess_as', grid=[20, 60], min_len=120,
-    ),
-    'sess_hour': dict(
-        module='sess_hour_of_day', calc='calc_sess_hour_of_day',
-        entry='state_entry', exit='state_exit',
-        label='sess_hr', grid=[30, 60], min_len=120,
     ),
     # Volume Profile (2)
 
