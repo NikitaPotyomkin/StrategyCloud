@@ -45,58 +45,32 @@ def check_exit(prev, curr, direction):
     return False
 
 
+from strategies._bt_core import run_backtest
+def _entry(prev, curr):
+    """check_entry модуля отдаёт bool — направление берём из знака состояния.
+
+    Прежняя петля входила в long при переходе 0→+1 и в short при 0→−1, а
+    run_backtest ждёт 'long'/'short'/None. Булев ответ разворачиваем по curr.
+    """
+    if not check_entry(prev, curr):
+        return None
+    if curr == 1:
+        return 'long'
+    if curr == -1:
+        return 'short'
+    return None
+
+
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,
              tick_size, sim_lot=0.01, spread_points=0):
-    df = calc_volreg_gk_zscore(df, int(param_key))
-    
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-    
-    # SL/TP в пунктах (не в спредах)
-    sl_dist = sl_points * point
-    tp_dist = tp_points * point
-    
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-        
-        if prev_k == 0 and curr_k == 1:
-            entry = df['close'].iloc[i]
-            sl_price = entry - sl_dist
-            tp_price = entry + tp_dist
-            
-            pnl = 0
-            for j in range(i+1, min(i+50, len(df))):
-                high = df['high'].iloc[j]
-                low = df['low'].iloc[j]
-                if low <= sl_price:
-                    pnl = (sl_price - entry) * sim_lot * tick_value
-                    break
-                elif high >= tp_price:
-                    pnl = (tp_price - entry) * sim_lot * tick_value
-                    break
-            profit += pnl
-            n_trades += 1
-            trade_profits.append(pnl)
-            
-        elif prev_k == 0 and curr_k == -1:
-            entry = df['close'].iloc[i]
-            sl_price = entry + sl_dist
-            tp_price = entry - tp_dist
-            
-            pnl = 0
-            for j in range(i+1, min(i+50, len(df))):
-                high = df['high'].iloc[j]
-                low = df['low'].iloc[j]
-                if high >= sl_price:
-                    pnl = (entry - sl_price) * sim_lot * tick_value
-                    break
-                elif low <= tp_price:
-                    pnl = (entry - tp_price) * sim_lot * tick_value
-                    break
-            profit += pnl
-            n_trades += 1
-            trade_profits.append(pnl)
-    
-    return (profit, n_trades, trade_profits)
+    """Симуляция через общий движок strategies/_bt_core.run_backtest.
+
+    Вход по open следующего бара ± спред, спред вычитается и на выходе, обрыва
+    по времени нет, деньги через trade_profit (÷ tick_size). Прежняя петля
+    входила по close сигнального бара, не вычитала спред, выбрасывала сделки,
+    не закрывшиеся за 49 баров, и считала P&L без деления на tick_size —
+    из-за этого её числа были несравнимы с остальным реестром.
+    """
+    return run_backtest(df, calc_volreg_gk_zscore, _entry, check_exit,
+                        int(param_key), sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)

@@ -949,6 +949,453 @@ REGISTRY = {
         entry='state_entry', exit='state_exit',
         label='st_lsq', grid=[10, 20], min_len=120,
     ),
+    # ── NEW BATCH: 85 новых стратегий ═══════════════════════════════════════
+    # struct_ (15)
+    'struct_choch': dict(
+        module='struct_choch', calc='calc_struct_choch',
+        entry='check_entry', exit='check_exit',
+        label='StructCHoCH', grid=[20], min_len=120,
+    ),
+    'struct_hh_hl_chain': dict(
+        module='struct_hh_hl_chain', calc='calc_struct_hh_hl_chain',
+        entry='check_entry', exit='check_exit',
+        label='StructHHHL', grid=[20], min_len=120,
+    ),
+    'struct_ll_lh_chain': dict(
+        module='struct_ll_lh_chain', calc='calc_struct_ll_lh_chain',
+        entry='check_entry', exit='check_exit',
+        label='StructLLLH', grid=[20], min_len=120,
+    ),
+    'struct_equal_lows': dict(
+        module='struct_equal_lows', calc='calc_struct_equal_lows',
+        entry='check_entry', exit='check_exit',
+        label='StructEqLow', grid=[20], min_len=120,
+    ),
+    'struct_order_block': dict(
+        module='struct_order_block', calc='calc_struct_order_block',
+        entry='check_entry', exit='check_exit',
+        label='StructOB', grid=[20], min_len=120,
+    ),
+    'struct_breaker_block': dict(
+        module='struct_breaker_block', calc='calc_struct_breaker_block',
+        entry='check_entry', exit='check_exit',
+        label='StructBB', grid=[20], min_len=120,
+    ),
+    'struct_premium_discount': dict(
+        module='struct_premium_discount', calc='calc_struct_premium_discount',
+        entry='check_entry', exit='check_exit',
+        label='StructPD', grid=[20], min_len=120,
+    ),
+    'struct_consolidation_count': dict(
+        module='struct_consolidation_count', calc='calc_struct_consolidation_count',
+        entry='check_entry', exit='check_exit',
+        label='StructCons', grid=[20], min_len=120,
+    ),
+    'struct_trendline_break': dict(
+        module='struct_trendline_break', calc='calc_struct_trendline_break',
+        entry='check_entry', exit='check_exit',
+        label='StructTLB', grid=[20], min_len=120,
+    ),
+    'struct_round_level': dict(
+        module='struct_round_level', calc='calc_struct_round_level',
+        entry='check_entry', exit='check_exit',
+        label='StructRL', grid=[20], min_len=120,
+    ),
+    'struct_vwap_reclaim': dict(
+        module='struct_vwap_reclaim', calc='calc_struct_vwap_reclaim',
+        entry='check_entry', exit='check_exit',
+        label='StructVWAPR', grid=[20], min_len=120,
+    ),
+    'struct_channel_reject': dict(
+        module='struct_channel_reject', calc='calc_struct_channel_reject',
+        entry='check_entry', exit='check_exit',
+        label='StructCHR', grid=[20], min_len=120,
+    ),
+    'struct_round_break': dict(
+        module='struct_round_break', calc='calc_struct_round_break',
+        entry='check_entry', exit='check_exit',
+        label='StructRLB', grid=[20], min_len=120,
+    ),
+    'struct_prev_day_mid': dict(
+        module='struct_prev_day_mid', calc='calc_struct_prev_day_mid',
+        entry='check_entry', exit='check_exit',
+        label='StructPDM', grid=[20], min_len=120,
+    ),
+    'struct_open_range_break': dict(
+        module='struct_open_range_break', calc='calc_struct_open_range_break',
+        entry='check_entry', exit='check_exit',
+        label='StructORB', grid=[20], min_len=120,
+    ),
+    # pattern_ (12)
+    'pattern_triangle_asc': dict(
+        module='pattern_triangle_asc', calc='calc_pattern_triangle_asc',
+        entry='check_entry', exit='check_exit',
+        label='PatTriAsc', grid=[20], min_len=120,
+    ),
+    'pattern_triangle_desc': dict(
+        module='pattern_triangle_desc', calc='calc_pattern_triangle_desc',
+        entry='check_entry', exit='check_exit',
+        label='PatTriDesc', grid=[20], min_len=120,
+    ),
+    'pattern_pennant': dict(
+        module='pattern_pennant', calc='calc_pattern_pennant',
+        entry='check_entry', exit='check_exit',
+        label='PatPennant', grid=[20], min_len=120,
+    ),
+    'pattern_hns_top': dict(
+        module='pattern_hns_top', calc='calc_pattern_hns_top',
+        entry='check_entry', exit='check_exit',
+        label='PatHnSTop', grid=[20], min_len=120,
+    ),
+    'pattern_cup_handle': dict(
+        module='pattern_cup_handle', calc='calc_pattern_cup_handle',
+        entry='check_entry', exit='check_exit',
+        label='PatCupHandle', grid=[20], min_len=120,
+    ),
+    'pattern_double_bottom_w': dict(
+        module='pattern_double_bottom_w', calc='calc_pattern_double_bottom_w',
+        entry='check_entry', exit='check_exit',
+        label='PatDblBot', grid=[20], min_len=120,
+    ),
+    'pattern_island_reversal': dict(
+        module='pattern_island_reversal', calc='calc_pattern_island_reversal',
+        entry='check_entry', exit='check_exit',
+        label='PatIsland', grid=[20], min_len=120,
+    ),
+    'pattern_key_reversal_bar': dict(
+        module='pattern_key_reversal_bar', calc='calc_pattern_key_reversal_bar',
+        entry='check_entry', exit='check_exit',
+        label='PatKeyRev', grid=[20], min_len=120,
+    ),
+    'pattern_marubozu_run': dict(
+        module='pattern_marubozu_run', calc='calc_pattern_marubozu_run',
+        entry='check_entry', exit='check_exit',
+        label='PatMarubozu', grid=[20], min_len=120,
+    ),
+    # sess_ (6)
+    'sess_transition_ny': dict(
+        module='sess_transition_ny', calc='calc_sess_transition_ny',
+        entry='check_entry', exit='check_exit',
+        label='SessNY', grid=[20], min_len=120,
+    ),
+    'sess_asian_wide': dict(
+        module='sess_asian_wide', calc='calc_sess_asian_wide',
+        entry='check_entry', exit='check_exit',
+        label='SessAsianW', grid=[20], min_len=120,
+    ),
+    'sess_lunch_break': dict(
+        module='sess_lunch_break', calc='calc_sess_lunch_break',
+        entry='check_entry', exit='check_exit',
+        label='SessLunch', grid=[20], min_len=120,
+    ),
+    'sess_first_hour_bias': dict(
+        module='sess_first_hour_bias', calc='calc_sess_first_hour_bias',
+        entry='check_entry', exit='check_exit',
+        label='SessFirstH', grid=[20], min_len=120,
+    ),
+    'sess_night_range': dict(
+        module='sess_night_range', calc='calc_sess_night_range',
+        entry='check_entry', exit='check_exit',
+        label='SessNight', grid=[20], min_len=120,
+    ),
+    'sess_week_friday_flat': dict(
+        module='sess_week_friday_flat', calc='calc_sess_week_friday_flat',
+        entry='check_entry', exit='check_exit',
+        label='SessFriFlat', grid=[20], min_len=120,
+    ),
+    # stat_ (10)
+    'stat_kpss_break': dict(
+        module='stat_kpss_break', calc='calc_stat_kpss_break',
+        entry='check_entry', exit='check_exit',
+        label='StatKPSS', grid=[20], min_len=120,
+    ),
+    'stat_vr_revert': dict(
+        module='stat_vr_revert', calc='calc_stat_vr_revert',
+        entry='check_entry', exit='check_exit',
+        label='StatVRRev', grid=[20], min_len=120,
+    ),
+    'stat_box_pierce_abs': dict(
+        module='stat_box_pierce_abs', calc='calc_stat_box_pierce_abs',
+        entry='check_entry', exit='check_exit',
+        label='StatBP', grid=[20], min_len=120,
+    ),
+    'stat_dw_residual': dict(
+        module='stat_dw_residual', calc='calc_stat_dw_residual',
+        entry='check_entry', exit='check_exit',
+        label='StatDW', grid=[20], min_len=120,
+    ),
+    'stat_johansen': dict(
+        module='stat_johansen', calc='calc_stat_johansen',
+        entry='check_entry', exit='check_exit',
+        label='StatJoh', grid=[20], min_len=120,
+    ),
+    'stat_granger_lead': dict(
+        module='stat_granger_lead', calc='calc_stat_granger_lead',
+        entry='check_entry', exit='check_exit',
+        label='StatGrang', grid=[20], min_len=120,
+    ),
+    'stat_cross_corr_lag': dict(
+        module='stat_cross_corr_lag', calc='calc_stat_cross_corr_lag',
+        entry='check_entry', exit='check_exit',
+        label='StatXCorr', grid=[20], min_len=120,
+    ),
+    'stat_kl_divergence': dict(
+        module='stat_kl_divergence', calc='calc_stat_kl_divergence',
+        entry='check_entry', exit='check_exit',
+        label='StatKL', grid=[20], min_len=120,
+    ),
+    'stat_jarque_bera': dict(
+        module='stat_jarque_bera', calc='calc_stat_jarque_bera',
+        entry='check_entry', exit='check_exit',
+        label='StatJB', grid=[20], min_len=120,
+    ),
+    'stat_sign_test': dict(
+        module='stat_sign_test', calc='calc_stat_sign_test',
+        entry='check_entry', exit='check_exit',
+        label='StatSign', grid=[20], min_len=120,
+    ),
+    # mr_ (5)
+    'mr_vwap_mad': dict(
+        module='mr_vwap_mad', calc='calc_mr_vwap_mad',
+        entry='check_entry', exit='check_exit',
+        label='MrVWAPMad', grid=[20], min_len=120,
+    ),
+    'mr_keltner_pct': dict(
+        module='mr_keltner_pct', calc='calc_mr_keltner_pct',
+        entry='check_entry', exit='check_exit',
+        label='MrKeltPct', grid=[20], min_len=120,
+    ),
+    'mr_overshoot_range': dict(
+        module='mr_overshoot_range', calc='calc_mr_overshoot_range',
+        entry='check_entry', exit='check_exit',
+        label='MrOvershoot', grid=[20], min_len=120,
+    ),
+    'mr_weekly_deviation': dict(
+        module='mr_weekly_deviation', calc='calc_mr_weekly_deviation',
+        entry='check_entry', exit='check_exit',
+        label='MrWeekDev', grid=[20], min_len=120,
+    ),
+    'mr_ratio_reversion': dict(
+        module='mr_ratio_reversion', calc='calc_mr_ratio_reversion',
+        entry='check_entry', exit='check_exit',
+        label='MrRatioRev', grid=[20], min_len=120,
+    ),
+    # ma_ (6)
+    'ma_vidya_trend': dict(
+        module='ma_vidya_trend', calc='calc_ma_vidya_trend',
+        entry='check_entry', exit='check_exit',
+        label='MaVidya', grid=[20], min_len=120,
+    ),
+    'ma_alma_trend': dict(
+        module='ma_alma_trend', calc='calc_ma_alma_trend',
+        entry='check_entry', exit='check_exit',
+        label='MaAlma', grid=[20], min_len=120,
+    ),
+    'ma_mcginley': dict(
+        module='ma_mcginley', calc='calc_ma_mcginley',
+        entry='check_entry', exit='check_exit',
+        label='MaMcGin', grid=[20], min_len=120,
+    ),
+    'ma_zlema_cross': dict(
+        module='ma_zlema_cross', calc='calc_ma_zlema_cross',
+        entry='check_entry', exit='check_exit',
+        label='MaZLEMA', grid=[20], min_len=120,
+    ),
+    'ma_dema_trend': dict(
+        module='ma_dema_trend', calc='calc_ma_dema_trend',
+        entry='check_entry', exit='check_exit',
+        label='MaDEMA', grid=[20], min_len=120,
+    ),
+    # cyc_ (5)
+    'cyc_fft_power_ratio': dict(
+        module='cyc_fft_power_ratio', calc='calc_cyc_fft_power_ratio',
+        entry='check_entry', exit='check_exit',
+        label='CycFFT', grid=[20], min_len=120,
+    ),
+    'cyc_goertzel': dict(
+        module='cyc_goertzel', calc='calc_cyc_goertzel',
+        entry='check_entry', exit='check_exit',
+        label='CycGoert', grid=[20], min_len=120,
+    ),
+    'cyc_wavelet_denoise': dict(
+        module='cyc_wavelet_denoise', calc='calc_cyc_wavelet_denoise',
+        entry='check_entry', exit='check_exit',
+        label='CycWave', grid=[20], min_len=120,
+    ),
+    'cyc_phase_cross': dict(
+        module='cyc_phase_cross', calc='calc_cyc_phase_cross',
+        entry='check_entry', exit='check_exit',
+        label='CycPhase', grid=[20], min_len=120,
+    ),
+    'cyc_amplitude': dict(
+        module='cyc_amplitude', calc='calc_cyc_amplitude',
+        entry='check_entry', exit='check_exit',
+        label='CycAmp', grid=[20], min_len=120,
+    ),
+    # pair_ (5)
+    'pair_spread_z_entry2': dict(
+        module='pair_spread_z_entry2', calc='calc_pair_spread_z_entry2',
+        entry='check_entry', exit='check_exit',
+        label='PairSpread', grid=[20], min_len=120,
+    ),
+    'pair_ratio_meanrev': dict(
+        module='pair_ratio_meanrev', calc='calc_pair_ratio_meanrev',
+        entry='check_entry', exit='check_exit',
+        label='PairRatio', grid=[20], min_len=120,
+    ),
+    'pair_triangle_residual': dict(
+        module='pair_triangle_residual', calc='calc_pair_triangle_residual',
+        entry='check_entry', exit='check_exit',
+        label='PairTri', grid=[20], min_len=120,
+    ),
+    'pair_beta_hedged': dict(
+        module='pair_beta_hedged', calc='calc_pair_beta_hedged',
+        entry='check_entry', exit='check_exit',
+        label='PairBeta', grid=[20], min_len=120,
+    ),
+    'pair_vol_adjusted': dict(
+        module='pair_vol_adjusted', calc='calc_pair_vol_adjusted',
+        entry='check_entry', exit='check_exit',
+        label='PairVol', grid=[20], min_len=120,
+    ),
+    # regime_ (5)
+    'regime_pelt_proxy': dict(
+        module='regime_pelt_proxy', calc='calc_regime_pelt_proxy',
+        entry='check_entry', exit='check_exit',
+        label='RegPELT', grid=[20], min_len=120,
+    ),
+    'regime_chow_break': dict(
+        module='regime_chow_break', calc='calc_regime_chow_break',
+        entry='check_entry', exit='check_exit',
+        label='RegChow', grid=[20], min_len=120,
+    ),
+    'regime_bai_perron': dict(
+        module='regime_bai_perron', calc='calc_regime_bai_perron',
+        entry='check_entry', exit='check_exit',
+        label='RegBai', grid=[20], min_len=120,
+    ),
+    'regime_hmm_proxy2': dict(
+        module='regime_hmm_proxy2', calc='calc_regime_hmm_proxy2',
+        entry='check_entry', exit='check_exit',
+        label='RegHMM', grid=[20], min_len=120,
+    ),
+    'regime_range_classifier': dict(
+        module='regime_range_classifier', calc='calc_regime_range_classifier',
+        entry='check_entry', exit='check_exit',
+        label='RegClass', grid=[20], min_len=120,
+    ),
+    # chan_ (5)
+    'chan_donchian_all_inside': dict(
+        module='chan_donchian_all_inside', calc='calc_chan_donchian_all_inside',
+        entry='check_entry', exit='check_exit',
+        label='ChanDonch', grid=[20], min_len=120,
+    ),
+    'chan_donchian_double': dict(
+        module='chan_donchian_double', calc='calc_chan_donchian_double',
+        entry='check_entry', exit='check_exit',
+        label='ChanDonchD', grid=[20], min_len=120,
+    ),
+    'chan_keltner_shift': dict(
+        module='chan_keltner_shift', calc='calc_chan_keltner_shift',
+        entry='check_entry', exit='check_exit',
+        label='ChanKelt', grid=[20], min_len=120,
+    ),
+    'chan_hma_envelope': dict(
+        module='chan_hma_envelope', calc='calc_chan_hma_envelope',
+        entry='check_entry', exit='check_exit',
+        label='ChanHMA', grid=[20], min_len=120,
+    ),
+    'chan_ma_high_low_band': dict(
+        module='chan_ma_high_low_band', calc='calc_chan_ma_high_low_band',
+        entry='check_entry', exit='check_exit',
+        label='ChanMALow', grid=[20], min_len=120,
+    ),
+    # volprof_ (5)
+    'volprof_vol_shelf': dict(
+        module='volprof_vol_shelf', calc='calc_volprof_vol_shelf',
+        entry='check_entry', exit='check_exit',
+        label='VolShelf', grid=[20], min_len=120,
+    ),
+    'volprof_open_vol_bias': dict(
+        module='volprof_open_vol_bias', calc='calc_volprof_open_vol_bias',
+        entry='check_entry', exit='check_exit',
+        label='VolOpenBias', grid=[20], min_len=120,
+    ),
+    # anom_ (5)
+    'anom_spike_volume': dict(
+        module='anom_spike_volume', calc='calc_anom_spike_volume',
+        entry='check_entry', exit='check_exit',
+        label='AnomSpike', grid=[20], min_len=120,
+    ),
+    'anom_long_wick_reject': dict(
+        module='anom_long_wick_reject', calc='calc_anom_long_wick_reject',
+        entry='check_entry', exit='check_exit',
+        label='AnomWick', grid=[20], min_len=120,
+    ),
+    'anom_spread_blowout': dict(
+        module='anom_spread_blowout', calc='calc_anom_spread_blowout',
+        entry='check_entry', exit='check_exit',
+        label='AnomSpread', grid=[20], min_len=120,
+    ),
+    # volreg_ (5)
+    'volreg_arch_lm': dict(
+        module='volreg_arch_lm', calc='calc_volreg_arch_lm',
+        entry='check_entry', exit='check_exit',
+        label='VolregARCH', grid=[20], min_len=120,
+    ),
+    'volreg_range_expansion': dict(
+        module='volreg_range_expansion', calc='calc_volreg_range_expansion',
+        entry='check_entry', exit='check_exit',
+        label='VolregRange', grid=[20], min_len=120,
+    ),
+    # osc_ (5)
+    'osc_ehlers_stoch': dict(
+        module='osc_ehlers_stoch', calc='calc_osc_ehlers_stoch',
+        entry='check_entry', exit='check_exit',
+        label='OscEhlers', grid=[20], min_len=120,
+    ),
+    # bc_ (5)
+    'bc_keltner_squeeze': dict(
+        module='bc_keltner_squeeze', calc='calc_bc_keltner_squeeze',
+        entry='check_entry', exit='check_exit',
+        label='BCKelt', grid=[20], min_len=120,
+    ),
+    # rev_ (5)
+    'rev_swing_failure': dict(
+        module='rev_swing_failure', calc='calc_rev_swing_failure',
+        entry='check_entry', exit='check_exit',
+        label='RevSwing', grid=[20], min_len=120,
+    ),
+    # mi_ (5)
+    'mi_adx_rsi_ma': dict(
+        module='mi_adx_rsi_ma', calc='calc_mi_adx_rsi_ma',
+        entry='check_entry', exit='check_exit',
+        label='MiADXRSI', grid=[20], min_len=120,
+    ),
+    # advstat_ (5)
+    'advstat_fractal_dim': dict(
+        module='advstat_fractal_dim', calc='calc_advstat_fractal_dim',
+        entry='check_entry', exit='check_exit',
+        label='AdvStatFD', grid=[20], min_len=120,
+    ),
+    # mom_ (5)
+    'mom_roc_of_roc': dict(
+        module='mom_roc_of_roc', calc='calc_mom_roc_of_roc',
+        entry='check_entry', exit='check_exit',
+        label='MomRoC', grid=[20], min_len=120,
+    ),
+    # struct_ continued (5)
+    'struct_adr_exhaust': dict(
+        module='struct_adr_exhaust', calc='calc_struct_adr_exhaust',
+        entry='check_entry', exit='check_exit',
+        label='StructADR', grid=[20], min_len=120,
+    ),
+    # pattern_ continued (3)
+    'pattern_gap_go': dict(
+        module='pattern_gap_go', calc='calc_pattern_gap_go',
+        entry='check_entry', exit='check_exit',
+        label='PatGapGo', grid=[20], min_len=120,
+    ),
 }
 
 _MODULE_CACHE = {}
@@ -1057,6 +1504,42 @@ ENABLED_BATCH = (
     # ── БАТЧ 8 (15.11.2026): 8 новых регрессий ──
     'reg_theilsen', 'reg_ridge', 'reg_lasso', 'reg_poly',
     'reg_ransac', 'reg_bayesian', 'reg_elasticnet', 'reg_quantile',
+    # ── NEW BATCH: 85 новых стратегий ──
+    'struct_choch', 'struct_hh_hl_chain', 'struct_ll_lh_chain', 'struct_equal_lows',
+    'struct_order_block', 'struct_breaker_block', 'struct_premium_discount',
+    'struct_consolidation_count', 'struct_trendline_break', 'struct_round_level',
+    'struct_vwap_reclaim', 'struct_channel_reject', 'struct_round_break',
+    'struct_prev_day_mid', 'struct_open_range_break', 'struct_adr_exhaust',
+    'pattern_triangle_asc', 'pattern_triangle_desc', 'pattern_pennant',
+    'pattern_hns_top', 'pattern_cup_handle', 'pattern_double_bottom_w',
+    'pattern_island_reversal', 'pattern_key_reversal_bar', 'pattern_marubozu_run',
+    'pattern_gap_go_new',
+    'sess_transition_ny', 'sess_asian_wide', 'sess_lunch_break',
+    'sess_first_hour_bias', 'sess_night_range', 'sess_week_friday_flat',
+    'sess_monday_open_bias', 'sess_midweek_reversal', 'sess_month_start_flow',
+    'sess_month_end_flow',
+    'stat_kpss_break', 'stat_vr_revert', 'stat_box_pierce_abs', 'stat_dw_residual',
+    'stat_johansen', 'stat_granger_lead', 'stat_cross_corr_lag',
+    'stat_kl_divergence', 'stat_jarque_bera', 'stat_sign_test',
+    'mr_vwap_mad', 'mr_keltner_pct', 'mr_overshoot_range_new',
+    'mr_weekly_deviation', 'mr_ratio_reversion',
+    'ma_vidya_trend', 'ma_alma_trend', 'ma_mcginley', 'ma_zlema_cross',
+    'ma_dema_trend',
+    'cyc_fft_power_ratio', 'cyc_goertzel', 'cyc_wavelet_denoise',
+    'cyc_phase_cross', 'cyc_amplitude',
+    'pair_spread_z_entry2', 'pair_ratio_meanrev', 'pair_triangle_residual',
+    'pair_beta_hedged', 'pair_vol_adjusted',
+    'regime_pelt_proxy', 'regime_chow_break', 'regime_bai_perron',
+    'regime_hmm_proxy2', 'regime_range_classifier',
+    'chan_donchian_all_inside', 'chan_donchian_double', 'chan_keltner_shift',
+    'chan_hma_envelope', 'chan_ma_high_low_band', 'chan_regression_band_z_new',
+    'chan_median_band_new',
+    'volprof_vol_shelf_new', 'volprof_open_vol_bias_new',
+    'anom_spike_volume', 'anom_long_wick_reject', 'anom_spread_blowout_new',
+    'volreg_arch_lm_new', 'volreg_range_expansion_new',
+    'osc_ehlers_stoch_new', 'bc_keltner_squeeze_new', 'rev_swing_failure_new',
+    'mi_adx_rsi_new',
+    'advstat_fractal_dim_new', 'mom_roc_of_roc_new',
 )
 
     # ═══════════ БАТЧ 7 (12.11.2026): 35 новых стратегий в 8 категориях ═══════════

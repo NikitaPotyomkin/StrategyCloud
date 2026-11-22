@@ -55,50 +55,42 @@ def check_exit(prev, curr, direction):
     return abs(curr) < 0.4
 
 
-def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
-             sim_lot=0.01, spread_points=0):
+from strategies._bt_core import run_backtest
+def _entry(prev, curr):
+    """check_entry модуля отдаёт bool — направление берём из знака состояния.
+
+    Прежняя петля входила в long при переходе 0→+1 и в short при 0→−1, а
+    run_backtest ждёт 'long'/'short'/None. Булев ответ разворачиваем по curr.
+    """
+    if not check_entry(prev, curr):
+        return None
+    if curr == 1:
+        return 'long'
+    if curr == -1:
+        return 'short'
+    return None
+
+
+def _calc(df, param_key):
+    """calc_* с параметрами, собранными из param_key."""
     """Бэктест multi-indicator Stochastic+ATR+Volume."""
     parts = str(param_key).split(',') if param_key else '14,14,30'
     stoch_period = int(parts[0]) if len(parts) > 0 else 14
     atr_period = int(parts[1]) if len(parts) > 1 else 14
     vol_period = int(parts[2]) if len(parts) > 2 else 30
-    
-    df = calc_stoch_atr_vol(df, stoch_period, atr_period, vol_period)
-    
-    min_len = max(stoch_period, atr_period, vol_period) + 10
-    if len(df) < min_len:
-        return 0, 0, []
-    
-    trades = []
-    in_pos = False
-    entry_price = 0.0
-    
-    sl_dist = sl_points * point
-    tp_dist = tp_points * point
+    return calc_stoch_atr_vol(df, stoch_period, atr_period, vol_period)
 
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-        high = df['high'].iloc[i]
-        low = df['low'].iloc[i]
 
-        if not in_pos:
-            if prev_k == 0 and curr_k == 1:
-                entry_price = df['close'].iloc[i]
-                in_pos = True
-        else:
-            if low - entry_price <= -sl_dist:
-                profit = -sl_dist * tick_value * sim_lot
-                trades.append(profit)
-                in_pos = False
-            elif high - entry_price >= tp_dist:
-                profit = tp_dist * tick_value * sim_lot
-                trades.append(profit)
-                in_pos = False
-            elif check_exit(prev_k, curr_k, 'long'):
-                profit = (df['close'].iloc[i] - entry_price) * tick_value * sim_lot
-                trades.append(profit)
-                in_pos = False
-    
-    total_profit = sum(trades)
-    return total_profit, len(trades), trades
+def backtest(df, param_key, sl_points, tp_points, point, tick_value, tick_size,
+             sim_lot=0.01, spread_points=0):
+    """Симуляция через общий движок strategies/_bt_core.run_backtest.
+
+    Вход по open следующего бара ± спред, спред вычитается и на выходе, обрыва
+    по времени нет, деньги через trade_profit (÷ tick_size). Прежняя петля
+    входила по close сигнального бара, не вычитала спред, выбрасывала сделки,
+    не закрывшиеся за 49 баров, и считала P&L без деления на tick_size —
+    из-за этого её числа были несравнимы с остальным реестром.
+    """
+    return run_backtest(df, _calc, _entry, check_exit,
+                        param_key, sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)

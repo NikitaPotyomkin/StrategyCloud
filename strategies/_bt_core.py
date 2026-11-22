@@ -165,6 +165,94 @@ def run_backtest(df, calc_fn, check_entry, check_exit, param_key,
                           spread, tick_value, tick_size, sim_lot)
 
 
+def run_backtest_legacy(df, calc_fn, check_entry, check_exit, param_key,
+                        sl_points, tp_points, point, tick_value, tick_size,
+                        sim_lot=0.01, spread_points=0, hold_bars=50):
+    """Прежняя модель поколения B с исправленной арифметикой (шаг C).
+
+    Модель входа СОХРАНЕНА намеренно, чтобы шаг C не смешивал два изменения:
+      * вход по close[i] сигнального бара (а не по open[i+1]);
+      * сделка, не закрывшаяся за hold_bars-1 бар, выпадает из выборки целиком
+        (ни в n_trades, ни в profit) — прежний range(i+1, min(i+50, ...));
+      * выход только по SL/TP: check_exit принимается для совместимости с
+        run_backtest, но прежние петли его не вызывали.
+
+    Исправлено ровно то, что делало числа несравнимыми с остальным реестром:
+      * спред вычитается (вход ± spread и один спред на выходе);
+      * P&L считается через trade_profit (÷ tick_size), то есть в валюте счёта,
+        а не в «рублях», заниженных в 1/tick_size раз;
+      * в trade_profits пишутся деньги, поэтому calc_metrics получает то же,
+        что и от run_backtest.
+
+    Шаг B — замена вызова на run_backtest (вход по open[i+1], без обрыва).
+    Гейт паритета шага C: tools/loop_model_pilot.py (сделок столько же,
+    меняется только масштаб денег).
+    """
+    df = calc_fn(df, param_key)
+    k_arr = df['k'].to_numpy()
+    high_arr = df['high'].to_numpy(dtype=float)
+    low_arr = df['low'].to_numpy(dtype=float)
+    close_arr = df['close'].to_numpy(dtype=float)
+    index = df.index
+    n = len(df)
+
+    sl_dist = sl_points * point
+    tp_dist = tp_points * point
+    spread = spread_points * point
+
+    _profit = trade_profit
+    _row = trade_row
+
+    profit = 0.0
+    n_trades = 0
+    trade_profits = TradeList()
+
+    for i in range(1, n):
+        direction = check_entry(k_arr[i - 1], k_arr[i])
+        if direction is None:
+            continue
+
+        # Вход по закрытию сигнального бара, со спредом против нас.
+        if direction == 'long':
+            entry = close_arr[i] + spread
+            sl, tp = entry - sl_dist, entry + tp_dist
+        else:
+            entry = close_arr[i] - spread
+            sl, tp = entry + sl_dist, entry - tp_dist
+
+        exit_price = None
+        exit_i = None
+        for j in range(i + 1, min(i + hold_bars, n)):
+            if direction == 'long':
+                if low_arr[j] <= sl:
+                    exit_price, exit_i = sl, j
+                    break
+                if high_arr[j] >= tp:
+                    exit_price, exit_i = tp, j
+                    break
+            else:
+                if high_arr[j] >= sl:
+                    exit_price, exit_i = sl, j
+                    break
+                if low_arr[j] <= tp:
+                    exit_price, exit_i = tp, j
+                    break
+
+        if exit_price is None:
+            continue          # обрыв по времени: прежнее поведение, теперь явное
+
+        p = _profit(entry, exit_price, tick_value, tick_size, sim_lot, direction)
+        p -= (spread / tick_size) * tick_value * sim_lot
+        profit += p
+        n_trades += 1
+        trade_profits.append(p)
+        record = _row(index, i, exit_i, direction, p)
+        if record is not None:
+            trade_profits.times.append(record)
+
+    return profit, n_trades, trade_profits
+
+
 def _simulate_arrays(df, check_entry, check_exit, sl_dist, tp_dist, spread,
                      tick_value, tick_size, sim_lot):
     """Быстрая петля: колонки читаются из numpy-массивов (~50 нс вместо ~7-10 мкс).

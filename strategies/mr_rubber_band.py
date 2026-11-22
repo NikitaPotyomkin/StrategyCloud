@@ -53,55 +53,25 @@ def check_exit(prev, curr, direction):
     return False
 
 
-def backtest(df, param_key, sl_points, tp_points, point, tick_value,
-             tick_size, sim_lot=0.01, spread_points=0):
+from strategies._bt_core import run_backtest
+def _calc(df, param_key):
+    """calc_* с параметрами, собранными из param_key."""
     parts = str(param_key).split(',') if isinstance(param_key, str) else [str(param_key)]
     ma_period = int(parts[0]) if len(parts) > 0 else 20
     win_period = int(parts[1]) if len(parts) > 1 else 500
+    return calc_mr_rubber_band(df, ma_period, win_period)
 
-    df = calc_mr_rubber_band(df, ma_period, win_period)
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-    sl_dist = sl_points * point
-    tp_dist = tp_points * point
 
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-        close = df['close'].iloc[i]
-        high = df['high'].iloc[i]
-        low = df['low'].iloc[i]
+def backtest(df, param_key, sl_points, tp_points, point, tick_value,
+             tick_size, sim_lot=0.01, spread_points=0):
+    """Симуляция через общий движок strategies/_bt_core.run_backtest.
 
-        if prev_k == 0 and curr_k == 1:
-            entry = close
-            sl_price = entry - sl_dist
-            tp_price = entry + tp_dist
-            for j in range(i+1, min(i+50, len(df))):
-                if df['low'].iloc[j] <= sl_price:
-                    profit += (sl_price - entry) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(sl_price - entry)
-                    break
-                elif df['high'].iloc[j] >= tp_price:
-                    profit += (tp_price - entry) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(tp_price - entry)
-                    break
-        elif prev_k == 0 and curr_k == -1:
-            entry = close
-            sl_price = entry + sl_dist
-            tp_price = entry - tp_dist
-            for j in range(i+1, min(i+50, len(df))):
-                if df['high'].iloc[j] >= sl_price:
-                    profit += (entry - sl_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(entry - sl_price)
-                    break
-                elif df['low'].iloc[j] <= tp_price:
-                    profit += (entry - tp_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(entry - tp_price)
-                    break
-
-    return (profit, n_trades, trade_profits)
+    Вход по open следующего бара ± спред, спред вычитается и на выходе, обрыва
+    по времени нет, деньги через trade_profit (÷ tick_size). Прежняя петля
+    входила по close сигнального бара, не вычитала спред, выбрасывала сделки,
+    не закрывшиеся за 49 баров, и считала P&L без деления на tick_size —
+    из-за этого её числа были несравнимы с остальным реестром.
+    """
+    return run_backtest(df, _calc, check_entry, check_exit,
+                        param_key, sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)
