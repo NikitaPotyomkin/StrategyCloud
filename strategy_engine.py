@@ -2133,6 +2133,17 @@ def check_active_signals(now, active_strategies, symbol_data, calc_stochastic_fn
                                     'lot': s['lot'],
                                 }
                                 print(f"  -> [{key}] Открыт {entry_dir.upper()}: entry={entry:.{digits}f}, lot={s['lot']}")
+                                # Режим рынка на входе — ТОЛЬКО наблюдение (IDEAS.md A1):
+                                # пишем снимок в trades.db, ни на что не влияем. Ошибка
+                                # наблюдения не должна мешать исполнению — глотаем.
+                                try:
+                                    import regime as _regime
+                                    import trades_db as _tdb
+                                    _rg = _regime.snapshot(s['symbol'])
+                                    if _rg:
+                                        _tdb.record_regime(ticket, s['symbol'], _rg, now)
+                                except Exception as _rge:
+                                    print(f"  -> [{key}] режим рынка не записан: {_rge!r}")
 
         except Exception as e:
             print(f"\n[WARN] Ошибка стратегии {key}: {e!r}", flush=True)

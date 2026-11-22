@@ -286,6 +286,23 @@ def ensure_schema(con):
     );
     CREATE INDEX IF NOT EXISTS ix_family_score_best ON family_score(best_score);
 
+    -- Режим рынка на момент ВХОДА (IDEAS.md A1, ступень «наблюдение»).
+    -- Отдельная таблица, а не колонки в deals: deals повторяет брокерские поля
+    -- и наполняется ingest'ом из истории MT5, а режим — наш собственный расчёт,
+    -- посчитанный в момент входа (regime.py). Ключ — ticket позиции, поэтому
+    -- повторная запись безопасна (INSERT OR REPLACE).
+    CREATE TABLE IF NOT EXISTS trade_regime (
+        position_ticket INTEGER PRIMARY KEY,  -- ticket позиции (= входного ордера)
+        symbol          TEXT,
+        entry_time      TEXT,   -- время входа (локальное, как в CSV-журнале)
+        vi_pct          REAL,   -- перцентиль ATR(D1,14) за 100 дней, 0..100
+        atr_pct         REAL,   -- ATR(D1,14) в % от цены (уровень, не ранг)
+        k_week          REAL,   -- ER Кауфмана по H1 × √n (≈1 — случайный ход)
+        regime          TEXT,   -- боковик / тренд / сильный тренд
+        created_at      TEXT    -- когда записали снимок
+    );
+    CREATE INDEX IF NOT EXISTS ix_trade_regime_symbol ON trade_regime(symbol);
+
     CREATE TABLE IF NOT EXISTS ingest_log (
         id         INTEGER PRIMARY KEY CHECK (id = 1),
         last_time  INTEGER,  -- максимальный deal.time после последнего ingest
@@ -1006,6 +1023,42 @@ def record_family_scores(rows, path=None, verbose=True):
     except Exception as exc:
         if verbose:
             print(f"  [trades_db] family_score не записан: {exc!r}", flush=True)
+        return 0
+
+
+def record_regime(position_ticket, symbol, regime, entry_time=None, path=None, verbose=False):
+    """Сохранить снимок режима рынка на момент ВХОДА (наблюдение, IDEAS.md A1).
+
+    Зачем: чтобы потом разложить результат сделок по режимам и решить, нужен ли
+    гейт, — без этого любая настройка множителей была бы подгонкой на 14-дневном
+    окне. Сам снимок ни на что не влияет: это только запись.
+
+    `regime` — dict от regime.snapshot(): vi_pct / atr_pct / k_week / label.
+    Отсутствующие ключи пишутся как NULL. Fail-safe: любая ошибка → 0, торговлю
+    не трогает (как record_position).
+    """
+    if not position_ticket or not regime:
+        return 0
+    try:
+        con = connect(path)
+        ensure_schema(con)
+        con.execute(
+            "INSERT OR REPLACE INTO trade_regime "
+            "(position_ticket, symbol, entry_time, vi_pct, atr_pct, k_week, regime, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (int(position_ticket), str(symbol),
+             str(entry_time) if entry_time is not None else None,
+             regime.get('vi_pct'), regime.get('atr_pct'),
+             regime.get('k_week'), regime.get('label'),
+             datetime.datetime.now().isoformat(timespec='seconds')))
+        con.commit()
+        con.close()
+        if verbose:
+            print(f"  [trades_db] trade_regime {int(position_ticket)}: {regime}", flush=True)
+        return 1
+    except Exception as exc:
+        if verbose:
+            print(f"  [trades_db] trade_regime не записан: {exc!r}", flush=True)
         return 0
 
 

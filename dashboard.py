@@ -784,15 +784,16 @@ with tab_overview:
     _ms_today = dict(_ms_week)
     _vi_w, _vi_t, _vi_pw, _ms_n, _ms_day_ts = [], [], [], 0, None
     _er_w, _er_t = [], []   # ER по корзине: направленность недели и дня
+    _k_w, _k_t = [], []     # сила ER*sqrt(n) — сопоставима между окнами разной длины
 
     _ms_dow_ru = ('вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб')   # _mql_dow: 0 = воскресенье
 
-    def _ms_strength(_er):
-        """Направленность окна по ER Кауфмана: 1 — ход без откатов, 0 — пила.
-        Три класса: сильный тренд (≥ 0.50), тренд (≥ 0.35), боковик (всё ниже)."""
-        if _er >= 0.50:
+    def _ms_strength(_k):
+        """Направленность окна по нормированному ER Кауфмана: k = ER*√n.
+        Три класса: сильный тренд (≥ 2.60), тренд (≥ 1.70), боковик (всё ниже)."""
+        if _k >= 2.60:
             return 'сильный тренд'
-        if _er >= 0.35:
+        if _k >= 1.70:
             return 'тренд'
 
 
@@ -861,11 +862,14 @@ with tab_overview:
                     _h = _r['high'].astype(float)
                     _l = _r['low'].astype(float)
                     _er = abs(_c[-1] - _c[0]) / max(1e-9, float(np.abs(np.diff(_c)).sum()))
+                    # Нормировка на длину окна: у случайного блуждания E[ER] ~ 1/sqrt(n),
+                    # поэтому сырой ER недели (168 баров) и дня (~24) несопоставимы.
+                    _k_er = _er * float(np.sqrt(max(1.0, float(len(_c) - 1))))
                     _tr = np.maximum(_h[1:] - _l[1:],
                                      np.maximum(np.abs(_h[1:] - _c[:-1]),
                                                 np.abs(_l[1:] - _c[:-1])))
                     _atr = float(np.mean(_tr[-50:])) / max(1e-9, float(_c[-1])) * 100.0
-                    _row.append((_er, _atr))
+                    _row.append((_er, _atr, float(_k_er)))
                 if _row[0] is None or _row[1] is None or _row[2] is None:
                     continue
                 _ms_n += 1
@@ -875,10 +879,12 @@ with tab_overview:
                 _vi_t.append(_row[2][1])
                 _er_w.append(_row[0][0])
                 _er_t.append(_row[2][0])
+                _k_w.append(_row[0][2])
+                _k_t.append(_row[2][2])
 
                 # Голосуем за силу окна: неделя и последний день отдельно.
-                for _er, _acc in ((_row[0][0], _ms_week), (_row[2][0], _ms_today)):
-                    _acc[_ms_strength(_er)] += 1
+                for _kv, _acc in ((_row[0][2], _ms_week), (_row[2][2], _ms_today)):
+                    _acc[_ms_strength(_kv)] += 1
 
 
 
@@ -891,13 +897,12 @@ with tab_overview:
     except Exception:
         _ms_n = 0
 
-    def _ms_mode(_acc):
-        """Доминирующий режим корзины + доля символов в нём."""
-        if not _acc or sum(_acc.values()) == 0:
-            return None, 0.0
-        _k = max(_acc, key=_acc.get)
-        _tot = sum(_acc.values())
-        return _k, (_acc[_k] / _tot * 100.0)
+    def _ms_agree(_acc, _label):
+        """Доля символов корзины, попавших в тот же класс, что и метка."""
+        _tot = sum(_acc.values()) if _acc else 0
+        if not _tot or not _label:
+            return 0.0
+        return _acc.get(_label, 0) / _tot * 100.0
 
     def _ms_qual(_ratio, _base):
         """Приставка «громкости»: окно на 30%+ громче/тише опорного."""
@@ -1201,16 +1206,24 @@ with tab_overview:
     # показаны — здесь только контекст. Данные собраны выше (блок «сбор данных»).
     st.write("")
     st.markdown("### Market Regime")
+    st.caption("Сила хода k = ER·√n — ER Кауфмана, нормированный на длину окна "
+               "(у случайного блуждания k ≈ 1). Классы: k ≥ 1.7 — тренд, "
+               "k ≥ 2.6 — сильный тренд, ниже — боковик. «% пар» — сколько символов "
+               "корзины попало в тот же класс, что и метка.")
     _ms_col1, _ms_col2 = st.columns(2)
     if _ms_n:
-        _mode_w, _share_w = _ms_mode(_ms_week)
-        _mode_t, _share_t = _ms_mode(_ms_today)
+        _k_week = float(np.mean(_k_w)) if _k_w else 0.0
+        _mode_w = _ms_strength(_k_week)
+        _share_w = _ms_agree(_ms_week, _mode_w)
+        _k_day = float(np.mean(_k_t)) if _k_t else 0.0
+        _mode_t = _ms_strength(_k_day)
+        _share_t = _ms_agree(_ms_today, _mode_t)
         _vi_week = float(np.mean(_vi_w)) if _vi_w else 0.0
         _vi_prevw = float(np.mean(_vi_pw)) if _vi_pw else 0.0
         _er_week = float(np.mean(_er_w)) if _er_w else 0.0
         _er_day = float(np.mean(_er_t)) if _er_t else 0.0
         _vi_day = float(np.mean(_vi_t)) if _vi_t else 0.0
-        # Итог по корзине: СИЛА (мода ER-класса) + ГРОМКОСТЬ (VI окна к опорному):
+        # Итог по корзине: СИЛА (класс по среднему k) + ГРОМКОСТЬ (VI к опорному):
         # неделю сверяем с прошлой неделей, день — с текущей неделей.
         _wr_ratio = (_vi_week / _vi_prevw) if _vi_prevw > 0 else 1.0
         _wd_ratio = (_vi_day / _vi_week) if _vi_week > 0 else 1.0
@@ -1227,13 +1240,13 @@ with tab_overview:
 
         with _ms_col1:
             metric_card("Market — week", _lab_w,
-                        sub=f"ER {_er_week:.2f} · VI {_vi_week:.3f}% "
+                        sub=f"ER {_er_week:.2f} (k {_k_week:.2f}) · VI {_vi_week:.3f}% "
                             f"(к пред. неделе {(_wr_ratio - 1) * 100:+.0f}%) · {_share_w:.0f}% пар")
         with _ms_col2:
 
             metric_card("Market — last day", _lab_d,
                         color=COL_AMBER if _lab_d.startswith('волатильный') else None,
-                        sub=f"{_ms_day_txt} · ER {_er_day:.2f} · VI {_vi_day:.3f}% "
+                        sub=f"{_ms_day_txt} · ER {_er_day:.2f} (k {_k_day:.2f}) · VI {_vi_day:.3f}% "
                             f"({(_wd_ratio - 1) * 100:+.0f}% к неделе) · {_share_t:.0f}% пар")
 
     else:
