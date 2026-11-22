@@ -1211,9 +1211,14 @@ ENABLED_BATCH = (
     # ── БАТЧ 8 (15.11.2026): 8 новых регрессий ──
     'reg_theilsen', 'reg_ridge', 'reg_lasso', 'reg_poly',
     'reg_ransac', 'reg_bayesian', 'reg_elasticnet', 'reg_quantile',
+)
 
     # ═══════════ БАТЧ 7 (12.11.2026): 35 новых стратегий в 8 категориях ═══════════
     # Regime Detection (5)
+# ХВОСТ РЕЕСТРА (батчи 7-8): записи лежали в конце файла вне литерала REGISTRY.
+# Дописываем их в реестр отдельным вызовом; при плановой чистке реестра (P0b/P1)
+# этот блок надо вернуть внутрь основного литерала.
+REGISTRY.update({
     'regime_cusum_ret': dict(
         module='regime_cusum_ret', calc='calc_regime_cusum_ret',
         entry='check_entry', exit='check_exit',
@@ -1446,7 +1451,7 @@ ENABLED_BATCH = (
         entry='check_entry', exit='check_exit',
         label='rg_quant', grid=[50, 100, 200], min_len=200,
     ),
-}
+})
 
 
 def _as_param(value):

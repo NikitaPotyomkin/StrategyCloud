@@ -68,7 +68,7 @@ def calc_reg_lasso(df, period=100, alpha=0.1):
                 continue
 
             features = []
-            for lag in range(1, n_lags + 1):
+            for lag in range(1, n_lags):   # лаг 5 — это цель (ret[j+5]), в признаки не берём
                 features.append(ret.iloc[j + lag] if j + lag < len(df) else 0)
             features.append(atr_ratio.iloc[j] if not np.isnan(atr_ratio.iloc[j]) else 0)
             features.append(hl_range.iloc[j])
@@ -97,7 +97,16 @@ def calc_reg_lasso(df, period=100, alpha=0.1):
         w = _lasso_coordinate_descent(X_norm, y_norm, alpha=alpha)
 
         # Прогноз
-        prediction = w[-1] if len(w) > 0 else 0
+        # Прогноз для бара i — скалярным произведением, а не весом w[-1].
+        # Цель в lasso нормирована (y_norm), поэтому возвращаем прогноз в
+        # единицы доходности: * y_std + y_mean.
+        _jp = i - 5
+        _f = [ret.iloc[_jp + lag] for lag in range(1, n_lags)]
+        _f.append(atr_ratio.iloc[_jp] if not np.isnan(atr_ratio.iloc[_jp]) else 0.0)
+        _f.append(float(hl_range.iloc[_jp]) if not np.isnan(hl_range.iloc[_jp]) else 0.0)
+        _f.append(vol_ratio.iloc[_jp] if not np.isnan(vol_ratio.iloc[_jp]) else 0.0)
+        x_now = (np.array(_f, dtype=float) - X_mean) / X_std
+        prediction = (float(x_now @ w) * y_std + y_mean) if len(w) else 0.0
 
         if prediction > 0.0002:
             k[i] = 1

@@ -54,7 +54,7 @@ def calc_reg_ridge(df, period=100, alpha=1.0):
                 continue
 
             features = []
-            for lag in range(1, n_lags + 1):
+            for lag in range(1, n_lags):   # лаг 5 — это цель (ret[j+5]), в признаки не берём
                 features.append(ret.iloc[j + lag] if j + lag < len(df) else 0)
             features.append(atr_ratio.iloc[j] if not np.isnan(atr_ratio.iloc[j]) else 0)
             features.append(hl_range.iloc[j])
@@ -76,7 +76,16 @@ def calc_reg_ridge(df, period=100, alpha=1.0):
 
         # Ridge regression
         w = _ridge_regression(X_norm, y, alpha=alpha)
-        prediction = w[-1] if len(w) > 0 else 0
+        # Прогноз для бара i — скалярным произведением, а не весом w[-1].
+        # Строка признаков та же, что в обучении, но для j_pred = i-5: её лаги
+        # 1..4 — это ret[i-4..i-1], а они уже известны на баре i.
+        _jp = i - 5
+        _f = [ret.iloc[_jp + lag] for lag in range(1, n_lags)]
+        _f.append(atr_ratio.iloc[_jp] if not np.isnan(atr_ratio.iloc[_jp]) else 0.0)
+        _f.append(float(hl_range.iloc[_jp]) if not np.isnan(hl_range.iloc[_jp]) else 0.0)
+        _f.append(vol_ratio.iloc[_jp] if not np.isnan(vol_ratio.iloc[_jp]) else 0.0)
+        x_now = (np.array(_f, dtype=float) - X_mean) / X_std
+        prediction = float(x_now @ w) if len(w) else 0.0
 
         # Сигнал
         if prediction > 0.0002:
