@@ -1,17 +1,20 @@
 @echo off
 REM ============================================================
-REM  "Кнопка Pull": отправить код на боевую и сразу её обновить.
-REM  Запускается НА ТЕСТОВОЙ машине (двойной клик или из PyCharm).
+REM  "Pull button": send code to the production box and update it.
+REM  Run on the TEST machine (double click or from PyCharm).
 REM
-REM  Что делает:
-REM    1) git add -A / commit / push  — код уезжает в общий репозиторий
-REM    2) schtasks /Run — дёргает на боевой машине задачу "StrategyCloud deploy",
-REM       которая делает pull -> py_compile -> рестарт main.py
+REM  What it does:
+REM    1) git add -A / commit / push - code goes to the shared repo
+REM    2) schtasks /Run - triggers "StrategyCloud deploy" on production,
+REM       which does pull -> py_compile -> restart main.py
 REM
-REM  Один раз настроить:
-REM    - на боевой: задача в планировщике "StrategyCloud deploy" (см. deploy_pull.py)
-REM    - здесь: cmdkey /add:192.168.0.106 /user:nikit /pass:****
-REM      (чтобы schtasks ходил на боевую без запроса пароля)
+REM  KEEP THIS FILE ASCII-ONLY. cmd.exe reads .bat byte by byte and UTF-8
+REM  Cyrillic breaks line parsing: it starts running word fragments like
+REM  "'puwena' is not recognized". English text here is not laziness.
+REM
+REM  One-time setup:
+REM    - on production: scheduled task "StrategyCloud deploy" (deploy_pull.py)
+REM    - here: cmdkey /add:192.168.0.106 /user:nikit /pass:****
 REM ============================================================
 
 setlocal
@@ -21,32 +24,32 @@ set TASK_NAME=StrategyCloud deploy
 
 cd /d "%PROJECT%"
 
-echo [1/3] Коммит...
+echo [1/3] Commit...
 git add -A
-git commit -m "deploy %DATE% %TIME%" || echo    (нечего коммитить - продолжаю)
+git commit -m "deploy %DATE% %TIME%" || echo    nothing to commit - continue
 
 echo [2/3] Push...
 git push origin main || goto :fail
 
-echo [3/3] Запуск деплоя на боевой (%TRADE_HOST%)...
-REM Шаг не критичный: коммит уже в origin/main, и боевая подтянет его на плановом
-REM тике (задача "StrategyCloud deploy" ходит в git раз в час). Ошибка доступа
-REM здесь значит только "не удалось дёрнуть сейчас", а не "деплой не состоялся".
+echo [3/3] Trigger deploy on production (%TRADE_HOST%)...
+REM Non-critical step: the commit is already in origin/main and production
+REM picks it up on its scheduled tick (the task pulls git once an hour).
+REM A failure here means only "could not trigger now", not "deploy failed".
 schtasks /S %TRADE_HOST% /Run /TN "%TASK_NAME%" >nul 2>&1
 if errorlevel 1 (
-    echo       не удалось дёрнуть задачу - ждём планового тика
-    echo       проверить: дашборд, плашка деплоя
+    echo       could not trigger the task - waiting for the scheduled tick
+    echo       check: dashboard, deploy badge
 ) else (
-    echo       задача запущена
+    echo       task triggered
 )
 
 echo.
-echo Готово. Статус смотри на боевой: journals\deploy.log и journals\deploy_status.json
+echo Done. Status on production: journals\deploy.log and journals\deploy_status.json
 goto :end
 
 :fail
 echo.
-echo ОШИБКА. Проверь сеть, доступ к шаре и задачу "%TASK_NAME%" на боевой машине.
+echo ERROR. Check network, share access and task "%TASK_NAME%" on production.
 exit /b 1
 
 :end
