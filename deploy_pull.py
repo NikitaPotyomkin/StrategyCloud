@@ -198,7 +198,9 @@ def recalc_running():
 def compile_gate(files):
     """py_compile изменённых файлов. Возвращает (ok, текст ошибки)."""
     # Компилируем ВСЕ изменённые .py — именно они и уезжают в бой.
-    targets = [f for f in files if f.endswith('.py')]
+    # Удалённые в коммите файлы тоже приходят из диффа — компилировать нечего.
+    targets = [f for f in files if f.endswith('.py')
+               and os.path.isfile(os.path.join(HERE, f))]
     if not targets:
         return True, ''
     try:
