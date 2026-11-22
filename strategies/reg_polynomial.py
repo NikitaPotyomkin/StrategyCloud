@@ -48,9 +48,10 @@ def calc_reg_polynomial(df, period=50):
         # Кривизна нормируется на цену: a2*period^2 имеет размерность цены,
         # поэтому сырой порог 0.001 означал разное для EURUSD (1.1) и XAUUSD (2500).
         # Теперь это доля цены за окно: 0.001 = 10 б.п.
-        if a2 * (period ** 2) / max(current, 1e-9) > 0.001 and residual < 0:
+        curv = a2 * (period ** 2) / max(current, 1e-9)  # доля цены за окно
+        if curv > 0.001 and residual < 0:
             k[i] = 1
-        elif a2 < -0.001 and residual > 0:
+        elif curv < -0.001 and residual > 0:
             k[i] = -1
 
     df = df.copy()

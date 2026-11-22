@@ -688,7 +688,7 @@ def _alive_cell(r: dict) -> str:
     «—»    — снимка нет (liveness.py не прогоняли после последнего прогона).
 
     Silent ≠ «битая»: исключение в бэктесте тоже даёт 0 сделок. Побитых ищет
-    _check_bt.py на синтетическом ряду — сверяй два отчёта.
+    regression-прогон на синтетическом ряду — сверяй два отчёта.
     """
     st = str(r.get('alive') or '')
     if not st:
@@ -698,7 +698,7 @@ def _alive_cell(r: dict) -> str:
     return (f"<td class='mono' style='text-align:center;color:{color};' "
             f"title='liveness: {st} — по чекпойнтам последнего прогона. "
             f"Alive = торгует; Thin = сигнал редкий; Silent = 0 сделок "
-            f"(возможно битая — см. _check_bt.py)'>{st}</td>")
+            f"(возможно битая — см. regression-прогон)'>{st}</td>")
 
 
 def _row_html(r: dict) -> str:
@@ -862,7 +862,7 @@ def render_roadmap_tab() -> None:
         "<th class='left'>Module</th>"
         "<th class='left' title='Signal calc: def calc_... inside the module'>Signal calc</th>"
         "<th title='Strategy Tree type: registry key or native family'>type</th>"
-        "<th title='Живость по чекпойнтам последнего прогона (journals/liveness.csv): Alive — сделки есть и сетка попадает в рынок; Thin — сигнал редкий; Silent — ни одной сделки; «—» — снимка нет. Silent не значит «битая»: сверяй с _check_bt.py'>Alive</th>"
+        "<th title='Живость по чекпойнтам последнего прогона (journals/liveness.csv): Alive — сделки есть и сетка попадает в рынок; Thin — сигнал редкий; Silent — ни одной сделки; «—» — снимка нет. Silent не значит «битая»: сверяй с regression-прогон'>Alive</th>"
         "<th title='Score семейства: МАКСИМУМ best_score по посчитанным "
         "комбинациям (family_score) — чемпион, по нему и допуск в план. "
         "Зелёный — выше порога и покрытие полное; жёлтый — часть комбинаций "

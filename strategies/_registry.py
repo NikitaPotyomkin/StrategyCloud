@@ -648,7 +648,7 @@ REGISTRY = {
     # Профиль объёма (5)
     'volprof_cvd_div': dict(
         module='volprof_cvd_div', calc='calc_volprof_cvd_div',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='vp_cvd', grid=[20, 50, 100], min_len=150,
     ),
     'volprof_effort_result': dict(
@@ -658,7 +658,7 @@ REGISTRY = {
     ),
     'volprof_poc_break': dict(
         module='volprof_poc_break', calc='calc_volprof_poc_break',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='vp_poc', grid=[5, 10, 20], min_len=120,
     ),
     'volprof_volume_dry': dict(
@@ -731,7 +731,7 @@ REGISTRY = {
     # Статистика (3)
     'stat_adf_regime': dict(
         module='stat_adf_regime', calc='calc_stat_adf_regime',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='st_adf', grid=[60, 120], min_len=200,
     ),
     'stat_half_life': dict(
@@ -812,7 +812,7 @@ REGISTRY = {
     # Волатильность (10)
     'volreg_volofvol': dict(
         module='volreg_volofvol', calc='calc_volreg_volofvol',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='vr_vov2', grid=[20, 60, 120], min_len=200,
     ),
     'volreg_ewma_accel': dict(
@@ -925,7 +925,7 @@ REGISTRY = {
     # Статистика (10)
     'stat_ljung': dict(
         module='stat_ljung_box', calc='calc_stat_ljung_box',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='st_lj', grid=[20, 50, 100], min_len=200,
     ),
     'stat_mutinfo': dict(
@@ -935,12 +935,12 @@ REGISTRY = {
     ),
     'stat_ks': dict(
         module='stat_ks_change', calc='calc_stat_ks_change',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='st_ks', grid=[30, 60], min_len=200,
     ),
     'stat_acf': dict(
         module='stat_autocorr_abs', calc='calc_stat_autocorr_abs',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='st_acf', grid=[100, 200], min_len=300,
     ),
     'stat_ent': dict(
@@ -961,7 +961,7 @@ REGISTRY = {
     # Breakout / momentum (10)
     'struct_liq_swp': dict(
         module='struct_liquidity_sweep', calc='calc_struct_liquidity_sweep',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='st_lsq', grid=[10, 20], min_len=120,
     ),
 }
@@ -1082,148 +1082,148 @@ ENABLED_BATCH = (
 REGISTRY.update({
     'regime_cusum_ret': dict(
         module='regime_cusum_ret', calc='calc_regime_cusum_ret',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_cusum', grid=[50, 100, 200], min_len=200,
     ),
     'regime_bocpd': dict(
         module='regime_bocpd_proxy', calc='calc_regime_bocpd_proxy',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_bocpd', grid=[50, 100], min_len=200,
     ),
     'regime_markov_q': dict(
         module='regime_markov_quantile', calc='calc_regime_markov_quantile',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_mrkq', grid=[40, 60, 100], min_len=150,
     ),
     'regime_duration': dict(
         module='regime_duration', calc='calc_regime_duration',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_dur', grid=[100, 200], min_len=300,
     ),
     'regime_stress': dict(
         module='regime_stress_index', calc='calc_regime_stress_index',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_stress', grid=[50, 100], min_len=200,
     ),
     # Cycle/Spectral (5)
     'cyc_fft': dict(
         module='cyc_fft_dominant', calc='calc_cyc_fft_dominant',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='cy_fft', grid=[64, 128], min_len=256,
     ),
     'cyc_wavelet': dict(
         module='cyc_wavelet_energy', calc='calc_cyc_wavelet_energy',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='cy_wave', grid=[50, 100], min_len=150,
     ),
     'cyc_hilbert': dict(
         module='cyc_hilbert_phase', calc='calc_cyc_hilbert_phase',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='cy_hilb', grid=[32, 64], min_len=128,
     ),
     'cyc_bandpass': dict(
         module='cyc_bandpass', calc='calc_cyc_bandpass',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='cy_bp', grid=[10, 20, 30], min_len=100,
     ),
     'cyc_spec_ent': dict(
         module='cyc_spectral_entropy', calc='calc_cyc_spectral_entropy',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='cy_spe', grid=[64, 128], min_len=256,
     ),
     # Anomaly Detection (5)
     'anom_liq_hole': dict(
         module='anom_liquidity_hole', calc='calc_anom_liquidity_hole',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='an_liq', grid=[50, 100], min_len=150,
     ),
     'anom_stop_run': dict(
         module='anom_stop_run', calc='calc_anom_stop_run',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='an_stop', grid=[10, 20, 30], min_len=60,
     ),
     'anom_spread_bo': dict(
         module='anom_spread_blowout', calc='calc_anom_spread_blowout',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='an_spb', grid=[50, 100], min_len=150,
     ),
     'anom_long_wick': dict(
         module='anom_long_wick', calc='calc_anom_long_wick',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='an_wick', grid=[20, 50], min_len=100,
     ),
     'anom_huge_vol': dict(
         module='anom_huge_volume', calc='calc_anom_huge_volume',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='an_hvol', grid=[50, 100], min_len=150,
     ),
     # Structural (5)
     'struct_bos': dict(
         module='struct_swing_bos', calc='calc_struct_swing_bos',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='str_bos', grid=[5, 10, 20], min_len=120,
     ),
     'struct_fvg': dict(
         module='struct_fvg_imbalance', calc='calc_struct_fvg_imbalance',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='str_fvg', grid=[3, 5], min_len=30,
     ),
     'struct_eqhighs': dict(
         module='struct_equal_highs', calc='calc_struct_equal_highs',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='str_eqh', grid=[10, 20], min_len=60,
     ),
     'struct_rex': dict(
         module='struct_range_expansion', calc='calc_struct_range_expansion',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='str_rex', grid=[10, 20], min_len=60,
     ),
     # Statistical Tests (5)
     'stat_vr': dict(
         module='stat_vr_ratio', calc='calc_stat_vr_ratio',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='st_vr2', grid=[5, 10], min_len=100,
     ),
     # Portfolio Layers (5)
     'port_live_bt': dict(
         module='port_live_vs_bt_gate', calc='calc_port_live_vs_bt_gate',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='pt_live', grid=[10, 20], min_len=50,
     ),
     'port_sharpe': dict(
         module='port_live_sharpe_rank', calc='calc_port_live_sharpe_rank',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='pt_shrp', grid=[10, 20], min_len=50,
     ),
     'port_min_trades': dict(
         module='port_min_live_trades', calc='calc_port_min_live_trades',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='pt_mint', grid=[50, 100], min_len=200,
     ),
     'port_alpha': dict(
         module='port_alpha_decay', calc='calc_port_alpha_decay',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='pt_alpha', grid=[50, 100], min_len=200,
     ),
     'port_kill': dict(
         module='port_kill_rule_live', calc='calc_port_kill_rule_live',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='pt_kill', grid=[20, 50], min_len=100,
     ),
     # Session/Time (3)
     'sess_ldn': dict(
         module='sess_transition_ldn', calc='calc_sess_transition_ldn',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='sess_ldn', grid=[10, 20], min_len=60,
     ),
     'sess_asian': dict(
         module='sess_asian_compress', calc='calc_sess_asian_compress',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='sess_as', grid=[20, 60], min_len=120,
     ),
     'sess_hour': dict(
         module='sess_hour_of_day', calc='calc_sess_hour_of_day',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='sess_hr', grid=[30, 60], min_len=120,
     ),
     # Volume Profile (2)
@@ -1232,49 +1232,49 @@ REGISTRY.update({
     # Theil-Sen (робастная)
     'reg_theilsen': dict(
         module='reg_theil_sen', calc='calc_reg_theil_sen',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_theil', grid=[30, 50, 100], min_len=150,
     ),
     # Ridge (L2)
     'reg_ridge': dict(
         module='reg_ridge', calc='calc_reg_ridge',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_ridge', grid=[50, 100, 200], min_len=200,
     ),
     # Lasso (L1)
     'reg_lasso': dict(
         module='reg_lasso', calc='calc_reg_lasso',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_lasso', grid=[50, 100, 200], min_len=200,
     ),
     # Polynomial degree 2
     'reg_poly': dict(
         module='reg_polynomial', calc='calc_reg_polynomial',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_poly', grid=[30, 50, 100], min_len=150,
     ),
     # RANSAC (робастная)
     'reg_ransac': dict(
         module='reg_ransac', calc='calc_reg_ransac',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_ransac', grid=[50, 100], min_len=200,
     ),
     # Bayesian Linear
     'reg_bayesian': dict(
         module='reg_bayesian', calc='calc_reg_bayesian',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_bayes', grid=[50, 100, 200], min_len=200,
     ),
     # ElasticNet (L1+L2)
     'reg_elasticnet': dict(
         module='reg_elasticnet', calc='calc_reg_elasticnet',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_elast', grid=[50, 100, 200], min_len=200,
     ),
     # Quantile regression
     'reg_quantile': dict(
         module='reg_quantile', calc='calc_reg_quantile',
-        entry='check_entry', exit='check_exit',
+        entry='state_entry', exit='state_exit',
         label='rg_quant', grid=[50, 100, 200], min_len=200,
     ),
 })
