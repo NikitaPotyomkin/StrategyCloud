@@ -419,7 +419,7 @@ class RiskParams:
     max_per_side: int = 99999               # лимит на сторону расширен (наблюдение за всеми стратегиями)
     max_per_type: int = 8               # макс. стратегий ОДНОГО типа (rf, logreg, ...) в активном топе — диверсификация (5 → 8, 28.10: шире состав)
     max_per_symbol: int = 99999             # лимит на символ расширен (наблюдение за всеми стратегиями)
-    daily_loss_limit_pct: float = 3.0
+    daily_loss_limit_pct: float = 4.0   # 22.11.2026: 3.0 → 4.0 (под per_trade_risk_pct 0.8%, чтобы 4 стопа не закрывали день)
     # ── Защита по СИМВОЛУ (symbol_guard.py) ────────────────────────────────
     # 30.10.2026, XAGUSDrfd: 8 входов за сутки, 4 стопа по ~4 100 ₽ (≈1% счёта
     # за день на одном символе). Счётный лимит −3% ловит это поздно, а лимит
@@ -447,7 +447,7 @@ class RiskParams:
     max_risk_pct: float = 0.3
     # Кап риска на ОДНУ сделку (доля баланса). Широкий SL + большая квота больше
     # не дают «-20k одной сделкой»: лот режется до balance*pct / sl_money.
-    per_trade_risk_pct: float = 0.005
+    per_trade_risk_pct: float = 0.008   # 22.11.2026: 0.005 → 0.008 (0.5% → 0.8% баланса на сделку)
     min_lot: float = 0.01
     # Hard cap for the live plan size (number of strategy slots). Breadth is
     # limited by the quota / min_lot budget: 40 slots is wider than the old 20-23.

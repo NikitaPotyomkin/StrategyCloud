@@ -1,38 +1,43 @@
-"""Stat Variance Ratio (H1).
+"""Statistical Test: Variance Ratio (H1).
 
-Idea: Variance ratio VR(q) > 1.2 indicates trending behavior; VR < 0.8 indicates mean-reversion
-Вход: VR(5) > 1.2 for long, VR(5) < 0.8 for short
-Выход: VR returns to neutral zone [0.8, 1.2]
-Отличие: Uses rolling variance ratio of returns to detect trend persistence
+Idea: 0484 stat_vr_ratio
+Вход: variance ratio VR(5) > 1.2 (тренд);
+      VR(5) < 0.8 (mean-reversion).
+Выход: VR возвращается к 1.0.
+Отличие: VR-тест проверяет random walk vs predictability.
+
+Правка 12.11.2026: SL/TP >= 10 спредов, горизонт 5-10 баров.
 """
 import numpy as np
 import pandas as pd
 
+from strategies._bt_core import run_backtest, state_entry, state_exit
 
-def calc_stat_vr_ratio(df, period=20, q=5):
-    """Calculate variance ratio signal. Returns df with 'k' column."""
-    returns = df['close'].pct_change().dropna()
-    n = len(returns)
-    k = np.zeros(n)
 
-    # (right) Fixed: var_q and var_1 used identical window, making VR always = q.
-    # Now compute q-period cumulative returns separately.
-    q_returns = returns.rolling(window=q).sum()
+def calc_stat_vr_ratio(df, period=10):
+    ret = df['close'].pct_change().fillna(0)
 
-    for i in range(q, n):
-        # Variance of q-period returns over the window
-        var_q = np.var(q_returns.iloc[i - q + 1:i + 1])
-        # Variance of 1-period returns over the window
-        var_1 = np.var(returns.iloc[i - q + 1:i + 1])
+    # Variance Ratio: VR(k) = Var(k)/Var(1) / k
+    # При random walk VR = 1
+    # VR > 1 -> тренд, VR < 1 -> mean-reversion
 
-        if var_1 > 1e-12:
-            vr = var_q / (q * var_1)
-            if vr > 1.2:
-                k[i] = 1
-            elif vr < 0.8:
-                k[i] = -1
-            else:
-                k[i] = 0
+    k_periods = 5
+    var_1 = ret.rolling(1).var()
+    var_k = ret.rolling(k_periods).var()
+
+    # VR
+    vr = var_k / (k_periods * var_1.replace(0, np.nan).fillna(1))
+    vr = vr.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+
+    # Скользящее среднее VR
+    vr_mean = vr.rolling(period).mean()
+
+    # Тренд: VR > 1.2, MR: VR < 0.8
+    k = np.zeros(len(df))
+    k[(vr_mean > 1.2) & (ret > 0)] = 1
+    k[(vr_mean > 1.2) & (ret < 0)] = -1
+    k[(vr_mean < 0.8) & (ret < 0)] = 1
+    k[(vr_mean < 0.8) & (ret > 0)] = -1
 
     df = df.copy()
     df['k'] = k
@@ -40,7 +45,7 @@ def calc_stat_vr_ratio(df, period=20, q=5):
 
 
 def check_entry(prev, curr):
-    # (right) Возвращает 'long' / 'short' / None для engine run_backtest
+    # (right) Returns 'long' / 'short' / None for engine run_backtest
     if prev == 0 and curr == 1:
         return 'long'
     if prev == 0 and curr == -1:
@@ -58,50 +63,6 @@ def check_exit(prev, curr, direction):
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,
              tick_size, sim_lot=0.01, spread_points=0):
-    df = calc_stat_vr_ratio(df, int(param_key))
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-
-    sl_dist = sl_points * point
-    tp_dist = tp_points * point
-
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i - 1]
-        curr_k = df['k'].iloc[i]
-        close = df['close'].iloc[i]
-        high = df['high'].iloc[i]
-        low = df['low'].iloc[i]
-
-        if prev_k == 0 and curr_k == 1:
-            entry = close
-            sl_price = entry - sl_dist
-            tp_price = entry + tp_dist
-            for j in range(i + 1, min(i + 50, len(df))):
-                if df['low'].iloc[j] <= sl_price:
-                    profit += (sl_price - entry) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(sl_price - entry)
-                    break
-                elif df['high'].iloc[j] >= tp_price:
-                    profit += (tp_price - entry) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(tp_price - entry)
-                    break
-        elif prev_k == 0 and curr_k == -1:
-            entry = close
-            sl_price = entry + sl_dist
-            tp_price = entry - tp_dist
-            for j in range(i + 1, min(i + 50, len(df))):
-                if df['high'].iloc[j] >= sl_price:
-                    profit += (entry - sl_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(entry - sl_price)
-                    break
-                elif df['low'].iloc[j] <= tp_price:
-                    profit += (entry - tp_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(entry - tp_price)
-                    break
-
-    return (profit, n_trades, trade_profits)
+    return run_backtest(df, calc_stat_vr_ratio, state_entry, state_exit,
+                        int(param_key), sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)

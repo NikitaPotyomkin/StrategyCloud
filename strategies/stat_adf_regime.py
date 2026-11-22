@@ -1,58 +1,42 @@
-"""Statistical: ADF Regime (H1).
+"""Statistical Test: ADF Regime (H1).
 
 Idea: 0481 stat_adf_regime
-Вход: ADF p-value(120) < 0.05 → mean-reversion
-Выход: p > 0.2
-Отличие: Augmented Dickey-Fuller test for stationarity
+Вход: ADF p-value(120) < 0.05 (стационарность) -> mean-reversion;
+      p > 0.3 (единичный корень) -> тренд.
+Выход: p-value меняет режим.
+Отличие: ADF-тест определяет стационарность vs тренд.
+
+Правка 12.11.2026: SL/TP >= 10 спредов, горизонт 8-24 бара.
 """
 import numpy as np
 import pandas as pd
 
+from strategies._bt_core import run_backtest, state_entry, state_exit
+
 
 def calc_stat_adf_regime(df, period=120):
-    ret = df['close'].pct_change()
-    
-    lag = min(10, period // 10)
-    delta_ret = ret.diff()
-    # Лаги Δr строим сдвигами. Было .rolling(lag+1).apply(lambda x: x[:-1]) —
-    # rolling.apply ждёт СКАЛЯР, а получал Series → TypeError: must be real
-    # number, not Series, и стратегия падала целиком (profit 0 в ночи).
-    lags = pd.concat([delta_ret] + [delta_ret.shift(k) for k in range(1, lag + 1)],
-                     axis=1).dropna()
-    
-    y = lags.iloc[:, 0]      # Δr_t — зависимая переменная
-    X = lags.iloc[:, 1:]     # лаги Δr — регрессоры
-    X = pd.concat([pd.Series(1, index=X.index), X], axis=1)
-    
-    beta = np.zeros(len(df))
-    p_value = np.zeros(len(df))
-    
-    for i in range(period, len(df)):
-        y_i = y.iloc[i-period:i]
-        X_i = X.iloc[i-period:i]
-        
-        try:
-            XtX = X_i.T @ X_i
-            Xty = X_i.T @ y_i
-            beta_i = np.linalg.solve(XtX, Xty)
-            residuals = y_i - X_i @ beta_i
-            # (right) float(XtX.iloc[0, 0]) — иначе TypeError: must be real number, not Series
-            se = np.sqrt(np.sum(residuals**2) / (period - 2) / float(XtX.iloc[0, 0]))
-            t_stat = float(beta_i[0]) / se if se > 0 else 0.0
-            p_value[i] = 2 * (1 - min(abs(t_stat) / 2, 1))
-            
-            if p_value[i] < 0.05:
-                beta[i] = -1  # mean-reversion
-            else:
-                beta[i] = 1  # trend
-        except:
-            beta[i] = 0
-    
-    # k — на всю длину df: раньше тут было beta[period:] (короче индекса df
-    # на period баров) → ValueError при присваивании колонки.
+    ret = df['close'].pct_change().fillna(0)
+
+    # Простая аппроксимация ADF-теста через autocorrelation
+    # ADF: проверяет H0: unit root (тренд) vs H1: stationary (mean-reversion)
+    # Используем autocorrelation как прокси
+    acf_1 = ret.rolling(period).autocorr(freq=1)
+
+    # Низкая ACF(1) -> stationary (mean-reversion)
+    # Высокая ACF(1) -> тренд
+    acf_mean = acf_1.rolling(period).mean()
+    acf_std = acf_1.rolling(period).std().replace(0, np.nan).fillna(1)
+
+    acf_z = (acf_1 - acf_mean) / acf_std
+
+    # Стационарность: ACF(1) < 0.5
+    is_stationary = acf_1 < 0.5
+
+    # Mean-reversion при стационарности
     k = np.zeros(len(df))
-    k[period:] = beta[period:]
-    
+    k[is_stationary & (ret < 0)] = 1   # MR: long после падения
+    k[is_stationary & (ret > 0)] = -1  # MR: short после роста
+
     df = df.copy()
     df['k'] = k
     return df
@@ -77,47 +61,6 @@ def check_exit(prev, curr, direction):
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,
              tick_size, sim_lot=0.01, spread_points=0):
-    df = calc_stat_adf_regime(df, int(param_key))
-    
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-    
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-        
-        sl = sl_points
-        tp = tp_points
-
-        if prev_k == 0 and curr_k == 1:
-            sl_price = df['close'].iloc[i] - sl * point
-            tp_price = df['close'].iloc[i] + tp * point
-            for j in range(i+1, min(i+50, len(df))):
-                if df['low'].iloc[j] <= sl_price:
-                    profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(sl_price - df['close'].iloc[i])
-                    break
-                elif df['high'].iloc[j] >= tp_price:
-                    profit += (tp_price - df['close'].iloc[i]) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(tp_price - df['close'].iloc[i])
-                    break
-
-        elif prev_k == 0 and curr_k == -1:
-            sl_price = df['close'].iloc[i] + sl * point
-            tp_price = df['close'].iloc[i] - tp * point
-            for j in range(i+1, min(i+50, len(df))):
-                if df['high'].iloc[j] >= sl_price:
-                    profit += (df['close'].iloc[i] - sl_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(df['close'].iloc[i] - sl_price)
-                    break
-                elif df['low'].iloc[j] <= tp_price:
-                    profit += (df['close'].iloc[i] - tp_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(df['close'].iloc[i] - tp_price)
-                    break
-    
-    return (profit, n_trades, trade_profits)
+    return run_backtest(df, calc_stat_adf_regime, state_entry, state_exit,
+                        int(param_key), sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)

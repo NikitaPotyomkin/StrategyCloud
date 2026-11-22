@@ -1,26 +1,39 @@
-"""Volume: CVD Divergence (H1).
+"""Volume Profile: CVD Divergence (H1).
 
 Idea: 0087 volprof_cvd_div
-Вход: CVD rises, price falls
-Выход: CVD reversal
-Отличие: Cumulative Volume Delta divergence
+Вход: CVD растёт, цена падает (дивергенция);
+      выход: CVD разворот.
+Отличие: CVD (Cumulative Volume Delta) показывает давление покупателей/продавцов.
+
+Правка 12.11.2026: SL/TP >= 10 спредов, горизонт 8-24 бара.
 """
 import numpy as np
 import pandas as pd
 
+from strategies._bt_core import run_backtest, state_entry, state_exit
+
 
 def calc_volprof_cvd_div(df, period=50):
-    close_pos = (df['close'] - df['low']) / (df['high'] - df['low']).replace(0, np.nan)
-    cvd = (2 * close_pos - 1) * df['volume'] if 'volume' in df.columns else pd.Series(0, index=df.index)
-    cvd_cum = cvd.cumsum()
-    
-    price_trend = df['close'] - df['close'].shift(period)
-    cvd_trend = cvd_cum - cvd_cum.shift(period)
-    
+    ret = df['close'].pct_change().fillna(0)
+
+    # CVD proxy: накопленный объём с направлением
+    # Positive volume: close > open
+    # Negative volume: close < open
+    vol_direction = np.where(df['close'] > df['open'], df['volume'], -df['volume'])
+    cvd = pd.Series(vol_direction).cumsum()
+
+    # Дивергенция: CVD растёт, цена падает
+    cvd_trend = cvd.diff(10) > 0  # CVD растёт за 10 баров
+    price_fall = df['close'] < df['close'].shift(10)
+
+    # Обратная дивергенция: CVD падает, цена растёт
+    cvd_fall = cvd.diff(10) < 0
+    price_rise = df['close'] > df['close'].shift(10)
+
     k = np.zeros(len(df))
-    k[(price_trend < 0) & (cvd_trend > 0)] = 1
-    k[(price_trend > 0) & (cvd_trend < 0)] = -1
-    
+    k[cvd_trend & price_fall] = 1   # Long: CVD растёт, цена упала
+    k[cvd_fall & price_rise] = -1   # Short: CVD падает, цена выросла
+
     df = df.copy()
     df['k'] = k
     return df
@@ -45,48 +58,6 @@ def check_exit(prev, curr, direction):
 
 def backtest(df, param_key, sl_points, tp_points, point, tick_value,
              tick_size, sim_lot=0.01, spread_points=0):
-    df = calc_volprof_cvd_div(df, int(param_key))
-
-    profit = 0
-    n_trades = 0
-    trade_profits = []
-    sl = sl_points
-    tp = tp_points
-
-    for i in range(1, len(df)):
-        prev_k = df['k'].iloc[i-1]
-        curr_k = df['k'].iloc[i]
-
-        if prev_k == 0 and curr_k == 1:
-            sl_price = df['close'].iloc[i] - sl * point
-            tp_price = df['close'].iloc[i] + tp * point
-
-            for j in range(i+1, min(i+50, len(df))):
-                if df['low'].iloc[j] <= sl_price:
-                    profit += (sl_price - df['close'].iloc[i]) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(sl_price - df['close'].iloc[i])
-                    break
-                elif df['high'].iloc[j] >= tp_price:
-                    profit += (tp_price - df['close'].iloc[i]) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(tp_price - df['close'].iloc[i])
-                    break
-
-        elif prev_k == 0 and curr_k == -1:
-            sl_price = df['close'].iloc[i] + sl * point
-            tp_price = df['close'].iloc[i] - tp * point
-
-            for j in range(i+1, min(i+50, len(df))):
-                if df['high'].iloc[j] >= sl_price:
-                    profit += (df['close'].iloc[i] - sl_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(df['close'].iloc[i] - sl_price)
-                    break
-                elif df['low'].iloc[j] <= tp_price:
-                    profit += (df['close'].iloc[i] - tp_price) * sim_lot * tick_value
-                    n_trades += 1
-                    trade_profits.append(df['close'].iloc[i] - tp_price)
-                    break
-
-    return (profit, n_trades, trade_profits)
+    return run_backtest(df, calc_volprof_cvd_div, state_entry, state_exit,
+                        int(param_key), sl_points, tp_points, point,
+                        tick_value, tick_size, sim_lot, spread_points)

@@ -41,6 +41,21 @@ CUTOFF_BY_LOGIN = {
     2000066590: '2026-09-29',   # AlfaForexRU: период учёта (раньше — демо-сбросы/пересоздание)   # AlfaForexRU: до этого были демо-сбросы и пересоздание
 }
 
+# Балансовые сделки брокера, которые в статистике надо показывать иначе.
+# Сброс демо-счёта MT5 пишет как ДВЕ операции: «reset demo account» (−весь
+# баланс) и «demo deposit» (+новая сумма). Экономически это одно частичное
+# снятие (прибыль + часть депозита), поэтому вместо них в balance_ops пишется
+# одна операция 'manual' на нетто-сумму (см. cashflow.py withdraw). Тикеты
+# держим здесь, иначе очередной sync() загрузит их заново из истории сделок.
+IGNORE_DEAL_TICKETS = {
+    2031529101,   # 11.11 20:57 reset demo account  −1 279 376.39
+    2031529102,   # 11.11 20:57 demo deposit         +900 000.00
+    2031530151,   # 11.11 21:14 reset demo account    −899 544.84
+    2031530156,   # 11.11 21:14 demo deposit         +600 000.00
+    # каждый новый сброс → сюда обе его балансовые сделки (reset + deposit)
+    # затем: python cashflow.py absorb
+}
+
 # Типы сделок MT5, которые считаются движением средств (не торговлей).
 OP_TYPES = {}
 try:                                   # константы берём из API, если он есть
@@ -148,6 +163,12 @@ def record(ops, verbose=True):
             try:
                 amount = float(o.get('amount') or 0.0)
             except (TypeError, ValueError):
+                amount = 0.0
+            # Сброс демо-счёта брокер пишет двумя балансовыми сделками: такие
+            # тикеты в balance_ops не пишем — вместо них одна операция 'manual'.
+            if int(o.get('ticket') or 0) in IGNORE_DEAL_TICKETS:
+                continue
+            if amount == 0:
                 continue
             if amount == 0:
                 continue
@@ -575,6 +596,90 @@ if __name__ == '__main__':
                 print("ничего не удалено: добавьте --yes для удаления")
         finally:
             _con.close()
+# ── движения средств: absorb (свёртка сбросов) / withdraw / deposit ──────
+    # ── свёртка сбросов демо-счёта в одну операцию «снятие средств» ──────────
+    elif _cmd == 'absorb':
+        # Сбросы демо (тикеты из IGNORE_DEAL_TICKETS) сворачиваются в ОДНУ
+        # операцию на их нетто-сумму: в статистике это «снял прибыль и часть
+        # депозита», а не «обнулили счёт и внесли новый». Сумма берётся из
+        # истории сделок — руками вводить не надо. Повторный запуск
+        # пересчитывает и ПЕРЕЗАПИСЫВАЕТ операцию, поэтому тикеты новых
+        # сбросов можно добавлять в IGNORE_DEAL_TICKETS в любой момент.
+        _deals = _mt5.history_deals_get(datetime(2000, 1, 1),
+                                        datetime.now() + timedelta(hours=6)) or ()
+        _login = int(getattr(_acc, 'login', 0) or 0) if _acc else 0
+        _seen, _total = [], 0.0
+        for _d in _deals:
+            _tk = int(getattr(_d, 'ticket', 0) or 0)
+            if _tk not in IGNORE_DEAL_TICKETS:
+                continue
+            _v = float(getattr(_d, 'profit', 0.0) or 0.0)
+            _seen.append((_tk, _v, str(getattr(_d, 'comment', '') or '')))
+            _total += _v
+        if not _seen:
+            print("в истории нет сделок из IGNORE_DEAL_TICKETS — сворачивать нечего")
+            sys.exit(2)
+        _con = _connect()
+        try:
+            _cur = _con.execute(
+                "DELETE FROM balance_ops WHERE account_login = ? AND (op_key LIKE 'absorb:%' "
+                "OR op_key IN ('" + "','".join('deal:%d' % _t for _t, _v, _c in _seen) + "'))",
+                (_login,))
+            _con.commit()
+            print(f"прежних свёрнутых операций убрано: "
+                  f"{int(getattr(_cur, 'rowcount', 0) or 0)}")
+        finally:
+            _con.close()
+        _key = 'absorb:%d:%s' % (_login, '+'.join(str(_t) for _t, _v, _c in sorted(_seen)))
+        _n = record([{
+            'op_key': _key,
+            'account_login': _login,
+            'ts': int(time.time()),
+            'amount': round(_total, 2),
+            'kind': 'balance',
+            'source': 'deals',
+            'ticket': 0,
+            'comment': 'снятие средств: %d сброс(ов) демо свёрнуты в одну операцию'
+                       % len(_seen),
+        }])
+        for _tk, _v, _cm in sorted(_seen):
+            print(f"  {_tk}  {_v:+15,.2f}  {_cm}")
+        print(f"свёрнуто в одну операцию: {_n} ({_total:+,.2f} ₽)")
+    elif _cmd in ('withdraw', 'deposit'):
+        # Ручное движение средств. Баланс демо-счёта меняют в кабинете, и MT5
+        # пишет это как ДВЕ балансовые сделки («reset demo account» на весь
+        # баланс и «demo deposit» на новую сумму). В статистике это выглядит
+        # как «сняли весь счёт и внесли новый», хотя по смыслу это частичное
+        # снятие: прибыль + часть депозита. Команда пишет ОДНУ операцию на
+        # нужную сумму — source='deals', поэтому она попадает в «выводы»
+        # дэшборда, а reconcile() вычитает её и дубль не создаёт. Сами
+        # балансовые сделки сброса отсекает IGNORE_DEAL_TICKETS.
+        #   python cashflow.py withdraw 379376.39 --comment="снятие прибыли"
+        _num_arg = next((a for a in sys.argv[2:] if not a.startswith('--')), '')
+        _note = ''
+        for _a in sys.argv[2:]:
+            if _a.startswith('--comment='):
+                _note = _a.split('=', 1)[1]
+        try:
+            _amt = abs(float(str(_num_arg).replace(' ', '').replace(',', '.')))
+        except ValueError:
+            print("укажите сумму: python cashflow.py withdraw 379376.39 [--comment=...]")
+            sys.exit(2)
+        if _cmd == 'withdraw':
+            _amt = -_amt
+        _login = int(getattr(_acc, 'login', 0) or 0) if _acc else 0
+        _day = datetime.now().strftime('%Y-%m-%d')
+        _n = record([{
+            'op_key': f"manual:{_login}:{int(round(abs(_amt) * 100))}:{_day}",
+            'account_login': _login,
+            'ts': int(time.time()),
+            'amount': round(_amt, 2),
+            'kind': 'balance',
+            'source': 'deals',
+            'ticket': 0,
+            'comment': _note or ('вывод средств' if _amt < 0 else 'пополнение'),
+        }])
+        print(f"операция записана: {_n} ({_amt:+,.2f} ₽)")
     dep, wd, net, cnt = summary(account_login=int(getattr(_acc, 'login', 0) or 0),
                                 sources=('deals',))
     _period = CUTOFF_BY_LOGIN.get(int(getattr(_acc, 'login', 0) or 0)) if _acc else None
@@ -582,6 +687,8 @@ if __name__ == '__main__':
     print(f"за всё время{_tail}: пополнения {dep:+,.0f} ₽, выводы {wd:+,.0f} ₽, "
           f"нетто {net:+,.0f} ₽, операций {cnt}")
     if _acc is not None:
-        _res = float(_acc.balance) - net
+        _open = float(_load_state().get('opening_balance') or 0.0)
+        _res = float(_acc.balance) - net - _open
         print(f"торговый результат за период: {_res:+,.0f} ₽ "
-              f"(баланс {float(_acc.balance):,.2f} − внешние деньги {net:,.2f})")
+              f"(баланс {float(_acc.balance):,.2f} − внешние деньги {net:,.2f} "
+              f"− входящий остаток {_open:,.2f})")
